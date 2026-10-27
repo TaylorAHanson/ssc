@@ -9,7 +9,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
-from sqlalchemy import String, cast, or_
+from sqlalchemy import String, case, cast, func, literal, or_
 
 from app.tools.mcp import tool
 from app.db.session import get_db
@@ -37,6 +37,36 @@ def _tokenize(query: str) -> List[str]:
     return [t for t in raw if len(t) >= 2 and t not in _STOPWORDS]
 
 
+# A fully-qualified Unity Catalog name: catalog.schema.table (backticks optional).
+_FQN = re.compile(r"(?<![\w.`-])`?([\w-]+)`?\.`?([\w-]+)`?\.`?([\w-]+)`?(?![\w.`-])")
+
+# How many candidates are pulled from the table before the finer Python ranking. The pull is
+# ordered by relevance first; without that, an arbitrary slice of a large catalog was ranked
+# and the best match could be cut before it was ever scored.
+_CANDIDATE_CAP = 200
+
+_MAX_FAILED_RULES = 5
+
+
+def _fully_qualified_name(query: str) -> Optional[str]:
+    """The lowercase ``catalog.schema.table`` named in the query, if it names one."""
+    m = _FQN.search(query or "")
+    return ".".join(m.groups()).lower() if m else None
+
+
+def _quality(asset: DataAssetModel) -> Optional[Dict[str, Any]]:
+    """The cached data-quality summary, with a long failed-rule list cut to a few."""
+    dq = asset.data_quality
+    if not isinstance(dq, dict) or not dq:
+        return None
+    out = dict(dq)
+    failed = out.get("failed_rules")
+    if isinstance(failed, list) and len(failed) > _MAX_FAILED_RULES:
+        out["failed_rules"] = failed[:_MAX_FAILED_RULES]
+        out["failed_rules_total"] = len(failed)
+    return out
+
+
 def _serialize(asset: DataAssetModel, legacy: Optional[List[Dict[str, Any]]] = None,
                vis: Optional[DiscoverVisibility] = None,
                hidden_dashboards: Optional[set] = None) -> Dict[str, Any]:
@@ -59,6 +89,11 @@ def _serialize(asset: DataAssetModel, legacy: Optional[List[Dict[str, Any]]] = N
         "tags": asset.tags or [],
         "certified": bool(asset.certified),
         "contract_url": asset.contract_url,
+        # Service level and data-quality summary, when a policy scan or contract has set them.
+        "sla": asset.sla,
+        "data_quality": _quality(asset),
+        # When this catalog entry was last refreshed from Unity Catalog (not when the data changed).
+        "catalog_synced_at": asset.last_synced_at.isoformat() if asset.last_synced_at else None,
     }
 
 
@@ -102,7 +137,9 @@ class SearchDataAssetsInput(BaseModel):
     description=(
         "Search cached Unity Catalog data assets (Metric Views, tables, views, schemas) by keyword across name, "
         "description, domain, subdomain, KPIs, tags, and owner. Positions governed Metric Views over raw tables. "
-        "Fast local lookup for data discovery without live Databricks API calls."
+        "Also returns each asset's service level, data-quality summary, owner and certification when known. "
+        "Fast local lookup for data discovery without live Databricks API calls. For an asset's columns, call "
+        "get_table_list with its exact table name."
     ),
     args_schema=SearchDataAssetsInput,
     feature_flag="data_discovery",
@@ -161,8 +198,21 @@ def search_data_assets(
             term = f"%{query.strip()}%"
             q = q.filter(or_(*[col.ilike(term) for col in search_cols]))
 
-        # Cap the candidate pull; the local table is small and we rank in Python.
-        candidates = q.limit(200).all()
+        # Order by relevance IN SQL before capping the pull. The catalog can hold tens of
+        # thousands of assets and a many-word query matches thousands of them; capping an
+        # unordered pull ranked an arbitrary slice and could drop the exact table asked for.
+        # A fully-qualified name that matches an asset's id leads, then name hits, then the rest.
+        relevance = literal(0)
+        for tok in tokens:
+            pat = f"%{tok}%"
+            relevance = relevance + case(
+                (or_(DataAssetModel.id.ilike(pat), DataAssetModel.table_name.ilike(pat)), 2), else_=0)
+            relevance = relevance + case((or_(*[c.ilike(pat) for c in search_cols]), 1), else_=0)
+        fqn = _fully_qualified_name(query)
+        if fqn:
+            relevance = relevance + case((func.lower(DataAssetModel.id) == fqn, 1000), else_=0)
+        total_matched = q.order_by(None).count()
+        candidates = q.order_by(relevance.desc(), DataAssetModel.id).limit(_CANDIDATE_CAP).all()
 
         # A user may only know the legacy (e.g. Tableau) dashboard name: pull in
         # the metric views mapped to any dashboard the query names.
@@ -220,6 +270,9 @@ def search_data_assets(
             haystack = f"{haystack} {legacy_text.lower()}"
             name_hay = f"{asset.id or ''} {asset.table_name or ''}".lower()
             score = sum(1 for t in tokens if t in haystack)
+            # The exact table named in the query always leads.
+            if fqn and (asset.id or "").lower() == fqn:
+                score += 1000
             # Boost matches that land in the name/FQN (more relevant than a
             # description mention) and give certified assets a slight edge.
             score += sum(1 for t in tokens if t in name_hay)
@@ -258,7 +311,7 @@ def search_data_assets(
         return {
             "query": query,
             "count": len(assets),
-            "total_matched": len(candidates),
+            "total_matched": max(total_matched, len(candidates)),
             "assets": assets,
             "note": note,
         }

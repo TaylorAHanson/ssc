@@ -528,6 +528,7 @@ export async function getBranding(): Promise<{
   brand_color_warning: string;
   brand_color_success: string;
   databricks_workspace_url?: string;
+  support_contact?: { name?: string; email?: string; notes?: string };
   embedded_apps?: EmbeddedAppConfig[];
   genie_full_experience_url?: string;
   features?: Record<string, boolean>;

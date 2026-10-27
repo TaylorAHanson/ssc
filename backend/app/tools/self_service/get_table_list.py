@@ -11,8 +11,51 @@ from app.services.data_asset_owner import resolve_data_asset_owner
 from app.services import discover_visibility as dv
 import fnmatch
 import logging
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
+
+# A table with more columns than this lists the first ones and says so.
+MAX_COLUMNS = 300
+_GLOB_CHARS = set("*?[")
+
+
+def _is_exact_name(name_pattern: Optional[str]) -> bool:
+    """True when ``name_pattern`` names one table rather than a glob."""
+    return bool(name_pattern) and not (_GLOB_CHARS & set(name_pattern))
+
+
+def _iso(epoch_ms: Any) -> Optional[str]:
+    """Unity Catalog timestamps are epoch milliseconds."""
+    if not isinstance(epoch_ms, (int, float)) or isinstance(epoch_ms, bool):
+        return None
+    try:
+        return datetime.fromtimestamp(epoch_ms / 1000, tz=timezone.utc).isoformat()
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _enum_text(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    return str(getattr(value, "value", value)) or None
+
+
+def _columns(table: Any) -> Dict[str, Any]:
+    """The table's columns (name, type, description), capped at ``MAX_COLUMNS``."""
+    raw = list(getattr(table, "columns", None) or [])
+    columns = [
+        {
+            "name": getattr(c, "name", None),
+            "type": getattr(c, "type_text", None) or _enum_text(getattr(c, "type_name", None)),
+            "comment": getattr(c, "comment", None),
+        }
+        for c in raw[:MAX_COLUMNS]
+    ]
+    out: Dict[str, Any] = {"columns": columns, "column_count": len(raw)}
+    if len(raw) > MAX_COLUMNS:
+        out["columns_truncated"] = True
+    return out
 
 
 def _cached_visibility():
@@ -80,13 +123,25 @@ class GetTableListInput(BaseModel):
     catalog_name: str = Field(..., description="Name of the parent catalog")
     schema_name: str = Field(..., description="Name of the schema to list tables for")
     name_pattern: Optional[str] = Field(None, description="Optional. Exact name or glob pattern (e.g. '*dev*') to filter for a specific table.")
+    include_columns: Optional[bool] = Field(
+        None,
+        description=(
+            "Optional. Include each table's column names, types and descriptions. Defaults to true "
+            "when name_pattern is one exact table name and false for a wider listing."
+        ),
+    )
 
 @tool(
     name="get_table_list",
-    description="List tables within a specified catalog and schema in Unity Catalog. Supports filtering by exact name or glob pattern (e.g. '*orders*').",
+    description=(
+        "List tables within a specified catalog and schema in Unity Catalog, as the user. Supports filtering "
+        "by exact name or glob pattern (e.g. '*orders*'). Each table has its description, owner, tags and "
+        "when its metadata was last updated. For one exact table name it also returns the columns with their "
+        "types and descriptions."
+    ),
     args_schema=GetTableListInput
 )
-async def get_table_list(target_host: str, catalog_name: str, schema_name: str, name_pattern: Optional[str] = None, _obo_token: Optional[str] = None) -> Dict[str, Any]:
+async def get_table_list(target_host: str, catalog_name: str, schema_name: str, name_pattern: Optional[str] = None, include_columns: Optional[bool] = None, _obo_token: Optional[str] = None) -> Dict[str, Any]:
     """
     Fetch the list of tables for a schema along with their descriptions.
     """
@@ -138,6 +193,7 @@ async def get_table_list(target_host: str, catalog_name: str, schema_name: str, 
             if dv.hidden_tag_keys() else (lambda _name: False)
         )
 
+        want_columns = _is_exact_name(name_pattern) if include_columns is None else include_columns
         table_list = []
         for table in tables:
             if name_pattern and not fnmatch.fnmatch(table.name.lower(), name_pattern.lower()):
@@ -155,7 +211,11 @@ async def get_table_list(target_host: str, catalog_name: str, schema_name: str, 
                 "comment": table.comment or "No description provided",
                 "owner": resolve_data_asset_owner(table.owner, table_tags),
                 "tags": table_tags,
-                "properties": table.properties or {}
+                "properties": table.properties or {},
+                "created_at": _iso(getattr(table, "created_at", None)),
+                # When the table's metadata last changed. Not when its data last changed.
+                "updated_at": _iso(getattr(table, "updated_at", None)),
+                **(_columns(table) if want_columns else {}),
             })
         
         return {

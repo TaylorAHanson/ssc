@@ -253,6 +253,9 @@ class AccessMatch(BaseModel):
     privileges: List[str]
     # direct = on the securable asked about; parent = inherited from a catalog or schema row.
     via: Literal["direct", "parent"] = "direct"
+    # Set by the assistant's lookup: whether this principal is a group the signed-in user is in.
+    # None when the user's groups aren't known.
+    held_by_you: Optional[bool] = None
 
 
 class SecurableSuggestion(BaseModel):

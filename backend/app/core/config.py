@@ -904,6 +904,7 @@ class Settings(BaseSettings):
     METADATA_ENVIRONMENTS: List[dict] = copy.deepcopy(_metadata.get("environments", []))
     METADATA_MAX_OBJECTS_PER_CHANGE: int = _metadata.get("max_objects_per_change", 5000)
     METADATA_ABAC_CHECK: bool = _metadata.get("abac_check", True)
+    METADATA_LINT_CHECK: bool = _metadata.get("lint_check", True)
     METADATA_MIN_REASON_LENGTH: int = _metadata.get("min_reason_length", 0)
     METADATA_MIN_JUSTIFICATION_LENGTH: int = _metadata.get("min_justification_length", 10)
     METADATA_GOVERNANCE_APPROVER_GROUP: str = _metadata.get("governance_approver_group", "")

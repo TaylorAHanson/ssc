@@ -8,7 +8,7 @@ import { Badge, EmptyState, ErrorBanner, Pager, Skeleton } from '../../rbac/ui';
 import { cn } from '../../../lib/utils';
 import { ActorTypeBadge, SourceBadge } from './badges';
 import { useMetadata } from './context';
-import { SOURCE_LABELS, changeSetCounts, errorMessage, formatTime, relativeTime } from './format';
+import { SOURCE_LABELS, changeSetCounts, errorMessage, formatTime, plural, relativeTime } from './format';
 import { Popover } from './Popover';
 import { useAsync, useDebounced } from './useAsync';
 
@@ -97,7 +97,7 @@ export function HistoryPage() {
             </select>
           </label>
         </Popover>
-        {data && <span className="text-sm text-gray-500">{data.total.toLocaleString()} changes</span>}
+        {data && <span className="text-sm text-gray-500">{plural(data.total, 'change')}</span>}
         <Link to="/requests" className="ml-auto text-sm text-primary hover:underline">
           Changes waiting for approval are under My requests
         </Link>

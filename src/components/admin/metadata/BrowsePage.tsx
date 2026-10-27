@@ -222,7 +222,7 @@ export function BrowsePage() {
             : ownedOnly
               ? `You don’t own any ${level}s here.`
               : level === 'catalog'
-                ? 'No catalogs have been read from Unity Catalog yet. An admin can run a check from the Admin page.'
+                ? 'No catalogs have been read from Unity Catalog yet. An admin can run a check from the Sync & admin page.'
                 : `Unity Catalog hasn’t reported any ${level}s here yet.`}
         </EmptyState>
       ) : data ? (

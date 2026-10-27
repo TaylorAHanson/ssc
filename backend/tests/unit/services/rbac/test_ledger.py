@@ -796,6 +796,26 @@ def test_find_access_for_a_principal(db):
         ledger.find_access(db, principal_name="g_new", environment="moon")
 
 
+def test_find_access_for_a_set_of_principals_keeps_exact_names_only(db):
+    seed(db, position=1, kind="catalog", schema="", principals="g_new;g_readers", privileges="USE_CATALOG")
+    seed(db, position=2, principals="G_ANALYSTS;g_newer")
+    seed(db, position=3, schema="returns", principals="g_other")
+    seed(db, UC_PRD, position=1, catalog="sales_prd", principals="g_new")
+
+    mine = ledger.find_access(db, principals_in=["g_new", "g_analysts"])
+    assert sorted((m.environment, m.principal_name) for m in mine.matches) == [
+        ("dev", "G_ANALYSTS"), ("dev", "g_new"), ("prd", "g_new")]
+
+    dev = ledger.find_access(db, principals_in=["g_new"], environment="dev")
+    assert [m.principal_name for m in dev.matches] == ["g_new"]
+
+    on_schema = ledger.find_access(db, catalog="sales_dev", schema_name="orders", principals_in=["g_new"])
+    assert [(m.principal_name, m.via) for m in on_schema.matches] == [("g_new", "parent")]
+
+    # An empty set of principals holds nothing, rather than meaning "everyone".
+    assert ledger.find_access(db, principals_in=[]).matches == []
+
+
 def test_find_access_suggests_a_schema_asked_for_as_a_catalog(db):
     seed(db, UC_PRD, position=1, catalog="enterprise_prd", schema="platinum_insights")
     seed(db, UC_PRD, position=2, kind="table", catalog="enterprise_prd", schema="platinum_insights", obj="sales")

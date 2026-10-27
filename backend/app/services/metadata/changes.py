@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.metadata import SOURCE_ADOPT, SOURCE_IMPORT, SOURCE_REVERT, SOURCES, MetadataObservedModel
-from app.services.metadata import abac, authz, environments, errors, observed, policy, report, requests, scope, store
+from app.services.metadata import abac, authz, environments, errors, lint, observed, policy, report, requests, scope, store
 from app.services.metadata.report import APPROVAL, DENIED, DIRECT
 from app.services.metadata.types import (
     Actor,
@@ -481,9 +481,10 @@ def _preview(db: Session, actor: Actor, resolved: _Resolved, *, reason: str, tit
                or any(f.severity == "deny" for d in decisions for f in d.findings))
     plan = _tag_plan(items)
     policy_findings, impacts = abac.check(items, plan) if not blocked else ([], [])
+    typo_findings = lint.check(items, lint.known_keys(db)) if not blocked else []
     pv = ChangePreview(
         items=decisions,
-        findings=[*resolved.findings, *policy_findings],
+        findings=[*resolved.findings, *policy_findings, *typo_findings],
         blocked=blocked,
         direct_count=buckets.count(DIRECT),
         approval_count=buckets.count(APPROVAL),
@@ -591,7 +592,7 @@ def _route(
 
     if not approval:
         result = ChangeResult(status="committed", preview=pv, message=(
-            f"Saved {_count(len(direct), 'change')} on {objects(direct)}; they're queued for Unity Catalog."
+            f"Saved {_count(len(direct), 'change')} on {objects(direct)}."
         ))
         result.change_set = write(direct, result)
         return result

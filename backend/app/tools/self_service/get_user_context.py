@@ -20,9 +20,11 @@ class GetUserContextInput(BaseModel):
     sections: Optional[List[str]] = Field(
         default=None,
         description=(
-            "Which sections to return: 'identity' (name, roles, persona), "
-            "'activity' (their recent requests, approvals waiting on them, recent "
-            "topics), 'groups' (identity-provider group memberships). Omit for all."
+            "Which sections to return: 'identity' (name, roles, persona, and "
+            "directory_groups: the Databricks groups they belong to, which is what to "
+            "use for 'what groups am I in?'), 'activity' (their recent requests, "
+            "approvals waiting on them, recent topics), 'groups' (memberships from the "
+            "corporate directory; unavailable when none is connected). Omit for all."
         ),
     )
     refresh: bool = Field(

@@ -103,7 +103,11 @@ visit most often:
   list from a spreadsheet. The page is marked **Off** while the data catalog
   is switched off, because nobody would see the mappings.
 - **Links & Embedded Apps**: the links on the **Community Links** page, and
-  other apps shown inside {{brand_name}} from the sidebar.
+  other apps shown inside {{brand_name}} from the sidebar. **Support contact**
+  holds the name, email and hours or channel of whoever handles day-to-day
+  help. It shows on the **Team & Support** tab of every dataset in Discover,
+  and the assistant gives it when someone asks who to contact. It is blank
+  until you fill it in, and nothing is shown while it is.
 - **Calendar**: where events on the **Event Calendar** come from, and how
   often they're synced.
 - **Training** (under **Learn & Share**): the Databricks Academy catalog that

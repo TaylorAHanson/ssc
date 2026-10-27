@@ -160,3 +160,54 @@ async def test_run_sql_parses_json_text_frame_when_no_structured():
     assert result.get("ok") is True
     assert result["columns"] == ["c"]
     assert result["rows"] == [["hello"]]
+
+
+@pytest.mark.asyncio
+async def test_run_sql_reads_protobuf_array_rows():
+    """The server's PROTOBUF_ARRAY format puts rows under ``data_typed_array``.
+
+    Rows used to be dropped (``row_count`` 0, ``truncated`` true) because only
+    ``data_array`` was read, so ``DESCRIBE HISTORY`` and similar looked empty.
+    A null cell arrives as an empty object.
+    """
+    resp = {
+        "content": "",
+        "structured": {
+            "statement_id": "stmt-pb",
+            "status": {"state": "SUCCEEDED"},
+            "manifest": {
+                "format": "PROTOBUF_ARRAY",
+                "schema": {
+                    "column_count": 3,
+                    "columns": [
+                        {"name": "version", "type_name": "LONG", "position": 0},
+                        {"name": "timestamp", "type_name": "TIMESTAMP", "position": 1},
+                        {"name": "userMetadata", "type_name": "STRING", "position": 2},
+                    ],
+                },
+                "total_chunk_count": 1,
+                "total_row_count": 2,
+                "truncated": False,
+            },
+            "result": {
+                "chunk_index": 0,
+                "row_offset": 0,
+                "row_count": 2,
+                "data_typed_array": [
+                    {"values": [{"str": "1"}, {"str": "2026-04-21T09:00:00.000Z"}, {}]},
+                    {"values": [{"str": "0"}, {"str": "2026-04-20T16:10:53.000Z"}, {"str": "x"}]},
+                ],
+            },
+        },
+        "is_error": False,
+    }
+    with patch(
+        "app.tools.data_chat.run_sql.call_dbsql_tool", new=AsyncMock(return_value=resp)
+    ):
+        result = await run_sql.execute(sql="DESCRIBE HISTORY a.b.c", _obo_token="tok")
+
+    assert result.get("ok") is True
+    assert result["row_count"] == 2
+    assert result["truncated"] is False
+    assert result["rows"][0] == ["1", "2026-04-21T09:00:00.000Z", None]
+    assert result["sample"][1]["timestamp"] == "2026-04-20T16:10:53.000Z"

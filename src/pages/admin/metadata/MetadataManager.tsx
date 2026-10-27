@@ -92,7 +92,7 @@ export function MetadataManager() {
           <CircuitBreakerBanner
             action={
               <Link to={adminPath} className="font-medium underline">
-                Review it on the Admin page
+                Review it on the Sync &amp; admin page
               </Link>
             }
           />
@@ -136,7 +136,7 @@ export function MetadataManager() {
             <NavItem to={historyPath}>History</NavItem>
             {ctx.isAdmin && (
               <NavItem to={adminPath}>
-                <Settings2 className="h-4 w-4" /> Admin
+                <Settings2 className="h-4 w-4" /> Sync &amp; admin
               </NavItem>
             )}
           </nav>
@@ -200,7 +200,7 @@ function Welcome() {
       <p className="font-medium text-gray-900">How this works</p>
       <ol className="mt-1 list-decimal space-y-0.5 pl-5">
         <li>Open a catalog or a dataset, or search, to find a table.</li>
-        <li>Change its description or tags right on the page. Nothing is saved yet.</li>
+        <li>Change its description or tags right on the page. Your edits wait at the bottom until you save them in the next step.</li>
         <li>
           Click <span className="font-medium">Review and save</span> at the bottom. Some changes go to the owners for approval first.
         </li>

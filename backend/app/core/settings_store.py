@@ -374,6 +374,16 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "type": "catalog", "kind": "community_links", "add_label": "Add category",
      "requires": ["ui.tabs.community_links"],
      "help": "The Community Links page — categories of curated external resources and tools."},
+    {"group": "Links & Embedded Apps", "section": "Support contact", "key": "yaml:support.name",
+     "label": "Contact name", "type": "string",
+     "help": "The person or team to contact for day-to-day help, for example 'Data Platform Support'."},
+    {"group": "Links & Embedded Apps", "section": "Support contact", "key": "yaml:support.email",
+     "label": "Contact email", "type": "string",
+     "help": "Shown to users on a dataset's Team & Support tab, and given to the assistant to answer "
+             "'who do I contact for support?'. Leave the name and email blank to show nothing."},
+    {"group": "Links & Embedded Apps", "section": "Support contact", "key": "yaml:support.notes",
+     "label": "Hours or channel", "type": "textarea",
+     "help": "Optional: support hours, a chat channel, or a link to the support portal. Shown verbatim."},
     {"group": "Links & Embedded Apps", "key": "yaml:embedded_apps", "label": "Embedded Apps",
      "type": "catalog", "kind": "embedded_apps", "add_label": "Add app",
      "help": "External web apps surfaced inside this app via an iframe. Each adds a sidebar link opening at /embedded/<id>. Note: targets that send X-Frame-Options/CSP frame-ancestors may render blank."},
@@ -642,6 +652,12 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "help": "A preview reads the column masks and row filters on the changed objects and warns when a tag "
              "they key on changes, since that changes who can see the data. Needs READ METADATA for the "
              "governance service principal; turn off if previews are slow or it can't read them."},
+    {"group": "Metadata Manager", "section": "Tag policy", "key": "METADATA_LINT_CHECK",
+     "label": "Warn about suspected typos in previews", "type": "bool",
+     "requires": ["features.metadata_v2"],
+     "help": "A preview compares the tag keys and values you set with the ones already in use and warns about "
+             "near-misses (such as `clasification` for `classification`), differences only in capitalisation, "
+             "stray spaces and unusual characters. It only warns; it never blocks a change."},
     {"group": "Metadata Manager", "section": "Limits", "key": "METADATA_MIN_REASON_LENGTH",
      "label": "Minimum reason length (direct changes)", "type": "int", "min": 0,
      "requires": ["features.metadata_v2"],
@@ -1135,7 +1151,7 @@ GROUP_DESCRIPTIONS: Dict[str, str] = {
         "exist, where and when each sheet's CSV is written for the Terraform pipeline, which Databricks group "
         "approves and edits each type of rule, and the policy every request and direct edit is checked against."
     ),
-    "Links & Embedded Apps": "The Community Links resource page and the external apps embedded (iframed) in the sidebar. Edits apply immediately.",
+    "Links & Embedded Apps": "The Community Links resource page, the external apps embedded (iframed) in the sidebar, and who users contact for day-to-day support. Edits apply immediately.",
     "Calendar": "Where the event calendar's events come from, and how often they are synced.",
     TRAINING_GROUP: (
         "Where course details come from and how people's completions get in. Courses linked to the Databricks "

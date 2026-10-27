@@ -72,7 +72,7 @@ function ObjectBody({ detail, table, focusColumn, reload }: { detail: ObjectDeta
       <ObjectHeader detail={detail} title={table} />
 
       <div className="text-sm text-gray-600">
-        {detail.editable ? 'You can change this directly; your changes are saved as soon as you review them.' : 'Changes you make here are sent to the owners for approval before they’re saved.'}
+        {detail.editable ? 'You can change this directly. Your changes are saved when you select Review and save.' : 'Changes you make here are sent to the owners for approval before they’re saved.'}
         {detail.edit_reasons.length > 0 && (
           <details className="mt-1 inline-block text-xs text-gray-500 [&_summary]:cursor-pointer">
             <summary className="ml-1 inline underline">Why?</summary>

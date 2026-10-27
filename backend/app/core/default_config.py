@@ -104,6 +104,16 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "genie_full_experience_url": "",
     },
 
+    # Who to contact for day-to-day help. Blank by default; a Platform Admin sets it
+    # under Admin -> Settings -> Links & Embedded Apps. Shown in Discover (Team &
+    # Support) and given to the assistant so it can answer "who do I contact?".
+    "support": {
+        "name": "",
+        "email": "",
+        # Hours, channel or anything else worth knowing (e.g. "Weekdays 8-5 MT; or #data-help").
+        "notes": "",
+    },
+
     # Site-wide banner. Deploy-time defaults; a Platform Admin edits these live
     # under Admin -> Settings -> Appearance (persisted as DB overrides).
     "banner": {
@@ -723,6 +733,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "max_objects_per_change": 5000,
         # Preview reads the column masks and row filters keyed on the changed tags.
         "abac_check": True,
+        # Preview warns about suspected typos in tag keys and values (near-misses of keys and
+        # values already in use, case-only differences, stray whitespace, odd characters).
+        "lint_check": True,
         "min_reason_length": 0,
         # Characters required in the justification of a change that needs approval.
         "min_justification_length": 10,

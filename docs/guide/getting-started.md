@@ -35,7 +35,9 @@ Click your name at the bottom of the sidebar to open the account menu:
 - **Release notes** shows what changed in each version, newest first. The
   current version number is shown next to it.
 - **Send feedback** lets you send feedback, request a feature or report a bug.
-  It goes straight to the {{brand_name}} admins.
+  It goes straight to the {{brand_name}} admins. You can also just tell the
+  assistant, including about a table or dashboard that looks stale or wrong;
+  you don't need to pick a category.
 - **Clear my data** deletes your saved conversations and personalized
   suggestions on every device you use. Your requests and approvals are not
   affected.

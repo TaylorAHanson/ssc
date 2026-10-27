@@ -186,7 +186,7 @@ const ACTION_LABELS: Record<string, string> = {
   tag_unset: 'Removed tag',
   comment_set: 'Set description',
   comment_clear: 'Cleared description',
-  object_create: 'Prepared ahead of time',
+  object_create: 'Started being managed',
   object_delete: 'Deleted object',
   object_restore: 'Restored object',
   object_state: 'Object state changed',
@@ -206,20 +206,25 @@ export function eventValue(snapshot: Record<string, unknown> | null | undefined)
   return { text: entries.map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join(', '), kind: 'value' };
 }
 
-const SUMMARY_LABELS: Record<string, string> = {
-  objects: 'objects',
-  tags_set: 'tags set',
-  tags_unset: 'tags removed',
-  comments: 'descriptions changed',
-  created: 'objects prepared ahead of time',
-  restored: 'objects restored',
+/** Each count's wording as [one, many], so "1 tag set" and "2 tags set" both read right. */
+const SUMMARY_LABELS: Record<string, [string, string]> = {
+  objects: ['object', 'objects'],
+  tags_set: ['tag set', 'tags set'],
+  tags_unset: ['tag removed', 'tags removed'],
+  comments: ['description changed', 'descriptions changed'],
+  created: ['object started being managed', 'objects started being managed'],
+  restored: ['object restored', 'objects restored'],
 };
 
 /** Readable counts from a change set's summary (falls back to its events). */
 export function changeSetCounts(cs: ChangeSet): string[] {
   const parts = Object.entries(cs.summary ?? {})
     .filter(([, v]) => typeof v === 'number' && v > 0)
-    .map(([k, v]) => `${(v as number).toLocaleString()} ${SUMMARY_LABELS[k] ?? k.replace(/_/g, ' ')}`);
+    .map(([k, v]) => {
+      const n = v as number;
+      const [one, many] = SUMMARY_LABELS[k] ?? [k.replace(/_/g, ' '), k.replace(/_/g, ' ')];
+      return `${n.toLocaleString()} ${n === 1 ? one : many}`;
+    });
   if (parts.length) return parts;
   return cs.events.length ? [plural(cs.events.length, 'change')] : [];
 }

@@ -61,7 +61,7 @@ these tabs:
   at most a set number of rows, which your administrator chooses.
 - **Quality**: service levels and data quality checks, where they're defined.
 - **Team & Support**: the people responsible for a dataset and how to get
-  help.
+  help, plus the day-to-day support contact your administrator has set.
 
 **Open in Catalog Explorer** opens the asset in Databricks.
 

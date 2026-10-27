@@ -14,6 +14,12 @@ export interface EmbeddedApp {
     allowedPersonas?: UserPersona[];
 }
 
+export interface SupportContact {
+    name: string;
+    email: string;
+    notes: string;
+}
+
 interface BrandingState {
     brandName: string;
     brandShortName: string;
@@ -26,6 +32,8 @@ interface BrandingState {
     brandColorWarning: string;
     brandColorSuccess: string;
     databricksWorkspaceUrl: string;
+    /** Day-to-day support contact set by an admin; every field is blank until then. */
+    supportContact: SupportContact;
     embeddedApps: EmbeddedApp[];
     genieFullExperienceUrl: string;
     /** Client-side Genie poll window (seconds) before a timeout is surfaced. */
@@ -55,6 +63,7 @@ export const useBrandingStore = create<BrandingState>((set) => ({
     brandColorWarning: '#FFAB00',
     brandColorSuccess: '#00A972',
     databricksWorkspaceUrl: '',
+    supportContact: { name: '', email: '', notes: '' },
     embeddedApps: [],
     genieFullExperienceUrl: '',
     geniePollTimeoutSeconds: 300,
@@ -83,6 +92,11 @@ export const useBrandingStore = create<BrandingState>((set) => ({
                 brandColorWarning: branding.brand_color_warning,
                 brandColorSuccess: branding.brand_color_success,
                 databricksWorkspaceUrl: branding.databricks_workspace_url || '',
+                supportContact: {
+                    name: branding.support_contact?.name || '',
+                    email: branding.support_contact?.email || '',
+                    notes: branding.support_contact?.notes || '',
+                },
                 embeddedApps: (branding.embedded_apps || [])
                     .filter((a) => a && a.id && a.url)
                     .map((a) => ({

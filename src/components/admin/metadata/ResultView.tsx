@@ -28,10 +28,10 @@ export function ResultView({ result, onLeave }: { result: ChangeResult; onLeave?
   );
   const applyNote =
     config.reconcile_mode === 'enforce'
-      ? 'Unity Catalog is updated in the background, usually within a minute.'
+      ? 'They’ll reach Unity Catalog in the background, usually within a minute.'
       : config.reconcile_mode === 'plan'
-        ? 'Syncing is set to report only, so Unity Catalog won’t change until an admin turns syncing on.'
-        : 'Syncing is off, so Unity Catalog won’t change until an admin turns it on.';
+        ? 'They’re recorded here but won’t reach Unity Catalog yet: syncing is set to report only until an admin turns it on.'
+        : 'They’re recorded here but won’t reach Unity Catalog yet: syncing is off until an admin turns it on.';
 
   return (
     <div className="space-y-3">

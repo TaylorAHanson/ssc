@@ -16,6 +16,7 @@ from app.db.metadata import (
     MetadataObjectModel,
     MetadataObservedModel,
     MetadataReconcileQueueModel,
+    MetadataSyncStateModel,
     MetadataTagModel,
 )
 from app.services.metadata import authz, changes, environments, errors, observed, policy, requests, store
@@ -44,6 +45,7 @@ METADATA_TABLES = [
     MetadataEventModel.__table__,
     MetadataObservedModel.__table__,
     MetadataReconcileQueueModel.__table__,
+    MetadataSyncStateModel.__table__,
 ]
 
 JANE = Actor(id="jane@example.com")
@@ -442,6 +444,29 @@ def test_preview_counts_buckets_and_builds_the_report(db, fakes):
     assert fakes.decided[-1] == [d.item for d in pv.items]
     assert "| Object | Change |" in pv.report_markdown and "Tag it" in pv.report_markdown
     assert pv.risk and pv.risk.get("band")
+
+
+def test_a_preview_warns_about_a_near_miss_of_a_key_already_in_use(db, fakes):
+    submit(db, op("set_tags", name="Sales_Dev.Bronze.Customers", tags={"classification": "internal"}))
+    submit(db, op("set_tags", name="Sales_Dev.Bronze.Payments", tags={"classification": "internal"}))
+
+    pv = preview(db, op("set_tags", tags={"clasification": "internal"}))
+
+    assert not pv.blocked and pv.direct_count == 1
+    typos = [f for f in pv.findings if f.code == "near_miss_key"]
+    assert len(typos) == 1 and typos[0].severity == "warn" and "classification" in typos[0].message
+    assert "classification" in pv.report_markdown
+
+    assert not [f for f in preview(db, op("set_tags", tags={"classification": "internal"})).findings
+                if f.code == "near_miss_key"]
+
+
+def test_the_typo_check_can_be_turned_off(db, fakes, monkeypatch):
+    submit(db, op("set_tags", name="Sales_Dev.Bronze.Customers", tags={"classification": "internal"}))
+    monkeypatch.setattr(settings, "METADATA_LINT_CHECK", False)
+
+    assert not [f for f in preview(db, op("set_tags", tags={"clasification": "internal"})).findings
+                if f.code == "near_miss_key"]
 
 
 def test_a_deny_finding_from_authz_blocks_the_change(db, fakes):

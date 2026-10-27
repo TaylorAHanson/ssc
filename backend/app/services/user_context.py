@@ -251,7 +251,17 @@ async def _build_groups(db: Session, identity: UserIdentity) -> Dict[str, Any]:
         return {"member": None, "groups": []}
 
     raw = await get_identity_provider().member_retrieve(member)
-    return {"member": member, "groups": _extract_group_names(raw), "provider": raw.get("provider")}
+    section: Dict[str, Any] = {
+        "member": member, "groups": _extract_group_names(raw), "provider": raw.get("provider"),
+    }
+    if raw.get("provider") == "noop":
+        # No directory is connected, so an empty list means "can't see", not "in no groups".
+        section["available"] = False
+        section["note"] = (
+            "No corporate directory is connected, so these memberships can't be seen. This does "
+            "NOT mean the user is in no groups; their Databricks groups are in identity.directory_groups."
+        )
+    return section
 
 
 def _extract_group_names(payload: Any) -> List[str]:

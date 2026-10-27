@@ -48,6 +48,71 @@ async def test_find_access_wraps_the_ledger(monkeypatch, session):
     session.close.assert_called_once()
 
 
+def _match(rule_id, principal, privileges=("SELECT",), via="direct"):
+    return AccessMatch(
+        rule_id=rule_id, sheet="UC_Securables_RBAC_Dev", plane="uc", environment="dev", securable_type="schema",
+        catalog="sales_dev", schema_name="orders", principal_type="group", principal_name=principal,
+        privileges=list(privileges), via=via)
+
+
+@pytest.mark.asyncio
+async def test_find_access_flags_the_rules_held_by_the_users_groups(monkeypatch, session):
+    seen = {}
+
+    def fake_find(db, **kwargs):
+        seen.update(kwargs)
+        return FindAccessResult(matches=[
+            _match("r-1", "g_other"), _match("r-2", "G_Analysts", via="parent"), _match("r-3", "g_third")])
+
+    monkeypatch.setattr(ledger, "find_access", fake_find)
+    out = await find_access.execute(
+        catalog="sales_dev", schema_name="orders",
+        _user_email="Me@Example.com", _user_entitlements="me@example.com,g_analysts,users")
+
+    assert [(m["principal_name"], m["held_by_you"]) for m in out["matches"]] == [
+        ("G_Analysts", True), ("g_other", False), ("g_third", False)]  # yours first
+    assert seen["limit"] == 100 and seen["principals_in"] is None
+    assert "NOT that you're denied" in out["note"]
+
+
+@pytest.mark.asyncio
+async def test_find_access_cuts_to_the_limit_after_putting_the_users_rules_first(monkeypatch, session):
+    monkeypatch.setattr(ledger, "find_access", lambda db, **kw: FindAccessResult(
+        matches=[_match(f"r-{i}", f"g_{i}") for i in range(5)] + [_match("r-mine", "g_mine")]))
+    out = await find_access.execute(
+        catalog="sales_dev", schema_name="orders", limit=2,
+        _user_email="me@example.com", _user_entitlements="me@example.com,g_mine")
+    assert [m["principal_name"] for m in out["matches"]] == ["g_mine", "g_0"]
+    assert out["truncated"] is True and out["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_find_access_mine_lists_what_the_users_groups_hold(monkeypatch, session):
+    seen = {}
+
+    def fake_find(db, **kwargs):
+        seen.update(kwargs)
+        return FindAccessResult(matches=[_match("r-1", "g_analysts")])
+
+    monkeypatch.setattr(ledger, "find_access", fake_find)
+    out = await find_access.execute(mine=True, _user_email="me@example.com",
+                                    _user_entitlements="me@example.com,g_analysts,g_readers")
+    assert seen["principals_in"] == ["g_analysts", "g_readers"]
+    assert out["matches"][0]["held_by_you"] is True
+
+
+@pytest.mark.asyncio
+async def test_find_access_says_so_when_the_users_groups_are_unknown(monkeypatch, session):
+    monkeypatch.setattr(ledger, "find_access", lambda db, **kw: FindAccessResult(matches=[_match("r-1", "g_a")]))
+    out = await find_access.execute(catalog="sales_dev", schema_name="orders")
+    assert out["matches"][0]["held_by_you"] is None
+    assert "groups weren't available" in out["note"]
+
+    # Only the user's own email is not a group.
+    out = await find_access.execute(mine=True, _user_email="me@example.com", _user_entitlements="me@example.com")
+    assert out["count"] == 0 and "groups weren't available" in out["note"]
+
+
 @pytest.mark.asyncio
 async def test_find_access_steers_an_empty_lookup_to_the_suggestions(monkeypatch, session):
     suggested = FindAccessResult(matches=[], suggestions=[SecurableSuggestion(

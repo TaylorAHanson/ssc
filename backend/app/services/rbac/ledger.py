@@ -1257,10 +1257,14 @@ def find_access(
     object_name: Optional[str] = None,
     workspace_name: Optional[str] = None,
     principal_name: Optional[str] = None,
+    principals_in: Optional[Sequence[str]] = None,
     environment: Optional[str] = None,
     limit: int = 50,
 ) -> FindAccessResult:
     """Who holds what on a securable (including parent catalog / schema rows), or what a principal holds.
+
+    ``principals_in`` keeps only rules held by one of those exact (case-insensitive) group or
+    service principal names, e.g. the groups the caller belongs to.
 
     Metastore rows with no environment match any ``environment`` filter. When nothing
     matches, ``suggestions`` lists securables named like any name asked about, at any
@@ -1275,7 +1279,10 @@ def find_access(
     }
     fields = {k: v for k, v in fields.items() if v}
     principal = (principal_name or "").strip()
-    if not stype and not fields and not principal:
+    wanted_principals = {p.strip().lower() for p in (principals_in or []) if p and p.strip()}
+    if principals_in is not None and not wanted_principals and not stype and not fields and not principal:
+        return FindAccessResult(matches=[])
+    if not stype and not fields and not principal and not wanted_principals:
         raise LedgerError("Say which securable or which group to look up.")
 
     base = db.query(RbacRuleModel).filter(RbacRuleModel.status == RULE_ACTIVE)
@@ -1290,6 +1297,12 @@ def find_access(
         ))
     if principal:
         base = base.filter(RbacRuleModel.principal_name.ilike(f"%{_escape_like(principal)}%", escape="\\"))
+    if wanted_principals:
+        # A cell can list several principals, so prefilter by containment, then keep exact names below.
+        base = base.filter(or_(*[
+            RbacRuleModel.principal_name.ilike(f"%{_escape_like(p)}%", escape="\\")
+            for p in sorted(wanted_principals)[:300]
+        ]))
     order = (RbacRuleModel.sheet, RbacRuleModel.position, RbacRuleModel.id)
 
     direct_query = base
@@ -1327,6 +1340,8 @@ def find_access(
             principals = cells.split_cell(m.principal_name)
             if principal:
                 principals = [p for p in principals if p.lower() == principal.lower()]
+            if wanted_principals:
+                principals = [p for p in principals if p.strip().lower() in wanted_principals]
             privileges = cells.split_cell(m.privilege)
             for p in principals:
                 matches.append(AccessMatch(

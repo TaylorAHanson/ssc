@@ -248,6 +248,11 @@ def _rows(payload: Dict[str, Any], columns: List[str]) -> List[List[Any]]:
         return []
     data = result.get("data_array")
     if not isinstance(data, list):
+        # The server's PROTOBUF_ARRAY format carries the same typed rows under a
+        # different key. Reading only ``data_array`` made every such result look
+        # empty (and "truncated", since the manifest still counted the rows).
+        data = result.get("data_typed_array")
+    if not isinstance(data, list):
         return []
     rows: List[List[Any]] = []
     for raw in data[:_MAX_ROWS]:

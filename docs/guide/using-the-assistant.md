@@ -40,6 +40,52 @@ a chart. **Genie is working…** means the query is still running.
 The assistant uses your own Databricks permissions, so it can only see and
 query the data you already have access to.
 
+### Ask about one table
+
+Ask about a table by name, for example "Tell me about the product table", and
+the assistant puts together what it knows: the description, owner, domain and
+tags, whether it's certified, its data quality results and refresh promise
+(SLA) when they're recorded, and its columns with their types and comments. It
+also says when the table's definition last changed. That isn't the same as when
+its data was last refreshed, so for freshness the assistant checks the table's
+history or quotes the SLA, and says which it used. If a table has no quality
+result or SLA, the assistant says none is recorded rather than guessing.
+
+### Ask what you can access
+
+Ask "Do I have access to this schema?" or "What can I access?" and the
+assistant checks the access rules against the groups you belong to. It tells
+you which of your groups holds the access, or that none of them is recorded as
+holding it. The recorded rules don't include every grant, so when none of your
+groups holds it, the assistant also tries a one-row read of the table as you
+and tells you the result. It says you don't have access only when Databricks
+refuses the read, and says it couldn't check if something else went wrong.
+It then offers to help you join a group or ask for access.
+
+Access goes to groups, so when you ask for access for yourself the assistant
+asks which group you mean instead of choosing one. If a group already has the
+access, it tells you to join that group rather than starting a request that
+wouldn't change anything.
+
+### Report a problem with data
+
+If a table looks stale, wrong or broken, tell the assistant. It looks up the
+owner and offers to report the problem to the team, and it sends the report
+once you say yes. You can also say "report this" straight away. You don't need
+to pick a category. A repeat of the same report within a few minutes is
+recorded once.
+
+### Work that happens in Databricks
+
+The assistant answers questions about data, but it doesn't write queries for
+you to keep, build dashboards, or change tables and their data. If you ask for
+one of these, it sends you to the right place in your Databricks workspace,
+such as the SQL editor, Dashboards or Genie Code, and brings the details you
+need with it: the full table name, its columns, its owner, and whether you
+already have access. For a change to a table or its data it points you to the
+owner and can help you draft the request. Changing a table's tags or
+description is still done here, in the Metadata Manager.
+
 ## Make a request
 
 Ask for what you need, for example access to a table or a new resource.

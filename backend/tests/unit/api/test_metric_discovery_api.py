@@ -93,6 +93,8 @@ def test_search_metric_views_tool(sample_assets):
     mock_query = MagicMock()
     mock_db.query.return_value = mock_query
     mock_query.filter.return_value = mock_query
+    mock_query.order_by.return_value = mock_query  # relevance ordering before the cap
+    mock_query.count.return_value = 2
     mock_query.limit.return_value.all.return_value = [sample_assets[0], sample_assets[2]]
 
     with patch("app.tools.self_service.search_data_assets.get_db", return_value=iter([mock_db])):

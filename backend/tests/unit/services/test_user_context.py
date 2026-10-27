@@ -495,3 +495,31 @@ def test_persona_follows_the_role_priority():
     assert uc.derive_persona(["Finance Admin", "Platform Admin"]) == "Platform Admin"
     assert uc.derive_persona(["Finance Admin"]) == "Finance Admin"
     assert uc.derive_persona([]) == "User"
+
+
+@pytest.mark.asyncio
+async def test_an_unconnected_directory_reads_as_unknown_not_as_no_groups(monkeypatch):
+    from app.providers import identity as identity_providers
+
+    class Provider:
+        def __init__(self, payload):
+            self.payload = payload
+
+        async def member_retrieve(self, member):
+            return self.payload
+
+    identity = uc.UserIdentity(email="me@example.com", entitlements=["me@example.com", "g_analysts"])
+
+    monkeypatch.setattr(identity_providers, "get_identity_provider",
+                        lambda: Provider({"member": "me", "groups": [], "provider": "noop"}))
+    unknown = await uc._build_groups(None, identity)
+    assert unknown["groups"] == [] and unknown["available"] is False
+    assert "NOT mean the user is in no groups" in unknown["note"]
+
+    # A connected directory that returns no groups is a real answer.
+    monkeypatch.setattr(identity_providers, "get_identity_provider",
+                        lambda: Provider({"member": "me", "groups": [], "provider": "rest"}))
+    known = await uc._build_groups(None, identity)
+    assert "available" not in known and "note" not in known
+    # The Databricks groups come from the identity section either way.
+    assert uc._build_identity(None, identity)["directory_groups"] == ["g_analysts"]

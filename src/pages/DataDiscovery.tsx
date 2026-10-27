@@ -818,6 +818,9 @@ function DetailsModal({
 }: DetailsModalProps) {
   const isDataset = asset.type === 'dataset' || asset.type === 'data_product';
   const isTableLike = ['managed', 'external', 'view'].includes(String(asset.type).toLowerCase());
+  // Day-to-day support contact an admin set under Settings; shown on every asset.
+  const supportContact = useBrandingStore((s) => s.supportContact);
+  const hasSupportContact = Boolean(supportContact.name || supportContact.email || supportContact.notes);
 
   // Helpers for derived contract info (safe when contract is null)
   const parsed = contract?.parsed || null;
@@ -906,7 +909,8 @@ function DetailsModal({
   const schemaTabCount = isDataset ? schema.length : tableColumns.length;
   const hasQuality = (slaProperties.length > 0 || asset.sla)
     || (asset.data_quality && Object.keys(asset.data_quality).length > 0);
-  const hasTeam = isDataset && (team.length > 0 || support.length > 0 || authoritativeDefinitions.length > 0);
+  const hasTeam = (isDataset && (team.length > 0 || support.length > 0 || authoritativeDefinitions.length > 0))
+    || hasSupportContact;
   // Data preview tab: sample rows of a UC table/view, queried as the user only once the tab is opened.
   const previewFqn = isTableLike && asset.catalog && asset.schema_name && asset.table_name
     ? `${asset.catalog}.${asset.schema_name}.${asset.table_name}`
@@ -1405,6 +1409,18 @@ function DetailsModal({
                         )}
                       </div>
                     ))}
+                  </div>
+                </section>
+              )}
+              {hasSupportContact && (
+                <section>
+                  <SectionHeading title="Day-to-day support" />
+                  <div className="text-sm space-y-1">
+                    {supportContact.name && <div className="font-medium text-gray-900">{supportContact.name}</div>}
+                    {supportContact.email && (
+                      <a href={`mailto:${supportContact.email}`} className="text-primary hover:underline">{supportContact.email}</a>
+                    )}
+                    {supportContact.notes && <p className="text-gray-600 whitespace-pre-line">{supportContact.notes}</p>}
                   </div>
                 </section>
               )}

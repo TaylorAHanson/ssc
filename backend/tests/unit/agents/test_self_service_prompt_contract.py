@@ -6,6 +6,8 @@ if you still want it I need ..." followed by the provisioning form. Batching eve
 field into one message was the rule nearest the reply, so these assert that every
 rule about asking for or batching fields waits until the path is settled.
 """
+from unittest.mock import patch
+
 from app.agents import prompts
 
 
@@ -77,3 +79,66 @@ def test_access_rules_section_pins_the_request_contract():
     assert "Never write, suggest or embellish" in text
     assert "once per\n  proposal" in text and "`group_ref`" in text and "`submit_items`" in text
     assert "never grant or revoke anything live" in text
+
+
+def test_access_rules_section_answers_do_i_have_access_from_the_users_groups():
+    text = prompts.ACCESS_RULES_INSTRUCTIONS
+    assert "`held_by_you`" in text and "`mine=true`" in text
+    assert 'never say the user is\n  "denied"' in text
+    assert "run_sql" in text  # the one-row SELECT is the certain check
+
+
+def test_data_tools_combine_into_a_table_details_answer():
+    text = prompts.UNIFIED_INSTRUCTIONS
+    assert "Details about one table" in text
+    assert "`data_quality`" in text and "`sla`" in text
+    assert "NOT when its data last refreshed" in text and "DESCRIBE HISTORY" in text
+
+
+def test_building_and_changing_things_is_handed_off_to_the_workspace():
+    text = prompts.UNIFIED_INSTRUCTIONS
+    assert "Hand off work that belongs in the workspace" in text
+    for need in ("troubleshoot a query", "create or edit a dashboard", "change a table or its data"):
+        assert need in text
+    assert "Never make up a URL" in text
+    # Answering a question with rows and editing tags stay with the app.
+    assert "use `run_sql`" in text and "Metadata Manager tools" in text
+
+
+def test_access_for_oneself_never_guesses_the_group_or_requests_what_a_group_has():
+    text = prompts.ACCESS_RULES_INSTRUCTIONS
+    assert "Never pick the group for them" in text
+    assert 'replies only "yes" or "please", ask which one' in text
+    assert "Never\n  call `preview_access_change` for a group that already holds" in text
+
+
+def test_do_i_have_access_is_settled_with_a_probe_not_a_question():
+    text = prompts.ACCESS_RULES_INSTRUCTIONS
+    assert "settle it yourself in the same turn instead of\n  asking permission" in text
+    assert "SELECT 1 FROM catalog.schema.table LIMIT 1" in text
+    # Only a real permission error counts as "no access"; other failures are "couldn't check".
+    assert "Any other error" in text and "don't claim either way" in text
+
+
+def test_a_hand_off_is_quick_and_does_not_surface_plumbing():
+    text = prompts.UNIFIED_INSTRUCTIONS
+    assert "Don't run live lookups" in text and "Never make up a URL or a `target_host`" in text
+    assert 'link text "SQL editor"' in text
+    assert "never report a token or connection error" in text
+
+
+def test_dashboards_are_answered_from_the_cache():
+    text = prompts.UNIFIED_INSTRUCTIONS
+    assert "answered from `downstream_dashboards`" in text and "doesn't record Genie spaces" in text
+
+
+def test_feedback_is_filed_on_request_and_only_once():
+    with patch("app.core.feature_flags.is_feature_enabled", return_value=True):
+        text = prompts._get_feedback_section()
+    assert "Only call `submit_feedback` when the user has asked you to" in text
+    assert "has\n        not asked" not in text  # (wording check below is whitespace-insensitive)
+    flat = " ".join(text.split())
+    assert "A user who just describes a problem" in flat and "Wait for their yes" in flat
+    assert "File each issue once" in flat
+    # The rule can't be contradicted by an instruction to file straight away.
+    assert "Capture what they saw, file it" not in flat

@@ -4,6 +4,7 @@ from typing import Any, Dict, List
 from fastapi import APIRouter
 from app.core.config import settings, _yaml_config, dev_features_allowed
 from app.core.settings_store import effective_ui_tabs
+from app.core.support import get_support_contact
 
 router = APIRouter()
 
@@ -121,6 +122,8 @@ async def get_branding():
         "brand_color_warning": settings.BRAND_COLOR_WARNING,
         "brand_color_success": settings.BRAND_COLOR_SUCCESS,
         "databricks_workspace_url": workspace_url,
+        # Day-to-day support contact ({name, email, notes}); {} until an admin sets one.
+        "support_contact": get_support_contact(),
         # Config-driven list of iframe-embedded apps. Each renders a sidebar
         # link that opens the app in-page at /embedded/<id>, in list order.
         "embedded_apps": _embedded_apps(),

@@ -39,7 +39,7 @@ table.
 
 If the last full check couldn't read a catalog, its page says so: new and
 changed tables still appear, but older ones may be missing until a check reads
-the catalog again. Admins can see why under **Admin → Sync history**.
+the catalog again. Admins can see why under **Sync & admin → Sync history**.
 
 The search box searches wherever you are: everything from the catalog list, or
 just one catalog or schema once you've clicked into it. **Filters** narrows the
@@ -73,7 +73,12 @@ Unity Catalog*.
 3. Choose **Review and save**. It shows every change, which ones need
    approval and who approves them, any policy problems, and the risk score.
    It also warns when a changed tag is one a column mask or row filter keys
-   on, because that changes who can see the data. The first time you change a
+   on, because that changes who can see the data. It also warns about suspected
+   typos, such as a tag key one letter away from one already in use
+   (`clasification` for `classification`), a value that only differs in
+   capitalisation, or stray spaces; these warnings never block a save, and
+   admins can turn them off under **Admin → Settings → Metadata Manager**
+   (*Warn about suspected typos in previews*). The first time you change a
    table here it's marked *Starts being managed*, and the tags and description
    it already has are listed as *Already in Unity Catalog*: they're kept, not
    counted as edits, and need no approval. If one breaks a tag rule, the
@@ -137,9 +142,10 @@ the change came from. Open a change to see each tag it touched; **Undo this
 change** saves the opposite change. Changes still waiting for approval are under
 **Requests** → **My requests**.
 
-## Admin
+## Sync & admin
 
-Platform Admins get an **Admin** link with:
+Platform Admins get a **Sync & admin** link in the page header (not to be
+confused with **Admin** in the sidebar, which opens the platform dashboard) with:
 
 - a summary of whether syncing is on, which catalogs it covers and when Unity
   Catalog was last checked;
