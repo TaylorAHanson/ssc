@@ -63,6 +63,8 @@ def _legacy_visible_tools(current_user: User, surface: str) -> List[Any]:
         role = getattr(tool, "required_role", None)
         if role and not current_user.has_role(role):
             continue
+        if not getattr(tool, "is_available", lambda: True)():
+            continue
         name = getattr(tool, "name", "")
         if is_authoring:
             if name not in DEFAULT_AUTHORING_TOOL_NAMES:

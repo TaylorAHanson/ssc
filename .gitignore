@@ -65,3 +65,5 @@ backend/bin/
 # checkpoints
 *.db-shm
 *.db-wal
+# Assistant test library reports (python -m app.agents.eval run)
+backend/eval_reports/

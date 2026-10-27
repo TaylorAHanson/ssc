@@ -447,10 +447,19 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                     ? ` [Result columns: ${ds.columns.join(', ')} (${ds.rows.length} rows).` +
                       ' To visualize, call render_chart with these exact column names.]'
                     : '';
+                // Without its conversation id the agent cannot continue the same Genie
+                // conversation, so every follow-up would start over with no context.
+                const genieConversationId =
+                    m.genieResult && typeof m.genieResult.conversation_id === 'string'
+                        ? m.genieResult.conversation_id
+                        : '';
+                const followUpNote = genieConversationId
+                    ? ` [Genie conversation_id: ${genieConversationId}. For a follow-up to this answer, pass it as conversation_id to ask_your_data.]`
+                    : '';
                 out.push({
                     id: m.id,
                     type: 'tool',
-                    content: (m.detail ?? `Genie answered "${m.label}"`) + schemaNote,
+                    content: (m.detail ?? `Genie answered "${m.label}"`) + schemaNote + followUpNote,
                     timestamp: completedAt,
                     tool_call_id: m.toolCallId,
                     name: m.toolName,

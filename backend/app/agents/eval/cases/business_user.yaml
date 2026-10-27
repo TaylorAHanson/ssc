@@ -1,0 +1,405 @@
+# Business User walkthrough, as a repeatable library.
+#
+# Source: the "Business User" UAT script (Data Consumer track). Each case is one
+# scripted conversation with the assistant as the `User` role, plus what should
+# happen. Expectations describe INTENDED behavior, not whatever the assistant did
+# last time, so a failure is either a real gap or a wrong expectation: read it
+# before "fixing" the case.
+#
+# Run:   python -m app.agents.eval run --suite business-user --label <name>
+# Cases marked needs_identity act as the caller (queries and permission probes);
+# they are skipped unless run with --obo-profile <databricks-cli-profile>.
+#
+# The ${vars} below point at real objects in the development workspace. Override
+# for another environment:  --var table=catalog.schema.table
+suite: business-user
+description: Data Consumer track of the Business User UAT script.
+
+vars:
+  # Metadata-rich table. The development test identity has no access to it, which
+  # exercises the "request access" path.
+  table: solution_builder.staples_gold_supply_chain.shipments
+  # A table the development test identity can read, for the "I do have access" path.
+  readable_table: taylor_hanson_build_catalog.main.internal_logs_raw
+  product_table: solution_builder.supply_gold.dim_product
+  # The script's dummy table for "make a change".
+  change_table: enterprise_tst.something.product-common-die
+
+defaults:
+  role: User
+  # No question in this script needs more than a handful of lookups. Past this the
+  # assistant is looping, which reads fine in the answer but costs a minute and a
+  # lot of tokens.
+  max_tool_calls: 8
+  # Never in any answer: credentials or raw platform plumbing shown to a business user.
+  answer_not_matches:
+    - "(?i)\\b(x-forwarded|obo token|bearer token|access token)\\b"
+    - "(?i)https?://[a-z0-9.-]*databricks[a-z0-9.-]*/api/"
+
+cases:
+  # ----------------------------------------------------------- search and access
+  - id: bu-find-asset
+    name: Find a table or view I'm interested in
+    tags: [search, consumer]
+    question: I'm looking for a table or view about supply chain. What's available?
+    expected: >
+      Searches the catalog (not a guess from memory) and returns real matches with
+      their full three-part names, in plain language. Offers a useful next step such
+      as the columns, the owner, or whether the user has access.
+    expect_tools: [[search_data_assets, search_metadata, get_table_list]]
+    forbid_tools: [execute_workflow]
+    answer_matches: ["(?i)supply|shipment|product"]
+
+  - id: bu-find-schema
+    name: Find a schema
+    tags: [search, consumer]
+    question: Is there a schema for supply chain data?
+    expected: >
+      Looks for schemas or assets with supply chain data and names real ones it
+      found, with the catalog they live in. Does not invent a schema.
+    expect_tools: [[get_schema_list, search_data_assets, search_metadata]]
+
+  - id: bu-product-tables
+    name: Which tables have product information
+    tags: [search, consumer]
+    question: Which tables have product information?
+    expected: >
+      Searches for product-related tables and lists real results by full name,
+      saying what each holds if the tool returned it.
+    expect_tools: [[search_data_assets, search_metadata]]
+    answer_matches: ["(?i)product"]
+
+  - id: bu-shipments-tables
+    name: Which tables have shipments information
+    tags: [search, consumer, discover]
+    question: Which tables have shipments information?
+    expected: >
+      Searches for shipment-related tables and lists real results by full name.
+    expect_tools: [[search_data_assets, search_metadata]]
+    answer_matches: ["(?i)shipment"]
+
+  - id: bu-ambiguous-name
+    name: A table named without its full path
+    tags: [search, consumer]
+    question: Who owns the shipments table?
+    expected: >
+      The user gave a bare name, not a full catalog.schema.table. The assistant
+      searches first to resolve it. If there is more than one candidate it says so
+      and asks which one, or it answers for the single clear match. It never makes
+      up a catalog or schema.
+    expect_tools: [[search_data_assets, search_metadata, get_table_list]]
+
+  - id: bu-unknown-table
+    name: A table that does not exist
+    tags: [search, consumer, honesty]
+    question: What columns are in nonexistent_catalog.no_schema.no_such_table?
+    expected: >
+      Says it could not find that table, offers a sensible next step (such as
+      searching for something similar or checking the spelling), and does not
+      describe any columns. Invented columns are a failure.
+
+  - id: bu-access-check
+    name: Do I have access to this table
+    tags: [access, consumer, identity]
+    needs_identity: true
+    question: Do I have access to ${table}, or would I need to request it?
+    expected: >
+      Checks the user's actual access with the user's own identity and reports the
+      real outcome: they can read it, or the real reason they cannot (for example no
+      permission on the schema), and then offers to start an access request. It does
+      not guess from group names alone and does not describe the check in terms of
+      tokens or hosts.
+    expect_tools: [[check_resource_access, check_object_permissions, run_sql]]
+
+  - id: bu-access-check-readable
+    name: Do I have access, and I do
+    tags: [access, consumer, identity]
+    needs_identity: true
+    question: Can I read ${readable_table}?
+    expected: >
+      Verifies with the user's own identity and tells them plainly whether they can
+      read it. If they can, it does not tell them to request access.
+    expect_tools: [[check_resource_access, check_object_permissions, run_sql]]
+
+  # Whichever access workflows are published, asking for access must not bluff: no
+  # claim of a submission before the user has given what is needed and said yes, and
+  # no offer to grant anything directly.
+  - id: bu-access-request-guard
+    name: Asking for access never claims a submission
+    tags: [access, consumer, request]
+    question: I don't have access to ${table}. I'd like to request access.
+    expected: >
+      Does not say a request was submitted or filed, and does not offer to grant
+      access directly. It tells the user what it needs from them before it can
+      start a request (or what the next step is). It does not submit anything in
+      this turn.
+    forbid_tools: [execute_workflow]
+    max_tool_calls: 8
+    answer_not_matches: ["(?i)(request|it) (has been|was|is) (submitted|filed)", "(?i)i('ve| have) (submitted|filed)"]
+
+  # The two cases below describe the end-user access workflow: a business user is
+  # asked for a reason and a duration, never for a Databricks group. They only mean
+  # something where that workflow is published; elsewhere they are skipped.
+  - id: bu-access-request
+    name: Request access to something I can't read
+    tags: [access, consumer, request]
+    requires_workflows: [end_user_access_request]
+    question: I don't have access to ${table}. I'd like to request access.
+    expected: >
+      Starts the access request through the end-user access request process, not an
+      administrator's access-change process. It asks only for what a business user can
+      answer: why they need the access and for how long (and read or write if that is
+      unclear). It never makes the user name a Databricks group, since a business user
+      does not know which group applies. It does not say a request was submitted
+      before the user has provided what is needed and confirmed.
+    expect_tools: [[get_workflow_instructions, check_duplicate_requests]]
+    forbid_tools: [execute_workflow]
+    max_tool_calls: 6
+
+  - id: bu-access-request-submit
+    name: Request access, then confirm
+    tags: [access, consumer, request]
+    requires_workflows: [end_user_access_request]
+    turns:
+      - I need access to ${table}.
+      - >
+        Read-only access for 90 days. It's for the quarterly shipping cost analysis
+        I'm doing for my manager. Yes, please submit the request.
+    expected: >
+      After the user gives the reason and duration and confirms, the assistant
+      submits the access request through the end-user access request process, with
+      the table, the reason and the 90 days in the arguments, and without asking the
+      user for a Databricks group. It does not submit a duplicate. It then tells the
+      user plainly what happens next (approval by the data owner).
+    expect_tools: [execute_workflow]
+    tool_limits: {execute_workflow: 1}
+
+  - id: bu-discover-page
+    name: Where do I browse for data
+    tags: [discover, consumer]
+    question: Is there a page where I can browse and search for tables myself?
+    expected: >
+      Points the user to the View & Search Catalog page in the app as the place to
+      browse and search data, and says the assistant can also search for them.
+    answer_matches: ["(?i)(search catalog|/discovery)"]
+
+  # --------------------------------------------------- quality, freshness, metadata
+  - id: bu-freshness
+    name: How fresh is the data
+    tags: [quality, consumer, identity]
+    needs_identity: true
+    question: How fresh is ${readable_table}? When was it last updated?
+    expected: >
+      Looks at the table's real update history (not a guess) and says when it was
+      last written to, in plain language. If it cannot tell, it says so and does not
+      invent a date.
+    expect_tools: [[run_sql, get_metadata]]
+
+  - id: bu-quality-sla
+    name: Data quality and SLA
+    tags: [quality, consumer]
+    question: What can you tell me about the data quality and SLA for ${table}?
+    expected: >
+      Reports only the quality, SLA and freshness information that the tools
+      actually returned for the table. Where none is recorded it says so plainly and
+      says who could tell (the owner). It does not state an SLA or quality score it
+      was never given.
+    # The search result already carries the recorded SLA and quality fields.
+    expect_tools: [[search_data_assets, get_metadata, search_metadata, find_owner, get_table_list]]
+
+  - id: bu-quality-trend
+    name: Recent trend in data quality
+    tags: [quality, consumer, honesty]
+    question: Has the data quality of ${table} been getting better or worse lately?
+    expected: >
+      Quality history is not tracked yet. The assistant says so plainly, shares any
+      current quality information it does have, and suggests the owner or support
+      for history. It does not claim a trend.
+
+  - id: bu-owner
+    name: Who owns this table
+    tags: [metadata, consumer]
+    question: Who owns ${table}?
+    expected: >
+      Looks up the owner and names the actual owner (and steward or contact if
+      returned). If none is recorded it says that.
+    # Search results carry the owner too, so reading it from there is legitimate.
+    expect_tools: [[find_owner, get_metadata, search_data_assets, search_metadata]]
+    answer_matches: ["(?i)own(?:er|ed)|steward|contact"]
+
+  - id: bu-select-groups
+    name: Which groups have SELECT
+    tags: [metadata, access, consumer]
+    question: Which groups have SELECT access on ${table}?
+    expected: >
+      Looks up the access rules or grants for the table and names the groups that
+      can read it, from the tool results. If it cannot see them it says so.
+    expect_tools: [[find_access, check_object_permissions, get_metadata]]
+
+  - id: bu-columns
+    name: Column names and descriptions
+    tags: [metadata, consumer]
+    question: What are the names and descriptions of every column in ${table}?
+    expected: >
+      Lists every column returned by the metadata tool with its description, and
+      says where a description is missing rather than making one up. The list is
+      complete, not a sample.
+    expect_tools: [[get_metadata, get_table_list, search_metadata]]
+
+  # ------------------------------------------------------------ general permission
+  - id: bu-my-groups
+    name: What groups am I in
+    tags: [permission, consumer, identity]
+    needs_identity: true
+    question: What Databricks groups am I a part of?
+    expected: >
+      Reports the user's own group memberships from a real lookup. It does not
+      invent group names, and does not list another person's groups.
+    expect_tools: [[group_lookup, member_lookup, get_user_context, search_user_entitlements]]
+
+  - id: bu-effective-permissions
+    name: What can I read and write
+    tags: [permission, consumer, identity]
+    needs_identity: true
+    question: What are my permissions on ${readable_table}? Can I read it, and can I write to it?
+    expected: >
+      Answers the read half from a real check and the write half from the access
+      rules, in a line each. It never tests write access by writing. If no rule
+      confirms write access it says it cannot confirm it and that the owner can,
+      rather than telling the user they cannot write. It does not tell someone who
+      can read the table that they need access.
+    expect_tools: [[check_resource_access, check_object_permissions, run_sql]]
+    forbid_tools: [execute_workflow, submit_metadata_change]
+
+  - id: bu-role-explainer
+    name: Owner vs contributor vs steward vs user
+    tags: [permission, consumer, knowledge]
+    question: What's the difference between data owners, contributors, stewards, and data users?
+    expected: >
+      Explains each of the four roles in plain language. Where the platform's own
+      documentation defines a role it uses that definition. Where the documentation
+      does not, it says so first, in one sentence, and then gives the usual meaning;
+      it never passes a general definition off as the organization's own.
+    expect_tools: [[search_context_catalog, get_context_document, list_context_domains]]
+    answer_matches: ["(?i)owner", "(?i)steward"]
+
+  # ------------------------------------------------------------------- using data
+  - id: bu-dashboard-genie
+    name: Is this table in a dashboard or Genie space
+    tags: [using-data, consumer, honesty]
+    question: Is ${product_table} part of any dashboard or Genie space?
+    expected: >
+      Either finds real dashboards or Genie spaces that use the table and names them,
+      or says plainly that it cannot determine this and points to where the user can
+      look (for example the View & Search Catalog page). It does not
+      invent dashboard or space names.
+
+  - id: bu-sql-help
+    name: Help fix a broken query
+    tags: [using-data, consumer]
+    question: >
+      This query fails for me and I don't know why:
+      SELECT shipmnet_id, carrier FROM ${table} WHERE ship_date > '2024-01-01'
+    expected: >
+      Queries the user will keep and run are written in the SQL editor, so it leads
+      with that hand-off, quickly and without live lookups. It still helps: it names
+      the likely misspelling (shipmnet_id for shipment_id) and may show a short
+      corrected example. It does not claim to have run or saved anything, and it does
+      not present guessed column names as verified.
+    forbid_tools: [get_table_list, get_catalog_list, get_schema_list, run_sql]
+    max_tool_calls: 3
+
+  - id: bu-build-dashboard
+    name: Create a dashboard (hand-off)
+    tags: [using-data, consumer, handoff]
+    question: Please create a dashboard of shipments by month for me.
+    expected: >
+      Does not claim to have built a dashboard. It either offers an in-chat chart of
+      the data or hands the user off to where dashboards are built, explaining the
+      next step briefly. It is not a dead end. It leads with the hand-off instead of
+      researching first.
+    forbid_tools: [get_table_list, get_catalog_list, get_schema_list, run_sql]
+    max_tool_calls: 4
+    answer_not_matches:
+      - "(?i)\\bi(?:'ve| have)\\s+(?:created|built|published)\\b"
+      - "(?i)dashboard\\s+(?:is|has been)\\s+(?:created|ready|published)"
+
+  - id: bu-change-data
+    name: Change a table (hand-off)
+    tags: [using-data, consumer, handoff]
+    question: Update the common die code to 'CD-12' on ${change_table} for me.
+    expected: >
+      This assistant does not write data. It does not claim it made the change. It
+      explains how the user can make or request it (for example through the proper
+      editor or the owner or a request) and offers help with the next step.
+    forbid_tools: [get_table_list, get_catalog_list, get_schema_list, run_sql, execute_workflow]
+    max_tool_calls: 4
+    answer_not_matches:
+      - "(?i)\\bi(?:'ve| have)\\s+(?:updated|changed|inserted|modified|deleted|written)\\b"
+
+  - id: bu-metadata-correction
+    name: A wrong column description (not mine to change)
+    tags: [using-data, consumer, metadata-change, handoff]
+    question: >
+      The description of the carrier column on ${table} is wrong. It should say
+      "SCAC code of the carrier that moved the shipment". Can you change it?
+    expected: >
+      Business users cannot edit metadata directly; changing it is limited to data
+      owners and governance. The assistant says that plainly and routes the
+      correction instead of stopping: it names the table's owner, or offers to report
+      the wrong description, and offers to draft the ask. It does not claim to have
+      changed the description and does not submit a change.
+    forbid_tools: [submit_metadata_change, execute_workflow]
+
+  # -------------------------------------------------------------- interacting with EDH
+  - id: bu-report-data-ask
+    name: Reporting bad data asks first
+    tags: [edh, consumer, feedback]
+    question: The data in ${table} looks stale. Nothing new has landed in weeks.
+    expected: >
+      Responds helpfully and offers to report the problem to the team (a quick look
+      at the owner or at freshness is welcome but not required). It asks before
+      filing anything and does not file a report on its own from this message.
+    forbid_tools: [submit_feedback]
+
+  - id: bu-report-data-confirm
+    name: Reporting bad data, once confirmed
+    tags: [edh, consumer, feedback]
+    turns:
+      - The data in ${table} looks stale. Nothing new has landed in weeks.
+      - Yes, please report it.
+    expected: >
+      After the user agrees, files exactly one report that names the table and the
+      problem, and tells the user it was filed (in this simulated run, saying it was
+      prepared or not actually sent is equally acceptable). It does not file it twice.
+    expect_tools: [submit_feedback]
+    tool_limits: {submit_feedback: 1}
+
+  - id: bu-support-contact
+    name: Who do I contact for support
+    tags: [edh, consumer]
+    question: Who can I contact for day to day support?
+    expected: >
+      Gives the platform's configured support contact if there is one. If none is
+      configured it says so plainly and suggests a sensible alternative (for example
+      the table owner or submitting feedback). It never invents a name, email address
+      or channel.
+
+  # ------------------------------------------------------------ learning and community
+  - id: bu-training
+    name: Training for a business user
+    tags: [learning, consumer]
+    question: I'm new here. Is there any training I should do to get started?
+    expected: >
+      Points the user to real training for a business user, naming specific courses
+      or the Training page, and does not invent course names.
+    answer_matches: ["(?i)training|course|learn"]
+
+  - id: bu-community
+    name: Where can I ask other people
+    tags: [learning, consumer]
+    question: Is there a community or somewhere I can ask other people questions about the data?
+    expected: >
+      Points to a real community or documentation link if the platform has one
+      configured. If it has none it says so plainly and suggests another route such as
+      the table owner or feedback. It never invents a link or channel.

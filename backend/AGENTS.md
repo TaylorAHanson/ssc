@@ -16,6 +16,26 @@ first** — it is the source of truth for how the pieces fit together.
   shared fixtures in `tests/conftest.py`.
 - **Workflow eval harness:** `app/workflows/harness.py` — use it to exercise agent
   workflows end-to-end rather than hand-driving the graph.
+- **Assistant chat test library:** `app/agents/eval/` replays a library of
+  questions (`eval/cases/*.yaml`) through the real chat agent with mutating tools
+  simulated, then grades each with deterministic checks (tools called, tool limits,
+  answer patterns) plus an LLM judge, as workflow tests do. Use it before and after
+  any prompt, tool-description or tool-set change: `python -m app.agents.eval list`,
+  `python -m app.agents.eval run --repeat 3 --label before`, make the change, run again
+  with `--label after`, then `python -m app.agents.eval compare before after` (the model
+  is non-deterministic, so repeat and compare per-case pass fractions). Cases marked
+  `needs_identity` act as a real user and need `--obo-profile <databricks-cli-profile>`;
+  cases with `requires_workflows` or `requires_tools` are skipped where that workflow
+  isn't published or an admin has switched that tool off for the role (turn "Ask your
+  data" on locally with `update tool_registry set enabled=1 where tool_name='ask_your_data'`).
+  `expect_tool_args` asserts what a call passed (e.g. a Genie follow-up's
+  `conversation_id`), not just that it was made. The `genie` suite covers Ask your data
+  end to end: the runner finishes a Genie pending-poll the way the chat UI does (polls
+  `agent_polls.poll_genie`, shows Genie's `final_answer` as-is, replays the
+  conversation id into history), so keep `genie_tool_message` in step with
+  `buildHistory` in `ChatView.tsx` (a unit test checks the wording).
+  Reports land in `backend/eval_reports/` (gitignored). The judge is the same model as
+  the agent, so treat a single run's verdicts as evidence, not proof.
 - Scratch/debug scripts must run inside the venv too. Prefer attaching the
   debugger over sprinkling debug output; use the logging library, never `print`.
 

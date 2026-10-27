@@ -36,6 +36,9 @@ a chart. **Genie is working…** means the query is still running.
   sets the colors, and how values are combined.
 - Open **Genie details** to see the SQL that was run. From there you can copy
   the SQL, or open the same conversation in Databricks Genie to keep exploring.
+- Genie can take a minute or two, so the assistant uses it only when a faster
+  lookup, or a query on a table it already knows, won't do. A follow-up such as
+  "now by region" continues the same Genie conversation instead of starting over.
 
 The assistant uses your own Databricks permissions, so it can only see and
 query the data you already have access to.
@@ -80,10 +83,11 @@ recorded once.
 The assistant answers questions about data, but it doesn't write queries for
 you to keep, build dashboards, or change tables and their data. If you ask for
 one of these, it sends you to the right place in your Databricks workspace,
-such as the SQL editor, Dashboards or Genie Code, and brings the details you
-need with it: the full table name, its columns, its owner, and whether you
-already have access. For a change to a table or its data it points you to the
-owner and can help you draft the request. Changing a table's tags or
+such as the SQL editor, Dashboards or Genie Code. It does this straight away:
+it doesn't look the table up or run your query first, so if it suggests a fix
+to a query it tells you it is a likely fix it hasn't run. It brings the full
+table name you gave, and for a change to a table or its data it points you to
+the owner and can help you draft the request. Changing a table's tags or
 description is still done here, in the Metadata Manager.
 
 ## Make a request

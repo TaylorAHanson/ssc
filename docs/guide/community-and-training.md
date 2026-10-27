@@ -48,3 +48,11 @@ patterns, templates and components other teams have published.
 **Community Links** collects the resources, tools and documentation your
 organization recommends, grouped by category. Links open in a new tab. Admins
 choose the links; if this page is empty, none have been added yet.
+
+## Ask the assistant
+
+Ask the assistant what to learn, which course suits your role, or where to find
+documentation or other people to ask. It reads the courses on **Training** and
+the links on **Community Links** as they stand today and points you to the right
+page. It only mentions a page while that page is switched on, and if there is
+nothing to recommend it says so instead of naming something from memory.

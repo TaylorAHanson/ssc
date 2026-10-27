@@ -19,7 +19,8 @@ import asyncio
 import json
 import logging
 import re
-from typing import Any, Dict, List, Literal, Optional
+import time
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -57,6 +58,30 @@ class GeniePollRequest(BaseModel):
 
 
 PollStatus = Literal["running", "complete", "failed"]
+
+# How long a response may keep coming back "not found" before it counts as really
+# missing, and how soon to ask again. Tracked per process: it only has to bound a
+# short wait, and a poll that lands on another worker simply starts its own window.
+_NOT_FOUND_GRACE_SECONDS = 30.0
+_NOT_FOUND_RETRY_MS = 1500
+_NOT_FOUND_FORGET_SECONDS = 300.0
+_not_found_since: Dict[Tuple[str, str], float] = {}
+
+
+def _is_not_found_error(content: Any) -> bool:
+    """True for Genie's "response_id ... not found in conversation" (HTTP 404) error."""
+    text = content.lower() if isinstance(content, str) else ""
+    return "404" in text and "not found" in text
+
+
+def _within_not_found_grace(body: "GeniePollRequest") -> bool:
+    """Record this "not found" and say whether the response is still inside its grace window."""
+    now = time.monotonic()
+    for key, first in list(_not_found_since.items()):
+        if now - first > _NOT_FOUND_FORGET_SECONDS:
+            del _not_found_since[key]
+    first_seen = _not_found_since.setdefault((body.conversation_id, body.message_id), now)
+    return now - first_seen <= _NOT_FOUND_GRACE_SECONDS
 
 
 class GeniePollResponse(BaseModel):
@@ -141,10 +166,21 @@ async def poll_genie(
         return GeniePollResponse(status="failed", error=f"Poll failed: {e}")
 
     if response.get("is_error"):
+        # A response can be reported "not found" for a moment after Genie hands back its
+        # id (seen on follow-ups in an existing conversation). The answer is there a
+        # second later, so keep polling for a short while instead of ending the chat on it.
+        if _is_not_found_error(response.get("content")) and _within_not_found_grace(body):
+            logger.info(
+                "Genie poll [conv=%s msg=%s]: response not found yet; polling again",
+                body.conversation_id,
+                body.message_id,
+            )
+            return GeniePollResponse(status="running", attempt_after_ms=_NOT_FOUND_RETRY_MS)
         return GeniePollResponse(
             status="failed",
             error=response.get("content") or "Genie reported an error.",
         )
+    _not_found_since.pop((body.conversation_id, body.message_id), None)
 
     parsed = _parse_genie_response(response, body)
     # On terminal completion, make sure we actually have the result rows. Genie's
@@ -157,6 +193,10 @@ async def poll_genie(
             await _maybe_fetch_attachment_rows(parsed.result, body, obo_token)
         except Exception as e:  # noqa: BLE001 - enrichment is best-effort
             logger.warning("Genie attachment-result enrichment skipped: %s", e)
+        try:
+            await _maybe_fetch_query_item_rows(parsed.result, body, obo_token)
+        except Exception as e:  # noqa: BLE001 - enrichment is best-effort
+            logger.warning("Genie query-result enrichment skipped: %s", e)
     return parsed
 
 
@@ -387,19 +427,7 @@ def _parse_genie_response(
     Genie" CTA without having to reconstruct the URL from
     ``DATABRICKS_HOST`` itself.
     """
-    structured = response.get("structured")
-    payload: Optional[Dict[str, Any]] = None
-    if isinstance(structured, dict):
-        payload = structured
-    else:
-        text = response.get("content")
-        if isinstance(text, str) and text.strip():
-            try:
-                decoded = json.loads(text)
-            except json.JSONDecodeError:
-                decoded = None
-            if isinstance(decoded, dict):
-                payload = decoded
+    payload = _structured_payload(response)
 
     raw_status = ""
     if isinstance(payload, dict):
@@ -411,6 +439,23 @@ def _parse_genie_response(
         return GeniePollResponse(
             status="complete",
             result=result,
+            attempt_after_ms=None,
+        )
+    if raw_status == "INCOMPLETE":
+        # A documented terminal status: Genie stopped before it finished (it ran out
+        # of steps or time, or could not settle on an answer). Without this branch the
+        # poll fell through to "running" and the UI polled until it gave up. Hand back
+        # whatever Genie did produce; with nothing at all, say so plainly.
+        result = _enrich_result(payload, response, body)
+        _log_terminal_poll(result, response, terminal=True)
+        if _has_any_answer(result):
+            return GeniePollResponse(status="complete", result=result, attempt_after_ms=None)
+        return GeniePollResponse(
+            status="failed",
+            error=(
+                "Genie stopped before it could finish answering this. "
+                "Try asking something narrower, or rephrase the question."
+            ),
             attempt_after_ms=None,
         )
     if raw_status in ("FAILED", "ERROR", "CANCELLED", "CANCELED"):
@@ -439,6 +484,35 @@ def _parse_genie_response(
         "Genie poll still running: %s", _summarize_genie_payload(response, payload)
     )
     return GeniePollResponse(status="running", partial=partial, attempt_after_ms=3000)
+
+
+def _structured_payload(response: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The dict a Genie MCP response carries, from its structured part or JSON text."""
+    structured = response.get("structured")
+    if isinstance(structured, dict):
+        return structured
+    text = response.get("content")
+    if isinstance(text, str) and text.strip():
+        try:
+            decoded = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(decoded, dict):
+            return decoded
+    return None
+
+
+def _has_any_answer(result: Dict[str, Any]) -> bool:
+    """True when a Genie payload holds text, a query or an attachment worth showing."""
+    for key in ("final_answer", "text", "answer", "description"):
+        value = result.get(key)
+        if isinstance(value, str) and value.strip():
+            return True
+    for key in ("query_items", "attachments"):
+        value = result.get(key)
+        if isinstance(value, list) and value:
+            return True
+    return False
 
 
 def _enrich_result(
@@ -482,6 +556,115 @@ def _enrich_result(
     if body.space_id:
         result.setdefault("_space_id", body.space_id)
     return result
+
+
+# Each query_item costs one extra MCP round-trip, so cap how many a single answer fetches.
+_MAX_QUERY_ITEMS = 3
+# genie_get_query_result reports ``ready: false`` while the statement is still finishing.
+_RESULT_READY_ATTEMPTS = 3
+_RESULT_READY_DELAY_SECONDS = 1.5
+_QUERY_RESULT_DEAD_STATES = ("FAILED", "CANCELED", "CANCELLED", "CLOSED")
+
+
+async def _fetch_query_item_result(
+    body: GeniePollRequest, item_id: str, obo_token: Optional[str]
+) -> Optional[Dict[str, Any]]:
+    """Call ``genie_get_query_result`` for one query item; ``None`` when no rows come back."""
+    for attempt in range(_RESULT_READY_ATTEMPTS):
+        response = await call_genie_tool(
+            tool_name="genie_get_query_result",
+            arguments={
+                "conversation_id": body.conversation_id,
+                "response_id": body.message_id,
+                "item_id": item_id,
+            },
+            obo_token=obo_token,
+            space_id=body.space_id or None,
+        )
+        if response.get("is_error"):
+            logger.info("Genie query result for item %s was an error: %s", item_id, response.get("content"))
+            return None
+        payload = _structured_payload(response)
+        if not isinstance(payload, dict):
+            return None
+        state = str(payload.get("statement_state") or "").upper()
+        if state in _QUERY_RESULT_DEAD_STATES:
+            return None
+        if payload.get("ready") is False and attempt < _RESULT_READY_ATTEMPTS - 1:
+            await asyncio.sleep(_RESULT_READY_DELAY_SECONDS)
+            continue
+        if isinstance(payload.get("columns"), list) and isinstance(payload.get("rows"), list):
+            return payload
+        return None
+    return None
+
+
+async def _maybe_fetch_query_item_rows(
+    result: Dict[str, Any],
+    body: GeniePollRequest,
+    obo_token: Optional[str],
+) -> None:
+    """Add result rows for the ``query_items`` of a completed Genie answer.
+
+    The general Genie MCP server answers with markdown plus ``query_items`` that carry
+    only each query's SQL and an ``item_id``; the rows come from a separate
+    ``genie_get_query_result`` call. Without it a Genie answer reached the chat as text
+    only, with no table and nothing to chart. Each fetched result is added as an
+    attachment in the flat ``query.result`` shape the chat already knows how to table
+    and chart. Mutates ``result`` in place and leaves it untouched when nothing is
+    fetched.
+    """
+    items = result.get("query_items")
+    if not isinstance(items, list) or not items:
+        return
+    existing = result.get("attachments")
+    attachments: List[Any] = list(existing) if isinstance(existing, list) else []
+    known_ids = {a.get("attachment_id") for a in attachments if isinstance(a, dict)}
+
+    targets: List[Dict[str, Any]] = []
+    for item in items[:_MAX_QUERY_ITEMS]:
+        if not isinstance(item, dict):
+            continue
+        item_id = item.get("item_id")
+        if not isinstance(item_id, str) or not item_id or item_id in known_ids:
+            continue
+        targets.append(item)
+    if not targets:
+        return
+
+    # Fetched side by side: one at a time, the retries could hold a finished answer back
+    # for several seconds per item.
+    results = await asyncio.gather(
+        *(_fetch_query_item_result(body, item["item_id"], obo_token) for item in targets),
+        return_exceptions=True,
+    )
+
+    added: List[Dict[str, Any]] = []
+    for item, fetched in zip(targets, results):
+        if isinstance(fetched, BaseException):
+            logger.warning("Genie query result for item %s failed: %s", item["item_id"], fetched)
+            continue
+        if fetched is None:
+            continue
+        item_id = item["item_id"]
+        sql = item.get("sql")
+        added.append(
+            {
+                "attachment_id": item_id,
+                "query": {
+                    "query": sql if isinstance(sql, str) else "",
+                    "result": {
+                        "columns": fetched["columns"],
+                        "rows": fetched["rows"],
+                        "total_row_count": fetched.get("total_row_count"),
+                        "truncated": bool(fetched.get("truncated")),
+                    },
+                },
+            }
+        )
+    if added:
+        result["attachments"] = attachments + added
+        logger.info("Genie: added rows for %d query item(s).", len(added))
 
 
 async def _maybe_fetch_attachment_rows(

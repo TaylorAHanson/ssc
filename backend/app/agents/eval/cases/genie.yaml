@@ -1,0 +1,110 @@
+# Asking Genie ("Ask your data") through the chat, end to end.
+#
+# Genie answers outside the agent loop: the assistant hands the browser a conversation
+# to poll, and the browser shows Genie's written answer as-is. The runner plays that
+# part (see `drain_genie_poll` in runner.py), so these cases cover what a user would
+# actually see: the question the assistant sent, the rows that came back, a follow-up
+# that stays in the same Genie conversation, and charting an answer without asking
+# again.
+#
+# Every case acts as the caller (Genie runs as the signed-in user), so they are
+# skipped unless run with --obo-profile <databricks-cli-profile>, and the Genie cases
+# are skipped where an admin has switched Ask your data off.
+#
+# Run:   python -m app.agents.eval run --suite genie --obo-profile <profile> --label <name>
+#
+# The data is the Databricks `samples` catalog, which every workspace can read and
+# which never changes, so the answers can be checked. Override for another
+# environment:  --var genie_data="the sales data"
+suite: genie
+description: Ask your data (Genie) through the chat, including follow-ups and charting.
+
+vars:
+  genie_data: the TPC-H sample data
+  # A table the assistant can query itself, with a known size.
+  sample_table: samples.nyctaxi.trips
+  sample_table_rows: "21,?932"
+
+defaults:
+  role: User
+  max_tool_calls: 6
+  answer_not_matches:
+    # Genie itself could not answer (a failure or a timeout): an environment problem
+    # the case should report plainly instead of letting the judge grade it.
+    - "(?im)^genie couldn't answer"
+    - "(?i)\\b(x-forwarded|obo token|bearer token|access token)\\b"
+
+cases:
+  - id: genie-ask
+    name: Ask Genie a data question
+    tags: [genie, data-chat]
+    needs_identity: true
+    requires_tools: [ask_your_data]
+    question: "Ask Genie: in ${genie_data}, which five customers have the highest total order value?"
+    expected: >
+      Sends the question to Genie in plain language: it is not rewritten as SQL and
+      not answered from memory. The user then sees Genie's written answer, which names
+      the five customers with their totals. The assistant does not run its own queries
+      alongside Genie or claim it ran one itself.
+    expect_tools: [ask_your_data]
+    forbid_tools: [run_sql, execute_workflow]
+    expect_tool_args:
+      - {tool: ask_your_data, arg: question, not_matches: "(?i)\\b(select|group by)\\b"}
+    max_tool_calls: 2
+
+  - id: genie-followup
+    name: Follow up on a Genie answer
+    tags: [genie, data-chat, follow-up]
+    needs_identity: true
+    requires_tools: [ask_your_data]
+    turns:
+      - "Ask Genie: in ${genie_data}, which five customers have the highest total order value?"
+      - "Now show just the top three."
+    expected: >
+      Both questions go to Genie. The second continues the first Genie conversation by
+      passing its conversation id, so "the top three" means the three highest of the
+      same customers and Genie does not start over. The user sees Genie's answer with
+      three customers.
+    expect_tools: [ask_your_data]
+    tool_limits: {ask_your_data: 2}
+    expect_tool_args:
+      - {tool: ask_your_data, arg: question, not_matches: "(?i)\\b(select|group by)\\b"}
+      - {tool: ask_your_data, arg: conversation_id, turn: 2, matches: "\\S"}
+    forbid_tools: [run_sql, execute_workflow]
+    max_tool_calls: 4
+
+  - id: genie-chart
+    name: Chart a Genie answer
+    tags: [genie, data-chat, chart]
+    needs_identity: true
+    requires_tools: [ask_your_data]
+    turns:
+      - "Ask Genie: in ${genie_data}, which five customers have the highest total order value?"
+      - "Chart that as a bar chart."
+    expected: >
+      The first question goes to Genie. "Chart that" then charts the rows Genie
+      already returned, using the exact column names from its result for the axes. It
+      does not ask Genie again, run its own query, or say it cannot chart.
+    expect_tools: [ask_your_data, render_chart]
+    tool_limits: {ask_your_data: 1}
+    forbid_tools: [run_sql, execute_workflow]
+    answer_not_matches:
+      - "(?i)(can't|cannot|couldn't|unable to) (make|create|draw|build) (a|the) chart"
+    max_tool_calls: 4
+
+  - id: genie-known-table
+    name: A named table is queried directly, not through Genie
+    tags: [genie, data-chat, routing]
+    needs_identity: true
+    question: How many rows are in ${sample_table}?
+    expected: >
+      The user named the table, so the assistant answers from the table itself instead
+      of starting a Genie conversation, which is slow. It reports the real row count,
+      from a count query or from the table's recorded row count (said to be recorded,
+      with an offer to run an exact count), and does not invent one.
+    expect_tools: [[run_sql, get_table_list, get_metadata]]
+    forbid_tools: [ask_your_data, execute_workflow]
+    answer_matches: ["${sample_table_rows}"]
+    # The catalog is not always found by search, so a few lookups to locate it first
+    # are fine; what this case guards is that none of them is a Genie conversation.
+    max_tool_calls: 6

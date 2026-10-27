@@ -177,3 +177,33 @@ async def test_ask_your_data_friendly_label():
     """The tool's UX metadata should be 'Asking Genie...'."""
     assert ask_your_data.friendly_label == "Asking Genie..."
     assert ask_your_data.friendly_completion_label == "Genie answered."
+
+
+@pytest.mark.asyncio
+async def test_ask_your_data_continues_an_earlier_conversation():
+    """A follow-up passes the earlier conversation id to ``genie_ask``; a first question does not."""
+    fake_response = {
+        "content": "",
+        "structured": {"conversation_id": "conv-1", "response_id": "resp-2", "status": "in_progress"},
+        "is_error": False,
+    }
+    with patch("app.tools.data_chat.ask_genie._resolved_default_space_id", return_value=None), patch(
+        "app.tools.data_chat.ask_genie.call_genie_tool", new=AsyncMock(return_value=fake_response)
+    ) as call_mock:
+        followup = await ask_your_data.execute(
+            question="and by region?", conversation_id="  conv-1 ", _obo_token="t"
+        )
+        first = await ask_your_data.execute(question="how many customers?", _obo_token="t")
+
+    follow_args, first_args = (c.kwargs["arguments"] for c in call_mock.await_args_list)
+    assert follow_args == {"question": "and by region?", "conversation_id": "conv-1"}
+    assert first_args == {"question": "how many customers?"}
+    assert followup["pending_poll"]["conversation_id"] == "conv-1"
+
+
+def test_ask_your_data_description_warns_that_it_is_slow():
+    """The slowness caveat travels with the tool, not the system prompt."""
+    description = ask_your_data.description.lower()
+    assert "slow" in description
+    assert "30 to 120 seconds" in description
+    assert "conversation_id" in description

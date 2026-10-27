@@ -1280,7 +1280,8 @@ def find_access(
     fields = {k: v for k, v in fields.items() if v}
     principal = (principal_name or "").strip()
     wanted_principals = {p.strip().lower() for p in (principals_in or []) if p and p.strip()}
-    if principals_in is not None and not wanted_principals and not stype and not fields and not principal:
+    if principals_in is not None and not wanted_principals:
+        # An empty list holds nothing; dropping the filter would return everyone's rules.
         return FindAccessResult(matches=[])
     if not stype and not fields and not principal and not wanted_principals:
         raise LedgerError("Say which securable or which group to look up.")

@@ -570,7 +570,9 @@ class ToolRegistryService:
         for row in rows:
             if row.origin in (TOOL_ORIGIN_LOCAL, TOOL_ORIGIN_WORKFLOW):
                 tool = catalog.get_by_name(row.tool_name)
-                if tool is not None:
+                # A tool can follow an admin setting (see McpTool.is_available);
+                # workflow tools and anything without the hook are always offered.
+                if tool is not None and getattr(tool, "is_available", lambda: True)():
                     resolved.append(tool)
                 continue
             source = sources.get(row.source_id) if row.source_id else None

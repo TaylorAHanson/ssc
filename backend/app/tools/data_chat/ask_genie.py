@@ -30,10 +30,17 @@ from app.tools.mcp import tool
 logger = logging.getLogger(__name__)
 
 
+# The slowness warning lives here, with the tool, rather than in the system prompt: it
+# only reaches the model when the tool is actually available to this user.
 _DESCRIPTION = (
-    "Ask a natural-language business question across Unity Catalog data via Databricks Genie. "
-    "Ideal for aggregations, trends, and exploratory queries over live table data when you do not "
-    "know the exact schema. Returns an answer with a deep link back to Databricks."
+    "Ask Databricks Genie a natural-language question and get an answer worked out over live "
+    "table data, with a deep link back to Databricks. BE CAREFUL, THIS IS SLOW: it runs in the "
+    "background, usually takes 30 to 120 seconds, can time out, and the user waits on a spinner "
+    "meanwhile. Do not use it for anything a faster tool answers: use search_data_assets or "
+    "get_table_list to find out what data exists, and run_sql when you already know the table "
+    "and columns. Reach for it only when the user wants numbers and you would otherwise be "
+    "guessing at the schema. To ask a follow-up about a previous Genie answer, pass that "
+    "answer's conversation_id."
 )
 
 
@@ -47,6 +54,14 @@ class AskYourDataInput(BaseModel):
             "The literal natural-language question to forward to Genie. "
             "Pass the user's question verbatim where possible; do not "
             "reformulate into SQL."
+        ),
+    )
+    conversation_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Continue an earlier Genie conversation. Pass the conversation_id shown with a "
+            "previous Genie answer so a follow-up (\"now by region\") keeps its context. "
+            "Leave empty to start a new conversation."
         ),
     )
     space_id: Optional[str] = Field(
@@ -72,6 +87,7 @@ class AskYourDataInput(BaseModel):
 async def ask_your_data(
     question: str,
     space_id: Optional[str] = None,
+    conversation_id: Optional[str] = None,
     **kwargs: Any,
 ) -> Dict[str, Any]:
     """Start a Genie query and return a pending-poll envelope.
@@ -106,7 +122,7 @@ async def ask_your_data(
         # triggers.
         response = await call_genie_tool(
             tool_name="genie_ask",
-            arguments={"question": question},
+            arguments=_ask_arguments(question, conversation_id),
             obo_token=obo_token,
             space_id=space,
         )
@@ -151,6 +167,14 @@ async def ask_your_data(
             "auth_source": response.get("auth_source"),
         }
     }
+
+
+def _ask_arguments(question: str, conversation_id: Optional[str]) -> Dict[str, Any]:
+    """Arguments for ``genie_ask``; ``conversation_id`` continues an earlier conversation."""
+    arguments: Dict[str, Any] = {"question": question}
+    if conversation_id and conversation_id.strip():
+        arguments["conversation_id"] = conversation_id.strip()
+    return arguments
 
 
 def _resolved_default_space_id() -> Optional[str]:

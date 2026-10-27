@@ -814,6 +814,8 @@ def test_find_access_for_a_set_of_principals_keeps_exact_names_only(db):
 
     # An empty set of principals holds nothing, rather than meaning "everyone".
     assert ledger.find_access(db, principals_in=[]).matches == []
+    assert ledger.find_access(db, catalog="sales_dev", principals_in=[]).matches == []
+    assert ledger.find_access(db, catalog="sales_dev", principals_in=["  "]).matches == []
 
 
 def test_find_access_suggests_a_schema_asked_for_as_a_catalog(db):

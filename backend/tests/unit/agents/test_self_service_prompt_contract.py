@@ -122,9 +122,20 @@ def test_do_i_have_access_is_settled_with_a_probe_not_a_question():
 
 def test_a_hand_off_is_quick_and_does_not_surface_plumbing():
     text = prompts.UNIFIED_INSTRUCTIONS
-    assert "Don't run live lookups" in text and "Never make up a URL or a `target_host`" in text
+    assert "Never make up a URL or a `target_host`" in text
     assert 'link text "SQL editor"' in text
-    assert "never report a token or connection error" in text
+    assert "never report a token, permission or connection error" in text
+    # No live research before a hand-off, and nothing the rule then asks for contradicts it:
+    # it used to ban lookups and then tell the model to quote columns it had "confirmed".
+    assert "never call `get_table_list`, `run_sql` or `find_access` to prepare a hand-off" in text
+    assert "never run or test the user's query yourself" in text
+    assert "a likely fix you haven't run" in text
+    assert "columns you confirmed" not in text
+
+
+def test_the_assistant_does_not_loop_on_a_failing_lookup():
+    text = prompts.UNIFIED_INSTRUCTIONS
+    assert "**Don't loop.**" in text and "don't retry it with variations" in text
 
 
 def test_dashboards_are_answered_from_the_cache():

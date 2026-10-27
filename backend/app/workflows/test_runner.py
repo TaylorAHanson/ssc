@@ -423,7 +423,7 @@ def _summarize_tool_calls(tool_calls: List[Dict[str, Any]]) -> List[Dict[str, An
 
 
 def _summarize_transcript(
-    messages: List[Dict[str, Any]], *, answer: str = "",
+    messages: List[Dict[str, Any]], *, answer: str = "", content_limit: int = 4000,
 ) -> List[Dict[str, Any]]:
     """Trim the runner's message list to reviewable evidence.
 
@@ -435,6 +435,10 @@ def _summarize_transcript(
     The runner returns the final reply outside ``messages``, so without this the
     stored transcript ends on the user's question — hiding the one thing anyone
     reviewing a verdict most needs to read.
+
+    ``content_limit`` caps each message. The default keeps a stored run row small;
+    a caller whose judge must check the answer against what the tools returned
+    (the assistant test library) raises it so the evidence is not cut off.
     """
     out: List[Dict[str, Any]] = []
     for msg in messages:
@@ -444,9 +448,9 @@ def _summarize_transcript(
         entry: Dict[str, Any] = {"role": role}
         content = msg.get("content")
         if isinstance(content, str):
-            entry["content"] = content[:4000]
+            entry["content"] = content[:content_limit]
         elif content is not None:
-            entry["content"] = json.dumps(content, default=str)[:4000]
+            entry["content"] = json.dumps(content, default=str)[:content_limit]
         if msg.get("name"):
             entry["name"] = msg["name"]
         calls = msg.get("tool_calls")
@@ -463,10 +467,10 @@ def _summarize_transcript(
         last = out[-1] if out else {}
         already_there = (
             last.get("role") == "assistant"
-            and (last.get("content") or "").strip() == answer.strip()[:4000]
+            and (last.get("content") or "").strip() == answer.strip()[:content_limit]
         )
         if not already_there:
-            out.append({"role": "assistant", "content": answer[:4000]})
+            out.append({"role": "assistant", "content": answer[:content_limit]})
     return out
 
 

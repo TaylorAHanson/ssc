@@ -48,6 +48,7 @@ class McpTool:
         is_lookup: bool = False,
         requires_identity: bool = False,
         allow_service_principals: bool = False,
+        available_when: Optional[Callable[[], bool]] = None,
     ):
         self._func = func
         self._args_schema = args_schema
@@ -77,7 +78,30 @@ class McpTool:
         self._is_lookup = is_lookup
         self._requires_identity = requires_identity
         self._allow_service_principals = allow_service_principals
-        
+        self._available_when = available_when
+
+    def is_available(self) -> bool:
+        """Whether the tool should be offered to the model right now.
+
+        ``feature_flag`` is read once at startup, so a tool gated on it only changes
+        after a restart. ``available_when`` is asked on every request, so a tool whose
+        usefulness follows an admin setting (a page turned off, a link list emptied)
+        appears and disappears as soon as the setting is saved. A predicate that
+        raises counts as available: hiding a tool silently over a bug is the worse
+        failure.
+        """
+        if self._available_when is None:
+            return True
+        try:
+            return bool(self._available_when())
+        except Exception:  # noqa: BLE001 - never hide a tool over a predicate bug
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "available_when for tool '%s' raised; offering the tool anyway", self._name, exc_info=True
+            )
+            return True
+
     @property
     def name(self) -> str:
         return self._name
@@ -313,6 +337,7 @@ def tool(
     is_lookup: bool = False,
     requires_identity: bool = False,
     allow_service_principals: bool = False,
+    available_when: Optional[Callable[[], bool]] = None,
 ):
     """
     Decorator to register a function as a tool.
@@ -349,6 +374,10 @@ def tool(
     Set ``requires_identity=True`` when the result depends on the caller, and
     ``allow_service_principals=True`` to let registered service principals call
     the tool over MCP (see ``mcp_server.py``).
+
+    Set ``available_when`` to a no-argument predicate for a tool that should only be
+    offered while some admin setting holds (see ``McpTool.is_available``). It is
+    evaluated per request, unlike ``feature_flag``, which is read at startup.
     """
     def decorator(func: Callable) -> McpTool:
         # Determine schema
@@ -403,6 +432,7 @@ def tool(
             is_lookup=is_lookup,
             requires_identity=requires_identity,
             allow_service_principals=allow_service_principals,
+            available_when=available_when,
         )
         
     return decorator

@@ -276,6 +276,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "check_asset_quality": True,
         "find_owner": True,
         "check_training_status": True,
+        # Training and community links; offered only while those pages are on.
+        "get_learning_resources": True,
         "list_skills": True,
         "get_skill": True,
         "list_context_domains": True,
