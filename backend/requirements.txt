@@ -4,22 +4,22 @@ uvicorn[standard]==0.42.0
 # with tens of thousands of violations) so encoding runs off the event loop and
 # releases the GIL. Was previously only a transitive dependency.
 orjson==3.11.9
-python-statemachine==3.0.0
 pydantic==2.12.5
 pydantic-settings==2.13.1
 python-multipart==0.0.27
 python-dotenv==1.2.2
 sqlalchemy==2.0.48
 psycopg2-binary==2.9.11
-alembic==1.16.1
 httpx==0.28.1
 databricks-sdk==0.100.0
 tenacity==9.1.4
 PyYAML==6.0.3
-GitPython==3.1.50
+GitPython==3.1.59
 pyinstrument==5.1.2
 croniter==6.2.2
-PyJWT==2.12.0
+# Not imported directly (pulled in by mcp and mlflow); pinned to keep a patched
+# version installed.
+PyJWT==2.14.0
 cryptography==46.0.6
 requests==2.33.0
 icalendar==7.0.0
