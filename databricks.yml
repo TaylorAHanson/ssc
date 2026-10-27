@@ -154,7 +154,7 @@ resources:
           - name: CONTEXT_CATALOG_TEAMS_WEBHOOK_SECRET_SCOPE
             value: "${var.controltower_secret_scope}"
           # Context Catalog Git sync token: key name in GIT_TOKEN_SECRET_SCOPE.
-          # Blank = reuse the GitHub PAT above. See var.context_catalog_git_pat_secret_key.
+          # Defaults to the GitHub PAT key above. See var.context_catalog_git_pat_secret_key.
           - name: CONTEXT_CATALOG_GIT_TOKEN_SECRET_KEY
             value: "${var.context_catalog_git_pat_secret_key}"
           # Lakebase Change Data Feed readiness: tables the app marks REPLICA
@@ -309,8 +309,8 @@ variables:
     description: "Secret key for the GitHub PAT within controltower_secret_scope"
     default: "github-pat"
   context_catalog_git_pat_secret_key:
-    description: "Secret key (in controltower_secret_scope) of a token with contents read/write on the Context Catalog repo. Blank = reuse github_pat_secret_key."
-    default: ""
+    description: "Secret key (in controltower_secret_scope) of a token with contents read/write on the Context Catalog repo. Defaults to github_pat_secret_key (reuse the shared PAT). Must not be blank: Apps reject empty env values."
+    default: "${var.github_pat_secret_key}"
   github_org:
     description: "GitHub organization for repo/template operations (same across envs)"
     default: "databricks-field-eng"
