@@ -54,6 +54,10 @@ its data was last refreshed, so for freshness the assistant checks the table's
 history or quotes the SLA, and says which it used. If a table has no quality
 result or SLA, the assistant says none is recorded rather than guessing.
 
+If several tables share the name you typed, the assistant says how many matched,
+lists a few and asks which one you mean. It doesn't answer for one of them
+until you choose, so give the catalog or schema name to skip the question.
+
 ### Ask what you can access
 
 Ask "Do I have access to this schema?" or "What can I access?" and the
@@ -87,8 +91,15 @@ such as the SQL editor, Dashboards or Genie Code. It does this straight away:
 it doesn't look the table up or run your query first, so if it suggests a fix
 to a query it tells you it is a likely fix it hasn't run. It brings the full
 table name you gave, and for a change to a table or its data it points you to
-the owner and can help you draft the request. Changing a table's tags or
-description is still done here, in the Metadata Manager.
+the owner and can help you draft the request. For a dashboard it gives you the
+next step in Dashboards first, without searching for data, and then offers to
+help you find a dataset to build it on.
+
+Changing a table's tags or description is still done here, in the Metadata
+Manager, which is limited to data owners and governance. If you don't have
+access to it and spot a wrong description or tag, the assistant tells you who
+can change it, names the table's owner and offers to draft the request to
+them, or to report the problem where feedback is switched on.
 
 ## Make a request
 

@@ -13,6 +13,15 @@ Format rules (the app parses this file, so keep to them):
   before), and what the reader will notice or should do now.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
 
+## 2.6.2 — 2026-10-27
+
+### Fixed
+
+- **Asking for a dashboard now gets the next step straight away.** The assistant searched the catalog first and then asked which dataset to use, so you waited and read a question before learning that dashboards are built in Databricks, not in the chat. It now tells you right away that this happens in **Dashboards** in your workspace, says what to do there, and then offers to help you find data to build it on.
+- **When several tables share a name, the assistant asks which one you mean instead of answering for one.** Asked who owns "the shipments table" when 29 assets matched, it said so, then gave the owner of one of them anyway, which could have sent you to the wrong person. It now lists a few of the matches and asks you to pick before it looks up an owner, your access or any other detail.
+- **If you can't use the Metadata Manager, a correction to a description or tag is now routed to someone who can make it.** The Metadata Manager is limited to governance and data owners, and when a business user asked for a wrong description to be changed the assistant stopped at an access error and suggested asking an admin to change roles, which was no help. It now says that only the table's owner or governance can change it, names the owner, and offers to draft the request to them (or to report the problem, where feedback is switched on).
+- **Workflow test runs no longer present a simulated action as a failure.** In a test run, actions that would change something are simulated rather than carried out, and the assistant sometimes read that as an error and told the tester the request "didn't go through". The simulated result now says plainly that it should be treated as having succeeded, so a test run reads the way a real one would.
+
 ## 2.6.1 — 2026-10-27
 
 ### Changed
