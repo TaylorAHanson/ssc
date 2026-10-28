@@ -1,3 +1,5 @@
-mcp>=1.6.0
-uvicorn>=0.30.0
-starlette>=0.37.0
+# Pinned exactly: mcp has renamed or moved server APIs between releases
+# (2.0 replaced FastMCP with MCPServer). Upgrade deliberately and retest.
+mcp==2.3.0
+uvicorn==0.42.0
+starlette==1.10.0

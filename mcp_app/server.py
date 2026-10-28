@@ -20,11 +20,14 @@ replica serve any request, which is what Databricks Apps' load balancer needs.
 """
 import os
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
+
+ON_DATABRICKS_APPS = "DATABRICKS_APP_PORT" in os.environ
 
 # The instance name is cosmetic (shown to clients); the *app* name (set in
 # databricks.yml) is what must start with "mcp-" for AI Gateway discovery.
-mcp = FastMCP("mcp-edh-ssc", stateless_http=True, streamable_http_path="/mcp")
+mcp = MCPServer("mcp-edh-ssc")
 
 
 @mcp.tool()
@@ -39,9 +42,20 @@ def add(a: float, b: float) -> float:
     return a + b
 
 
-# Starlette ASGI app. FastMCP wires the Streamable HTTP session-manager lifespan
+# By default the SDK only accepts a localhost Host header. Behind the Databricks
+# Apps proxy, which authenticates every request, the Host is the app's public
+# hostname, so the check is turned off there and kept for local runs.
+_transport_security = (
+    TransportSecuritySettings(enable_dns_rebinding_protection=False) if ON_DATABRICKS_APPS else None
+)
+
+# Starlette ASGI app. MCPServer wires the Streamable HTTP session-manager lifespan
 # into this app, so running it directly under uvicorn is all that's required.
-app = mcp.streamable_http_app()
+app = mcp.streamable_http_app(
+    streamable_http_path="/mcp",
+    stateless_http=True,
+    transport_security=_transport_security,
+)
 
 
 if __name__ == "__main__":
@@ -49,4 +63,4 @@ if __name__ == "__main__":
 
     # Databricks Apps inject the port the platform expects the app to listen on.
     port = int(os.environ.get("DATABRICKS_APP_PORT") or os.environ.get("PORT") or "8000")
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0" if ON_DATABRICKS_APPS else "127.0.0.1", port=port)
