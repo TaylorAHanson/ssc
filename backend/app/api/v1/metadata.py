@@ -147,7 +147,10 @@ def _whoami(db: Session, request: Request) -> WhoAmI:
     ids = {"user": fwd.get("user_id"), "username": fwd.get("username"), "email": fwd.get("email")}
     headers_seen = list(fwd.get("headers_seen") or [])
     try:
-        user = deps.get_current_user_or_principal(request, db, None)
+        # Pass the dev persona header on, as every other route gets it through ``Depends``. Dropping
+        # it made this report the caller's real roles while the rest of the app acted on the
+        # simulated one, which hid the sidebar link and blocked the page for anyone simulating a role.
+        user = deps.get_current_user_or_principal(request, db, request.headers.get("x-dev-role-override"))
     except HTTPException as exc:
         if exc.status_code != 403 or not identity.identifiers(fwd):
             raise

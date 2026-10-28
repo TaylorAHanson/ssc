@@ -13,6 +13,12 @@ Format rules (the app parses this file, so keep to them):
   before), and what the reader will notice or should do now.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
 
+## 2.6.3 — 2026-10-28
+
+### Fixed
+
+- **Simulating a role no longer hides the Metadata Manager.** In environments that allow **Dev persona mode** (the toggle in the account menu that lets you view the app as another role), switching to a role such as Platform Admin showed you the rest of the app as that role, but the Metadata Manager still treated you as your real role. The sidebar link stayed hidden, and opening the page directly said you can't browse metadata, so it could not be tested as an admin. The Metadata Manager now follows the simulated role like every other page. This affects only environments where Dev persona mode is available; it stays off elsewhere, and people there see their real roles as before.
+
 ## 2.6.2 — 2026-10-27
 
 ### Fixed

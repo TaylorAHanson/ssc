@@ -553,6 +553,23 @@ def test_promote_can_only_copy_what_the_owner_sees(api, owned):
     assert "people_secret" not in response.text
 
 
+def test_whoami_sees_the_same_dev_persona_as_every_other_route(db, monkeypatch):
+    """The sidebar link and the page both ask whoami whether you may browse. It used to drop the
+    persona header, so someone simulating Platform Admin was told they couldn't browse at all."""
+    seen = []
+
+    def resolve(request, db, override):
+        seen.append(override)
+        return ADMIN
+
+    monkeypatch.setattr(deps, "get_current_user_or_principal", resolve)
+
+    metadata_api._whoami(db, _request({"X-Forwarded-Email": ADMIN.email, "X-Dev-Role-Override": "Platform Admin"}))
+    metadata_api._whoami(db, _request({"X-Forwarded-Email": ADMIN.email}))
+
+    assert seen == ["Platform Admin", None]
+
+
 def test_whoami_reports_the_browse_scope(db, owned, monkeypatch):
     def who(user):
         monkeypatch.setattr(deps, "get_current_user_or_principal", lambda request, db, override: user)
