@@ -414,6 +414,23 @@ def test_adopt_policy_adopts_new_objects_from_the_poll_but_not_from_a_change(db,
     assert queue(db) == {}
 
 
+def test_sync_history_says_what_started_a_queue_run_and_that_it_wasnt_a_full_check(db, uc, provider, monkeypatch):
+    monkeypatch.setattr(settings, "METADATA_RECONCILE_MODE", "plan")
+    monkeypatch.setattr(changes, "adopt_observed", lambda db_, keys, *, reason: None)
+    uc.add("c.s.t")
+    triggers = []
+    for reasons in (["new_object"], ["notify"], ["new_object", "notify"], ["change", "new_object"]):
+        for i, reason in enumerate(reasons):
+            reconciler.enqueue(db, [f"c.s.t{i}"], reason=reason)
+        db.commit()
+        result = reconciler.drain_queue(db, provider=provider)
+        assert result.full_check is False
+        triggers.append(result.trigger)
+
+    assert triggers == ["new_object", "notify", "new_object", "queue"]
+    assert reconciler.run(db, trigger="sweep", provider=provider).full_check is True
+
+
 def test_new_objects_arent_adopted_without_a_catalog_list(db, uc, provider, monkeypatch):
     adopted = []
     monkeypatch.setattr(settings, "METADATA_RECONCILE_CATALOGS", [])
@@ -529,12 +546,54 @@ def test_a_sweep_reconciles_every_managed_object_and_purges_orphans(db, uc, prov
     assert uc.swept == [["c", "d"]]
     assert provider.statements.executed == ["ALTER TABLE `c`.`s`.`a` UNSET TAGS ('stray');"]
     assert result.skipped_catalogs == ["d"] and result.objects_checked == 2
+    assert result.unread_catalogs == ["d"]
     assert obj(db, "c.s.gone").object_state == "orphaned"
     assert obj(db, "d.s.x").object_state == "exists" and obj(db, "d.s.x").last_apply_status is None
     assert purged == [30]
 
     reconciler.run(db, trigger="manual", catalogs=["C"], provider=provider)
     assert uc.swept[-1] == ["c"] and purged == [30]
+
+
+def test_a_read_that_fails_or_misses_things_never_removes_a_tag(db, uc, provider, monkeypatch, alerts):
+    """Removals only come from tags a read just saw in UC: seeing less can never remove more."""
+    monkeypatch.setattr(store, "purge_orphans", lambda db_, *, older_than_days: 0)
+    uc.scope = ["c", "d"]
+    uc.add("c")
+    uc.add("c.s.untagged")
+    uc.add("d")
+    uc.add("d.s.t", {"a": "1", "stray": "1"})
+    desired(db, "c.s.untagged", {"a": "1"})
+    desired(db, "c.s.unseen", {"a": "1"})
+    desired(db, "d.s.t", {"a": "1"})
+    monkeypatch.setattr(settings, "METADATA_RECONCILE_MODE", "plan")
+    assert reconciler.run(db, trigger="sweep", provider=provider).removals_planned == 1
+
+    # d's read now fails, though its snapshot still holds the tag a good read would remove.
+    monkeypatch.setattr(settings, "METADATA_RECONCILE_MODE", "enforce")
+    uc.unreadable = {"d"}
+    swept = reconciler.run(db, trigger="sweep", provider=provider)
+    targeted = reconciler.run(db, trigger="manual", fqn_keys=["d.s.t", "c.s.unseen"], provider=provider)
+
+    for result in (swept, targeted):
+        assert result.removals_planned == 0 and result.unread_catalogs == ["d"]
+        assert all(i.operation != "unset" and i.fqn_key == "c.s.untagged" for i in result.items)
+    assert provider.statements.executed == ["ALTER TABLE `c`.`s`.`untagged` SET TAGS ('a' = '1');"]
+    assert observed.get_observed(db, ["d.s.t"])["d.s.t"].tags == {"a": "1", "stray": "1"}
+    assert obj(db, "c.s.unseen").object_state == "orphaned"
+
+
+def test_every_line_a_run_logs_carries_its_run_id(db, uc, provider, monkeypatch):
+    from app.core.logging_formatter import current_request_id
+
+    seen = []
+    real_sweep = uc.sweep
+    monkeypatch.setattr(observed, "sweep", lambda *a, **kw: seen.append(current_request_id.get()) or real_sweep(*a, **kw))
+
+    result = reconciler.run(db, trigger="manual", catalogs=["c"], provider=provider)
+
+    assert seen == [f"metadata_reconcile:{result.run_id}"]
+    assert current_request_id.get() is None
 
 
 def test_a_run_that_breaks_is_recorded_as_failed(db, uc, provider):

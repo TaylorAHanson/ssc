@@ -894,6 +894,15 @@ def adopt(db: Session, request: AdoptRequest, actor: Actor) -> ChangeResult:
     outside = scope.outside([*catalogs, *(_parse(n).catalog for n in names)])
     if outside:
         raise errors.MetadataError(scope.outside_message(outside))
+    # Adopting copies the snapshot; after a failed read it can lack tags added in UC since, which syncing would remove.
+    named = {_parse(c).catalog.lower() for c in catalogs} | {_parse(n).catalog.lower() for n in names}
+    unread = sorted(named & set(observed.unread_catalogs(db)))
+    if unread:
+        raise errors.MetadataError(
+            f"The last check couldn't read {', '.join(unread)} from Unity Catalog, so the copy saved here may be "
+            "missing tags added there since. Starting to manage it now would save that out-of-date copy, and "
+            "syncing would then remove the missing tags. Try again once a check has read it (see Sync history)."
+        )
     keys: List[str] = []
     for catalog in catalogs:
         keys.extend(_observed_under(db, _parse(catalog).fqn_key, include_columns=request.include_columns))

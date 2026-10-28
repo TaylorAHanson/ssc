@@ -566,6 +566,12 @@ class ReconcileResult(BaseModel):
     statements_failed: int = 0
     removals_planned: int = 0
     skipped_catalogs: List[str] = Field(default_factory=list)
+    # catalog -> why it was skipped (read failure, outside this deployment's list, ...)
+    skipped_reasons: Dict[str, str] = Field(default_factory=dict)
+    # Catalogs this run couldn't read from Unity Catalog, so none of their objects were checked.
+    unread_catalogs: List[str] = Field(default_factory=list)
+    # Whole catalogs; otherwise only named objects, so its counts say nothing about the rest.
+    full_check: bool = False
     paused_reason: Optional[str] = None
     error: Optional[str] = None
     items: List[PlanOutcome] = Field(default_factory=list)
@@ -770,6 +776,8 @@ class MetadataConfig(BaseModel):
     last_sweep_at: Optional[datetime] = None
     # Catalogs the latest full check couldn't read; their lists may be incomplete.
     unread_catalogs: List[str] = Field(default_factory=list)
+    # Same catalogs with a short reason the page can show (warehouse timeout, no BROWSE, ...).
+    unread_reasons: Dict[str, str] = Field(default_factory=dict)
     circuit_breaker_tripped: bool = False
     # Catalog names or patterns this deployment manages; empty = every catalog, but plan only.
     managed_catalogs: List[str] = Field(default_factory=list)

@@ -14,7 +14,7 @@ from app.db.metadata import (
     MetadataReconcileRunModel,
 )
 from app.services.metadata import errors, reconciler
-from app.services.metadata.types import PlanOutcome
+from app.services.metadata.types import PlanOutcome, ReconcileResult
 
 @pytest.fixture(autouse=True)
 def _settings(monkeypatch):
@@ -329,11 +329,35 @@ def test_single_flight_holds_a_postgres_advisory_lock_for_the_run():
 def test_single_flight_refuses_when_another_run_holds_the_lock():
     conn = _FakeConn(got=False)
 
-    with pytest.raises(reconciler.ReconcileBusy):
+    with pytest.raises(reconciler.ReconcileBusy, match="already running"):
         with reconciler._single_flight(_postgres_session(conn)):
             pytest.fail("must not run without the lock")
 
     assert len(conn.statements) == 1 and conn.closed
+
+
+def test_run_detached_returns_the_running_row_when_the_sweep_is_slow(monkeypatch):
+    import threading
+
+    release = threading.Event()
+
+    def slow(db, **kw):
+        release.wait(timeout=5)
+        return ReconcileResult(run_id="done", trigger="manual", mode="plan", status="completed", actor=kw.get("actor"))
+
+    monkeypatch.setattr(reconciler, "run", slow)
+    monkeypatch.setattr(reconciler, "latest_running", lambda db, actor=None: ReconcileResult(
+        run_id="live", trigger="manual", mode="plan", status="running", actor=actor,
+    ))
+
+    def factory():
+        return SimpleNamespace(close=lambda: None)
+
+    started = datetime.now(timezone.utc)
+    result = reconciler.run_detached(trigger="manual", actor="admin@x.com", wait_seconds=0.4, session_factory=factory)
+    release.set()
+    assert (result.run_id, result.status) == ("live", "running")
+    assert (datetime.now(timezone.utc) - started).total_seconds() < 2
 
 
 # --- Sweep schedule -------------------------------------------------------------------------

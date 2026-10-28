@@ -151,7 +151,7 @@ def test_a_role_that_cannot_browse_gets_403(api):
 
 
 def test_only_admins_start_reconciler_runs(api, monkeypatch):
-    monkeypatch.setattr(reconciler, "run", lambda db, **kw: ReconcileResult(
+    monkeypatch.setattr(reconciler, "run_detached", lambda **kw: ReconcileResult(
         run_id="r1", trigger="manual", mode="plan", status="completed", actor=kw["actor"]))
 
     refused = api(OWNER).post(f"{BASE}/runs", json={"kind": "plan"})
@@ -473,6 +473,7 @@ def test_an_owner_sees_only_its_objects_on_every_read(api, owned):
     drift = client.get(f"{BASE}/drift", params={"page_size": 100}).json()
     assert {i["name"] for i in drift["items"]} <= {CUSTOMERS}
     assert client.get(f"{BASE}/config").json()["unread_catalogs"] == []
+    assert client.get(f"{BASE}/config").json()["unread_reasons"] == {}
 
     # The governance view of the same data, for contrast.
     assert api(ADMIN).get(f"{BASE}/objects", params={"page_size": 100}).json()["total"] == 3

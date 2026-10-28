@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Play, ScanSearch, ShieldAlert } from 'lucide-react';
 import { listRuns, startRun } from '../../../services/metadataApi';
 import type { ReconcileResult, RunRequest } from '../../../types/metadata';
@@ -13,10 +13,10 @@ import { useAsync } from './useAsync';
 const PAGE_SIZE = 20;
 
 const TRIGGER_LABELS: Record<string, string> = {
-  queue: 'After a change',
+  queue: 'After an edit here',
   sweep: 'Scheduled check',
   manual: 'Started by an admin',
-  new_object: 'New object found',
+  new_object: 'Changed in Unity Catalog',
   notify: 'Asked to check',
 };
 
@@ -29,14 +29,31 @@ export function RunsTab() {
   const load = useMemo(() => () => listRuns({ page, page_size: PAGE_SIZE }), [page]);
   const { data, error, loading, reload } = useAsync(load, { keepPrevious: true, token: refreshToken });
   const paused = data?.items.find((r) => r.status === 'paused');
+  const running = data?.items.find((r) => r.status === 'running');
+  const runningId = running?.run_id;
+  const inFlight = !!busy || !!running;
+  const watching = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!runningId) return;
+    const id = window.setInterval(() => {
+      reload();
+    }, 2500);
+    return () => window.clearInterval(id);
+  }, [runningId, reload]);
 
   const run = async (request: RunRequest, label: typeof busy) => {
     setBusy(label);
     try {
       const result = await startRun(request);
-      notify(runMessage(result));
       bumpRefresh();
-      openRun(result.run_id);
+      if (result.status === 'running') {
+        watching.current = result.run_id;
+        notify('Checking Unity Catalog. A large catalog takes a few minutes — this list updates when it finishes.');
+      } else {
+        notify(runMessage(result));
+        openRun(result.run_id);
+      }
     } catch (e) {
       notify(errorMessage(e, 'Couldn’t start the sync'), { kind: 'error' });
     } finally {
@@ -44,6 +61,16 @@ export function RunsTab() {
       setConfirmResume(false);
     }
   };
+
+  useEffect(() => {
+    const id = watching.current;
+    if (!id) return;
+    const row = data?.items.find((r) => r.run_id === id);
+    if (!row || row.status === 'running') return;
+    watching.current = null;
+    notify(runMessage(row));
+    openRun(row.run_id);
+  }, [data, notify, openRun]);
 
   return (
     <div className="space-y-3">
@@ -58,13 +85,17 @@ export function RunsTab() {
       />
       {isAdmin && (
         <div className="flex flex-wrap items-center gap-2">
-          <Button size="sm" variant="outline" className="gap-1.5" disabled={!!busy} onClick={() => run({ kind: 'plan' }, 'plan')}>
-            <ScanSearch className="h-3.5 w-3.5" /> {busy === 'plan' ? 'Previewing…' : 'Preview a sync'}
+          <Button size="sm" variant="outline" className="gap-1.5" disabled={inFlight} onClick={() => run({ kind: 'plan' }, 'plan')}>
+            <ScanSearch className="h-3.5 w-3.5" /> {busy === 'plan' || running ? 'Checking…' : 'Preview a sync'}
           </Button>
-          <Button size="sm" className="gap-1.5" disabled={!!busy} onClick={() => run({ kind: 'sweep' }, 'sweep')}>
-            <Play className="h-3.5 w-3.5" /> {busy === 'sweep' ? 'Checking…' : 'Check and sync now'}
+          <Button size="sm" className="gap-1.5" disabled={inFlight} onClick={() => run({ kind: 'sweep' }, 'sweep')}>
+            <Play className="h-3.5 w-3.5" /> {busy === 'sweep' ? 'Starting…' : 'Check and sync now'}
           </Button>
-          <span className="text-xs text-gray-500">A preview only reports what would change. Check and sync writes it to Unity Catalog when syncing is on.</span>
+          <span className="text-xs text-gray-500">
+            {running
+              ? 'A check is running. Large catalogs take a few minutes; you can leave this page.'
+              : 'A preview only reports what would change. Check and sync writes it to Unity Catalog when syncing is on.'}
+          </span>
         </div>
       )}
 
@@ -75,6 +106,10 @@ export function RunsTab() {
         <EmptyState title="No syncs yet">They appear here once Unity Catalog has been checked.</EmptyState>
       ) : data ? (
         <div className={loading ? 'overflow-x-auto opacity-60' : 'overflow-x-auto'}>
+          <p className="mb-2 text-xs text-gray-500">
+            Each row counts only what that check looked at. A full check reads whole catalogs; the others re-check just the objects that
+            were edited here or changed in Unity Catalog. What’s out of sync right now is listed under Out of sync with Unity Catalog.
+          </p>
           <table className="w-full rounded-lg border border-gray-200 bg-white text-left text-sm">
             <thead className="bg-gray-50 text-xs text-gray-600">
               <tr>
@@ -102,8 +137,16 @@ export function RunsTab() {
                   </td>
                   <td className="px-3 py-2">
                     <RunStatusBadge status={r.status} />
+                    {!!r.unread_catalogs?.length && (
+                      <span className="mt-0.5 block text-xs text-amber-800">Couldn’t read {r.unread_catalogs.join(', ')}</span>
+                    )}
                   </td>
-                  <td className="px-3 py-2 text-right tabular-nums">{r.objects_checked.toLocaleString()}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    {r.objects_checked.toLocaleString()}
+                    {r.status !== 'skipped' && r.status !== 'paused' && (
+                      <span className="block text-xs text-gray-400">{r.full_check ? 'full check' : 'only these objects'}</span>
+                    )}
+                  </td>
                   <td className="px-3 py-2 text-right tabular-nums">{r.objects_drifted.toLocaleString()}</td>
                   <td className="px-3 py-2 text-right tabular-nums">
                     {r.statements_applied}/{r.statements_planned}
@@ -169,6 +212,9 @@ export function RunsTab() {
 
 function runMessage(r: ReconcileResult): string {
   if (r.status === 'paused') return `The sync paused: it would remove ${plural(r.removals_planned, 'tag')}, which is over the safety limit.`;
+  if (r.unread_catalogs?.length && r.objects_checked === 0) {
+    return `Couldn’t read ${r.unread_catalogs.join(', ')} from Unity Catalog, so nothing was checked. The sync’s details say why.`;
+  }
   if (r.mode === 'plan') return `Preview finished: ${plural(r.statements_planned, 'statement')} would run.`;
   return `Sync finished: ${r.statements_applied} of ${plural(r.statements_planned, 'statement')} written.`;
 }

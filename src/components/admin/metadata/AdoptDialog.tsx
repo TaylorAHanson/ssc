@@ -36,15 +36,19 @@ export function AdoptDialog({ onClose }: { onClose: () => void }) {
     return async () => {
       const [everything, managed] = await Promise.all([
         searchObjects({ catalogs: cats, include_unmanaged: true, include_columns: cols, page_size: 1 }),
-        searchObjects({ catalogs: cats, include_columns: cols, page_size: 1 }),
+        searchObjects({ catalogs: cats, include_unmanaged: false, include_columns: cols, page_size: 1 }),
       ]);
       return { total: everything.total, managed: managed.total };
     };
   }, [estimateKey]);
   const estimate = useAsync(loadEstimate);
 
+  const unread = new Set((config.unread_catalogs ?? []).map((c) => c.toLowerCase()));
+  const unreadChosen = [...new Set([...catalogs, ...nameList.map((n) => n.split('.')[0])].map((c) => c.toLowerCase()))].filter((c) =>
+    unread.has(c),
+  );
   const reasonOk = reason.trim().length >= config.min_reason_length;
-  const canSubmit = (catalogs.length > 0 || nameList.length > 0) && reasonOk && !busy;
+  const canSubmit = (catalogs.length > 0 || nameList.length > 0) && reasonOk && !busy && unreadChosen.length === 0;
 
   const submit = async () => {
     setBusy(true);
@@ -127,6 +131,12 @@ export function AdoptDialog({ onClose }: { onClose: () => void }) {
           </label>
         </div>
       </div>
+      {unreadChosen.length > 0 && (
+        <Notice kind="warn" title="Wait for a check to read this catalog">
+          The last check couldn’t read <span className="font-mono">{unreadChosen.join(', ')}</span> from Unity Catalog, so the copy here may be missing
+          tags added there since. Starting to manage it now would save that out-of-date copy, and syncing would then remove the missing tags.
+        </Notice>
+      )}
       {catalogs.length > 0 && (
         <Notice kind={overwrite ? 'warn' : 'info'}>
           {estimate.loading || !estimate.data ? (

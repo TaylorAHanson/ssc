@@ -392,6 +392,35 @@ def test_unread_catalogs_lists_each_catalogs_latest_failure_until_a_sweep_reads_
     assert observed.unread_catalogs(db_session) == []
 
 
+def test_unread_reasons_keep_the_failure_and_explain_timeouts(db_session, monkeypatch):
+    uc = _metastore()
+    uc.failing.add("hr")
+    observed.sweep(db_session, provider=uc)
+    reasons = observed.unread_reasons(db_session)
+    assert "hr" in reasons and reasons["hr"]
+    monkeypatch.setattr(observed, "unread_catalogs", lambda db: ["sales"])
+    monkeypatch.setattr(observed, "_get_state", lambda db, key: {
+        "unread_catalogs": ["sales"],
+        "unread_reasons": {"sales": "Statement timed out after 50 seconds"},
+    })
+    assert "ran out of time" in observed.unread_reasons(db_session)["sales"]
+    assert "ran out of time" in observed.explain_read_error("statement 01f-abc still RUNNING after 300s")
+
+
+def test_catalog_reads_log_with_the_callers_context(monkeypatch):
+    from app.core.logging_formatter import current_request_id
+
+    seen = []
+    monkeypatch.setattr(observed, "_read_catalog", lambda provider, catalog: seen.append((catalog, current_request_id.get())))
+    token = current_request_id.set("metadata_reconcile:run-1")
+    try:
+        list(observed._read_ahead(None, ["a", "b", "c"]))
+    finally:
+        current_request_id.reset(token)
+
+    assert sorted(seen) == [(c, "metadata_reconcile:run-1") for c in ("a", "b", "c")]
+
+
 def test_sweep_marks_dropped_objects_missing_and_leaves_failed_catalogs_untouched(db_session):
     uc = _metastore()
     observed.sweep(db_session, provider=uc)
@@ -423,6 +452,54 @@ def test_sweep_marks_dropped_objects_missing_and_leaves_failed_catalogs_untouche
     back = _rows(db_session)["sales.bronze.orders"]
     assert back.present is True and back.missing_since is None
     assert back.tags == {"recreated": None}
+
+
+def test_a_sweep_rewrites_only_what_changed_but_marks_everything_seen(db_session, monkeypatch):
+    uc = _metastore()
+    observed.sweep(db_session, provider=uc)
+    keys = sorted(_rows(db_session))
+    before = {key: state.observed_at for key, state in observed.get_observed(db_session, keys).items()}
+    stored = {key: row.observed_at for key, row in _rows(db_session).items()}
+    written = []
+    real_upsert = observed._upsert
+    monkeypatch.setattr(observed, "_upsert", lambda db, rows: written.extend(r["fqn_key"] for r in rows) or real_upsert(db, rows))
+
+    uc.catalogs["sales"].schemas["bronze"].tables["orders"].tags["tier"] = "gold"
+    uc.failing.add("hr")
+    observed.sweep(db_session, provider=uc)
+
+    assert written == ["sales.bronze.orders"]
+    rows = _rows(db_session)
+    assert set(rows) == set(keys)
+    assert rows["sales.bronze.orders"].tags["tier"] == "gold"
+    assert rows["sales.bronze.v_orders"].observed_at == stored["sales.bronze.v_orders"]
+    after = observed.get_observed(db_session, keys)
+    for key, state in after.items():
+        assert state.present
+        if state.key.catalog == "hr":
+            assert state.observed_at == before[key]
+        else:
+            assert state.observed_at > before[key]
+    columns = observed.get_columns(db_session, "sales.bronze.orders")
+    assert columns and all(c.observed_at == after[c.fqn_key].observed_at for c in columns)
+
+
+def test_a_sweep_keeps_what_a_refresh_saved_after_its_read_began(db_session):
+    uc = _metastore()
+    observed.sweep(db_session, provider=uc)
+    read = observed._read_catalog(uc, "sales")
+    bronze = uc.catalogs["sales"].schemas["bronze"]
+    bronze.tables["orders"].tags["tier"] = "gold"
+    bronze.tables["fresh"] = FakeTable(name="fresh")
+    observed.refresh(db_session, [ObjectKey.parse("sales.bronze.orders"), ObjectKey.parse("sales.bronze.fresh")], provider=uc)
+    db_session.commit()
+
+    assert observed._write_catalog(db_session, "sales", read.rows, read.observed_at) == (0, 0)
+    db_session.commit()
+
+    rows = _rows(db_session)
+    assert rows["sales.bronze.orders"].tags["tier"] == "gold"
+    assert rows["sales.bronze.fresh"].present is True
 
 
 def test_a_catalog_whose_own_row_is_invisible_counts_as_failed(db_session):

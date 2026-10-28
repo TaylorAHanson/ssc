@@ -49,7 +49,11 @@ const APPLY: Record<ApplyStatus, { tone: Tone; label: string }> = {
 };
 
 export function ApplyBadge({ status }: { status: ApplyStatus | null | undefined }) {
+  const enforce = useMetadata().config.reconcile_mode === 'enforce';
   if (!status) return null;
+  if (status === 'pending' && !enforce) {
+    return <Badge tone="blue">Saved here only</Badge>;
+  }
   return <Badge tone={APPLY[status].tone}>{APPLY[status].label}</Badge>;
 }
 
@@ -66,6 +70,7 @@ export function AttentionBadge({ summary: s, unsaved }: {
   summary: Pick<ObjectSummary, 'managed' | 'object_state' | 'drift' | 'last_apply_status'>;
   unsaved?: boolean;
 }) {
+  const enforce = useMetadata().config.reconcile_mode === 'enforce';
   if (unsaved) return <Badge tone="indigo" title="You changed this here but haven’t saved it yet.">Unsaved changes</Badge>;
   if (!s.managed) return null;
   if (s.last_apply_status === 'failed') {
@@ -73,7 +78,20 @@ export function AttentionBadge({ summary: s, unsaved }: {
   }
   if (s.object_state === 'pending') return <Badge tone="blue" title={STATE.pending.title}>Not created yet</Badge>;
   if (s.object_state === 'orphaned') return <Badge tone="amber" title={STATE.orphaned.title}>Missing from Unity Catalog</Badge>;
-  if (s.last_apply_status === 'pending') return <Badge tone="blue" title="Saved here; Unity Catalog is updated in the background.">Waiting to sync</Badge>;
+  if (s.last_apply_status === 'pending') {
+    return (
+      <Badge
+        tone="blue"
+        title={
+          enforce
+            ? 'Saved here; Unity Catalog is updated in the background.'
+            : 'Saved here. Unity Catalog isn’t updated while syncing is set to report only.'
+        }
+      >
+        {enforce ? 'Waiting to sync' : 'Saved here only'}
+      </Badge>
+    );
+  }
   if (s.drift) return <DriftBadge />;
   return null;
 }

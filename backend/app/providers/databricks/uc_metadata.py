@@ -41,6 +41,7 @@ TableKey = Tuple[str, str, str]
 _TERMINAL_STATES = ("SUCCEEDED", "FAILED", "CANCELED", "CLOSED")
 _POLL_BUDGET_SECONDS = 300
 _POLL_INTERVAL_SECONDS = 2
+_PROGRESS_EVERY_SECONDS = 60
 
 
 @dataclass
@@ -122,27 +123,37 @@ def cancel_statement(client, statement_id: Optional[str]) -> None:
         logger.warning("Could not cancel abandoned statement %s: %s", statement_id, e)
 
 
-def _run_statement(client, sql: str, warehouse_id: str) -> List[list]:
+def _run_statement(client, sql: str, warehouse_id: str, label: Optional[str] = None) -> List[list]:
     """Execute ``sql``, poll it to a terminal state, and return every result row.
 
     ``execute_statement`` blocks for at most 50s and may return the statement
     still PENDING/RUNNING while the warehouse keeps working on it; on a large
     catalog the ``information_schema.columns`` read can take longer than that.
-    Results can also span several chunks.
+    Results can also span several chunks. With ``label``, a statement still
+    running logs a line every minute, so a slow read can be told from a stuck one.
     """
+    began = time.monotonic()
     response = client.statement_execution.execute_statement(
         statement=sql, warehouse_id=warehouse_id, wait_timeout="50s"
     )
     statement_id = getattr(response, "statement_id", None)
 
     deadline = time.monotonic() + _POLL_BUDGET_SECONDS
+    next_progress = began + _PROGRESS_EVERY_SECONDS
     state = _state_of(response)
     while state not in _TERMINAL_STATES and statement_id:
-        if time.monotonic() >= deadline:
+        now = time.monotonic()
+        if now >= deadline:
             cancel_statement(client, statement_id)
             raise RuntimeError(
                 f"statement {statement_id} still {state} after {_POLL_BUDGET_SECONDS}s"
             )
+        if label and now >= next_progress:
+            logger.info(
+                "%s: statement %s still %s after %d s (canceled at %d s).",
+                label, statement_id, state, now - began, deadline - began,
+            )
+            next_progress = now + _PROGRESS_EVERY_SECONDS
         time.sleep(_POLL_INTERVAL_SECONDS)
         response = client.statement_execution.get_statement(statement_id)
         state = _state_of(response)

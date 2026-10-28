@@ -198,14 +198,20 @@ export function BrowsePage() {
 
       {unreadHere.length > 0 && (
         <Notice kind="warn" title={catalog ? 'This catalog hasn’t been fully read' : 'Some catalogs haven’t been fully read'}>
-          The last full check couldn’t read {catalog ? 'it' : unreadHere.join(', ')} from Unity Catalog, so some schemas and tables may be
-          missing here. Tables created or changed since then still show up.{' '}
+          The last full check couldn’t read {catalog ? unreadHere[0] : unreadHere.join(', ')} from Unity Catalog, so some schemas and tables
+          may be missing here. What’s already listed is the last successful read, not a wipe.
+          {unreadHere.map((c) => config.unread_reasons?.[c]).filter(Boolean).length > 0 && (
+            <span className="mt-1 block">
+              {unreadHere.map((c) => config.unread_reasons?.[c]).filter(Boolean).join(' ')}
+            </span>
+          )}
+          {' '}
           {isAdmin ? (
             <Link to={adminPath} className="font-medium underline">
-              See why under Admin → Sync history
+              Open Sync history for the failed check
             </Link>
           ) : (
-            'An admin can see why under Admin → Sync history.'
+            'An admin can see the failed check under Sync history.'
           )}
         </Notice>
       )}

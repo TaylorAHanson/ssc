@@ -24,6 +24,7 @@ Names that ``ObjectKey.parse`` refuses can't be managed and aren't stored.
 """
 from __future__ import annotations
 
+import contextvars
 import fnmatch
 import logging
 import time
@@ -47,6 +48,7 @@ from app.services.metadata.types import ObjectKey, ObservedState, normalize_valu
 logger = logging.getLogger(__name__)
 
 LAST_SWEEP_KEY = "observed.last_sweep_at"
+CATALOG_READ_KEY = "observed.catalog_read_at"
 GOVERNED_TAGS_KEY = "observed.governed_tags"
 NEW_OBJECT_WATERMARK_KEY = "observed.new_object_watermark"
 
@@ -58,7 +60,11 @@ _HIDDEN_RELATION_PREFIX = "__"
 
 # Catalogs read concurrently; writes stay on the caller's thread, in catalog order.
 _READ_WORKERS = 4
+# A warehouse read at least this long is logged with its row count.
+_SLOW_READ_SECONDS = 30
 _UPSERT_CHUNK = 1000
+# Stored rows fetched per batch while a sweep compares a catalog with what it read.
+_COMPARE_CHUNK = 5000
 # (schema, table) pairs per information_schema statement in a targeted refresh.
 _REFRESH_CHUNK = 200
 # Catalog names per IN (...) list in the new-object poll.
@@ -80,6 +86,8 @@ _SNAPSHOT_FIELDS = (
     "table_type", "data_type", "ordinal_position", "owner", "comment", "tags", "present", "created",
     "last_altered", "observed_at", "missing_since",
 )
+# What a sweep compares to decide a stored row is unchanged (and so isn't rewritten).
+_COMPARED_FIELDS = tuple(name for name in _SNAPSHOT_FIELDS if name != "observed_at")
 
 
 class SweepResult(BaseModel):
@@ -212,11 +220,16 @@ def _warehouse_id(provider) -> str:
     return configured or settings.DATABRICKS_WAREHOUSE_ID
 
 
-def _rows(provider, sql: str) -> List[list]:
+def _rows(provider, sql: str, label: Optional[str] = None) -> List[list]:
     """Every row of ``sql`` (polled to completion, all result chunks). Raises on failure."""
     from app.providers.databricks.uc_metadata import _run_statement
 
-    return [list(r) for r in _run_statement(provider.client, sql, _warehouse_id(provider)) or []]
+    began = time.monotonic()
+    rows = [list(r) for r in _run_statement(provider.client, sql, _warehouse_id(provider), label=label) or []]
+    took = time.monotonic() - began
+    if label and took >= _SLOW_READ_SECONDS:
+        logger.info("Observed read: %s — %d row(s) in %d s.", label, len(rows), took)
+    return rows
 
 
 def _over_inline_limit(error: Exception) -> bool:
@@ -255,7 +268,7 @@ def _rows_in_parts(
     other failure, or a single table still over the limit, raises.
     """
     try:
-        return _rows(provider, build(None))
+        return _rows(provider, build(None), label)
     except Exception as e:  # noqa: BLE001 - re-raised unless it's the size limit
         if not _over_inline_limit(e):
             raise
@@ -270,7 +283,7 @@ def _rows_in_parts(
         part = pending.pop()
         statements += 1
         try:
-            rows.extend(_rows(provider, build(part)))
+            rows.extend(_rows(provider, build(part), f"{label} (part {statements})"))
         except Exception as e:  # noqa: BLE001 - re-raised unless it's the size limit
             halves = _halves(part, tables) if _over_inline_limit(e) else []
             if not halves:
@@ -414,7 +427,7 @@ def _read(provider, info: str, catalog: str, targets: _Targets, observed_at: dat
     # (schema, table) lowercased -> the relation's row, for attaching columns and tags.
     relations: Dict[Tuple[str, str], dict] = {}
 
-    for r in _rows(provider, sql["containers"]) if "containers" in sql else []:
+    for r in _rows(provider, sql["containers"], f"{catalog} schemas") if "containers" in sql else []:
         if len(r) < 7:
             continue
         kind, cat_name, schema, owner, comment, created, altered = r[:7]
@@ -476,7 +489,7 @@ def _read(provider, info: str, catalog: str, targets: _Targets, observed_at: dat
                 ordinal_position=_int(ordinal), comment=normalize_value(comment),
             )
 
-    tag_rows = _rows(provider, sql["tags"]) if "tags" in sql else []
+    tag_rows = _rows(provider, sql["tags"], f"{catalog} catalog and schema tags") if "tags" in sql else []
     if "relation_tags" in sql:
         tag_rows += read("relation_tags", tables)
     for r in tag_rows:
@@ -530,18 +543,47 @@ def _missing_values(at: datetime) -> dict:
     return {"present": False, "missing_since": func.coalesce(_T.c.missing_since, at)}
 
 
-def _mark_catalog_missing(db: Session, catalog: str, observed_at: datetime) -> int:
-    """Rows of a swept catalog that the sweep didn't write (older observed_at) are no longer there."""
-    result = db.execute(
-        update(_T)
-        .where(
-            _T.c.catalog == catalog,
-            _T.c.present.is_(True),
-            or_(_T.c.observed_at.is_(None), _T.c.observed_at < observed_at),
-        )
-        .values(**_missing_values(observed_at))
+def _write_catalog(db: Session, catalog: str, rows: Dict[str, dict], observed_at: datetime) -> Tuple[int, int]:
+    """Save a whole-catalog read; returns (rows written, rows newly missing).
+
+    Only new or changed rows are written. An unchanged row keeps its stored
+    ``observed_at``; reads report the catalog's last successful read instead (see
+    ``_seen_at``), since even a one-column UPDATE rewrites every row in Postgres. Rows
+    saved after this read began (a targeted refresh meanwhile) are newer than it:
+    they're neither overwritten nor marked missing.
+    """
+    keep: Set[str] = set()
+    missing: List[str] = []
+    stored = db.execute(
+        select(_T.c.fqn_key, _T.c.observed_at, *(_T.c[name] for name in _COMPARED_FIELDS))
+        .where(_T.c.catalog == catalog)
+        .execution_options(yield_per=_COMPARE_CHUNK)
     )
-    return int(result.rowcount or 0)
+    for row in stored:
+        if row.observed_at is not None and row.observed_at >= observed_at:
+            keep.add(row.fqn_key)
+            continue
+        read = rows.get(row.fqn_key)
+        if read is None:
+            if row.present:
+                missing.append(row.fqn_key)
+        elif all(getattr(row, name) == read[name] for name in _COMPARED_FIELDS):
+            keep.add(row.fqn_key)
+    changed = [row for key, row in rows.items() if key not in keep]
+    _upsert(db, changed)
+    _mark_keys_missing(db, missing, observed_at)
+    return len(changed), len(missing)
+
+
+def _note_catalog_read(db: Session, catalog: str, at: datetime) -> None:
+    """Record a catalog's successful whole read, which stands in for its unchanged rows' observed_at."""
+    _set_state(db, CATALOG_READ_KEY, {**(_get_state(db, CATALOG_READ_KEY) or {}), catalog: at.isoformat()})
+
+
+def _catalog_reads(db: Session) -> Dict[str, datetime]:
+    """Catalog -> when its last successful whole read began."""
+    found = {c: _parse_iso(at) for c, at in (_get_state(db, CATALOG_READ_KEY) or {}).items()}
+    return {c: at for c, at in found.items() if at is not None}
 
 
 def _mark_keys_missing(db: Session, fqn_keys: Iterable[str], at: datetime) -> None:
@@ -611,6 +653,7 @@ class _CatalogRead:
 
 def _read_catalog(provider, catalog: str) -> _CatalogRead:
     observed_at = _utcnow()
+    logger.info("Observed read: %s started.", catalog)
     rows = _read(provider, "system.information_schema", catalog, _Targets(), observed_at)
     if catalog not in rows:
         raise RuntimeError(
@@ -625,15 +668,19 @@ def _read_ahead(provider, catalogs: Sequence[str]) -> Iterator[Tuple[str, Option
     with ThreadPoolExecutor(max_workers=max(1, min(_READ_WORKERS, len(catalogs))), thread_name_prefix="observed") as pool:
         queue: deque = deque()
         remaining = iter(catalogs)
+        # A fresh copy per read, so its lines carry the run's log context (one context can't be entered twice).
+        def submit(name: str):
+            return pool.submit(contextvars.copy_context().run, _read_catalog, provider, name)
+
         for catalog in remaining:
-            queue.append((catalog, pool.submit(_read_catalog, provider, catalog)))
+            queue.append((catalog, submit(catalog)))
             if len(queue) >= _READ_WORKERS * 2:
                 break
         while queue:
             catalog, future = queue.popleft()
             following = next(remaining, None)
             if following is not None:
-                queue.append((following, pool.submit(_read_catalog, provider, following)))
+                queue.append((following, submit(following)))
             try:
                 yield catalog, future.result(), None
             except Exception as e:  # noqa: BLE001 - reported per catalog
@@ -666,8 +713,8 @@ def sweep(db: Session, *, provider=None, catalogs: Optional[List[str]] = None) -
                 continue
             began = time.monotonic()
             try:
-                _upsert(db, list(read.rows.values()))
-                missing = _mark_catalog_missing(db, catalog, read.observed_at)
+                written, missing = _write_catalog(db, catalog, read.rows, read.observed_at)
+                _note_catalog_read(db, catalog, read.observed_at)
                 db.commit()
             except Exception as e:  # noqa: BLE001 - reported per catalog
                 db.rollback()
@@ -678,7 +725,8 @@ def sweep(db: Session, *, provider=None, catalogs: Optional[List[str]] = None) -
                 result.objects_seen += len(read.rows)
                 result.objects_missing += missing
                 logger.info(
-                    "Observed sweep: %s — %d object(s) seen, %d newly missing.", catalog, len(read.rows), missing,
+                    "Observed sweep: %s — %d object(s) seen, %d changed, %d newly missing; saved in %d s.",
+                    catalog, len(read.rows), written, missing, time.monotonic() - began,
                 )
             write_s += time.monotonic() - began
             waited = time.monotonic()
@@ -691,6 +739,9 @@ def sweep(db: Session, *, provider=None, catalogs: Optional[List[str]] = None) -
     previous = _get_state(db, LAST_SWEEP_KEY) or {}
     # Every catalog whose latest sweep failed, including ones this sweep didn't try.
     unread = [c for c in previous.get("unread_catalogs") or [] if c not in targets] + sorted(result.failed_catalogs)
+    previous_reasons = previous.get("unread_reasons") or {}
+    unread_reasons = {c: previous_reasons[c] for c in unread if c in previous_reasons and c not in result.failed_catalogs}
+    unread_reasons.update({c: str(err) for c, err in result.failed_catalogs.items()})
     state = {
         # Only a sweep that refreshed something moves the "last sweep" time.
         "at": sweep_started_at.isoformat() if result.catalogs or not targets else previous.get("at"),
@@ -698,6 +749,7 @@ def sweep(db: Session, *, provider=None, catalogs: Optional[List[str]] = None) -
         "catalogs": result.catalogs,
         "failed_catalogs": result.failed_catalogs,
         "unread_catalogs": unread,
+        "unread_reasons": unread_reasons,
         "objects_seen": result.objects_seen,
         "objects_missing": result.objects_missing,
         "took_ms": result.took_ms,
@@ -707,8 +759,10 @@ def sweep(db: Session, *, provider=None, catalogs: Optional[List[str]] = None) -
     write_s += time.monotonic() - began
     result.write_ms = int(write_s * 1000)
     logger.info(
-        "Observed sweep finished in %d ms: %d catalog(s), %d object(s), %d newly missing, %d failed.",
-        result.took_ms, len(result.catalogs), result.objects_seen, result.objects_missing, len(result.failed_catalogs),
+        "Observed sweep finished in %d ms (%d ms waiting on Unity Catalog, %d ms saving): %d catalog(s), "
+        "%d object(s), %d newly missing, %d failed.",
+        result.took_ms, result.read_ms, result.write_ms, len(result.catalogs), result.objects_seen,
+        result.objects_missing, len(result.failed_catalogs),
     )
     return result
 
@@ -857,7 +911,11 @@ def poll_new_objects(db: Session, *, provider=None) -> List[str]:
 # --- Reads --------------------------------------------------------------------------
 
 
-def _state(row: MetadataObservedModel) -> ObservedState:
+def _state(row: MetadataObservedModel, catalog_read_at: Optional[datetime] = None) -> ObservedState:
+    """``observed_at`` is when the object was last seen: a sweep that found it unchanged doesn't rewrite the row."""
+    seen_at = row.observed_at
+    if row.present and catalog_read_at is not None and (seen_at is None or catalog_read_at > seen_at):
+        seen_at = catalog_read_at
     return ObservedState(
         fqn_key=row.fqn_key,
         key=ObjectKey(
@@ -873,7 +931,7 @@ def _state(row: MetadataObservedModel) -> ObservedState:
         present=bool(row.present),
         created=row.created,
         last_altered=row.last_altered,
-        observed_at=row.observed_at,
+        observed_at=seen_at,
         missing_since=row.missing_since,
     )
 
@@ -882,9 +940,10 @@ def get_observed(db: Session, fqn_keys: Iterable[str]) -> Dict[str, ObservedStat
     """Snapshot rows keyed by fqn_key (present or not); keys never observed are absent."""
     keys = sorted({k for k in fqn_keys if k})
     out: Dict[str, ObservedState] = {}
+    reads = _catalog_reads(db) if keys else {}
     for chunk in _chunks(keys, _KEY_CHUNK):
         for row in db.scalars(select(MetadataObservedModel).where(MetadataObservedModel.fqn_key.in_(list(chunk)))):
-            out[row.fqn_key] = _state(row)
+            out[row.fqn_key] = _state(row, reads.get(row.catalog))
     return out
 
 
@@ -897,7 +956,8 @@ def get_columns(db: Session, relation_fqn_key: str, *, include_missing: bool = F
     if not include_missing:
         query = query.where(MetadataObservedModel.present.is_(True))
     query = query.order_by(MetadataObservedModel.ordinal_position.asc().nulls_last(), MetadataObservedModel.fqn_key)
-    return [_state(row) for row in db.scalars(query)]
+    reads = _catalog_reads(db)
+    return [_state(row, reads.get(row.catalog)) for row in db.scalars(query)]
 
 
 def governed_tags(db: Session) -> Dict[str, List[str]]:
@@ -914,3 +974,29 @@ def last_sweep_at(db: Session) -> Optional[datetime]:
 def unread_catalogs(db: Session) -> List[str]:
     """Managed catalogs whose latest sweep couldn't read them, so their snapshot may be incomplete."""
     return [c for c in (_get_state(db, LAST_SWEEP_KEY) or {}).get("unread_catalogs") or [] if scope.manages(c)]
+
+
+def explain_read_error(error: Optional[str]) -> str:
+    """A short reason for the browse banner; the raw warehouse text is kept in Sync history."""
+    text = str(error or "").strip()
+    lower = text.lower()
+    if "browse" in lower:
+        return "The app doesn’t have permission to see this catalog (it needs BROWSE)."
+    if "inline byte limit" in lower:
+        return "This catalog is too large to read from the warehouse in one go."
+    if any(word in lower for word in (
+        "timeout", "timed out", "canceled", "cancelled", "temporarily_unavailable", "still running", "still pending",
+    )):
+        return "The warehouse ran out of time reading this catalog. A large catalog can take several minutes; the next scheduled check will try again."
+    if "snapshot write failed" in lower:
+        return "The catalog was read from Unity Catalog but couldn’t be saved here."
+    if not text:
+        return "The last check couldn’t read this catalog."
+    return text[:240]
+
+
+def unread_reasons(db: Session) -> Dict[str, str]:
+    """Managed unread catalogs -> a short reason the browse page can show."""
+    state = _get_state(db, LAST_SWEEP_KEY) or {}
+    stored = state.get("unread_reasons") or {}
+    return {c: explain_read_error(stored.get(c)) for c in unread_catalogs(db)}

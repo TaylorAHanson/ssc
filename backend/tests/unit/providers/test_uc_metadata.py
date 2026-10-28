@@ -240,6 +240,20 @@ def test_rows_spread_across_result_chunks_are_all_read(no_sleep):
     assert meta.tags == {"dataset": "sales-order", "reliability_window": "7-days"}
 
 
+def test_a_labelled_slow_statement_logs_that_it_is_still_running(no_sleep, monkeypatch, caplog):
+    from app.providers.databricks.uc_metadata import _run_statement
+
+    monkeypatch.setattr("app.providers.databricks.uc_metadata._PROGRESS_EVERY_SECONDS", 0)
+    client = SimpleNamespace(statement_execution=SlowStatementExecution(FULL_ROWS, polls_needed=2))
+
+    with caplog.at_level("INFO", logger="app.providers.databricks.uc_metadata"):
+        _run_statement(client, "SELECT 1 FROM system.information_schema.tables ", WAREHOUSE, label="main relations")
+        _run_statement(client, "SELECT 1 FROM system.information_schema.tables ", WAREHOUSE)
+
+    progress = [r.getMessage() for r in caplog.records if "still RUNNING" in r.getMessage()]
+    assert progress and all(m.startswith("main relations: statement stmt-1 still RUNNING") for m in progress)
+
+
 def test_statement_that_never_finishes_fails_the_catalog(no_sleep, monkeypatch):
     monkeypatch.setattr("app.providers.databricks.uc_metadata._POLL_BUDGET_SECONDS", 0)
     client = SimpleNamespace(statement_execution=SlowStatementExecution(FULL_ROWS, polls_needed=None))

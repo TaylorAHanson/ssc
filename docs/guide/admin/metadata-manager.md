@@ -37,9 +37,11 @@ path at the top (*All catalogs › sales_dev › bronze*) takes you back up. Eve
 level has its own address, so you can share a link to a catalog, a schema or a
 table.
 
-If the last full check couldn't read a catalog, its page says so: new and
-changed tables still appear, but older ones may be missing until a check reads
-the catalog again. Admins can see why under **Sync & admin → Sync history**.
+If the last full check couldn't read a catalog, its page says so and gives a
+short reason (for example the warehouse ran out of time on a large catalog).
+What's already listed is the last successful read, not a wipe; new and changed
+tables still appear. Admins can open the failed check under **Sync & admin →
+Sync history**. Don't turn syncing on until a check of that catalog completes.
 
 The search box searches wherever you are: everything from the catalog list, or
 just one catalog or schema once you've clicked into it. **Filters** narrows the
@@ -58,8 +60,9 @@ that value), `pii=*` (has the tag at all) or `!data_owner` (lacks it, the
 quickest way to find certification gaps).
 
 A list row shows a status only when something needs your attention, for
-example *Unsaved changes*, *Waiting to sync*, *Out of sync* or *Couldn't update
-Unity Catalog*.
+example *Unsaved changes*, *Waiting to sync* (or *Saved here only* while
+syncing is set to report only), *Out of sync* or *Couldn't update Unity
+Catalog*.
 
 ## Making a change
 
@@ -155,7 +158,16 @@ confused with **Admin** in the sidebar, which opens the platform dashboard) with
   it;
 - **Sync history**: what each check did or, when syncing is set to report
   only, would do, and any failures. **Preview a sync** and **Check and sync
-  now** start one;
+  now** start a check that runs in the background; on a large catalog it takes
+  a few minutes and the list updates when it finishes. You can leave the page.
+  Each row counts only what that check looked at: a *full check* reads whole
+  catalogs, while *only these objects* re-checks what was edited here or changed
+  in Unity Catalog, so its 0 out of sync says nothing about anything else. What's
+  out of sync right now is under **Out of sync with Unity Catalog**.
+  A row marked *Couldn't read* didn't check that catalog at all (its details
+  say why) and changed nothing in it. To see whether a long *Running* check is
+  still working, search the app's logs for the id shown at the top of its
+  details: a slow read logs a line every minute.
 - **Automation access**: the pipelines and systems that may change tags through
   the API or MCP, and their scope. See [Metadata API and MCP](metadata-api.md);
 - **Bring in many tables at once**: **Start managing catalogs** and **Import
@@ -170,10 +182,14 @@ existing catalogs under management before turning syncing on:
 
 1. **Start managing catalogs** saves what Unity Catalog holds now for a catalog
    or schema, so those tags are kept. **Import from a file** loads tags from a
-   CSV or JSON file instead.
+   CSV or JSON file instead. It copies the last successful check, so it waits
+   if the latest check couldn't read the catalog: saving an out-of-date copy
+   would let syncing remove tags added since.
 2. Leave **Reconcile mode** on **Plan** (shown on the page as *Report only*)
-   and choose **Preview a sync** under **Sync history**. It lists what syncing
-   would set and remove, without changing anything. Check the removals.
+   and choose **Preview a sync** under **Sync history**. A row appears
+   immediately as *Running*; when it finishes, it lists what syncing would set
+   and remove, without changing anything. Check the removals. Hourly scheduled
+   checks are the same preview — you don't have to start one by hand.
 3. Switch the mode to **Enforce** (shown as *Keeping Unity Catalog in sync*).
    The next full check, or **Check and sync now**, applies everything saved in
    the meantime.

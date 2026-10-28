@@ -48,11 +48,22 @@ export function RunDrawer({ id, onClose }: { id: string; onClose: () => void }) 
               {run.statements_planned} planned, {run.statements_applied} applied, {run.statements_failed} failed; {run.removals_planned} tag removals
             </dd>
           </dl>
+          {run.status === 'running' && (
+            <Notice title="Still running">
+              Every line this sync writes to the app’s logs includes its id, <span className="font-mono">{run.run_id}</span>. A slow
+              read from Unity Catalog logs a line each minute, so lines that keep appearing mean it’s still working.
+            </Notice>
+          )}
           {run.paused_reason && <Notice kind="error" title="Paused by the safety limit">{run.paused_reason}</Notice>}
           {run.error && <Notice kind="error" title="The run failed">{run.error}</Notice>}
           {run.skipped_catalogs.length > 0 && (
-            <Notice kind="warn" title="Some catalogs were skipped">
-              {run.skipped_catalogs.join(', ')}. Usually the service principal can’t read or tag them.
+            <Notice kind="warn" title={run.unread_catalogs?.length ? 'Some catalogs couldn’t be read' : 'Some catalogs were skipped'}>
+              {run.skipped_catalogs.map((c) => (
+                <p key={c} className="mt-1 first:mt-0">
+                  <span className="font-mono">{c}</span>
+                  {run.skipped_reasons?.[c] ? ` — ${run.skipped_reasons[c]}` : '. The app couldn’t read or tag it.'}
+                </p>
+              ))}
             </Notice>
           )}
           <section>

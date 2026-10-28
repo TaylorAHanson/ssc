@@ -188,6 +188,7 @@ def _config(db: Session, user: User) -> MetadataConfig:
         new_object_policy="ignore" if settings.METADATA_NEW_OBJECT_POLICY == "ignore" else "adopt",
         last_sweep_at=observed.last_sweep_at(db),
         unread_catalogs=observed.unread_catalogs(db) if browse.full else [],
+        unread_reasons=observed.unread_reasons(db) if browse.full else {},
         circuit_breaker_tripped=reconciler.circuit_breaker_tripped(db),
         managed_catalogs=scope.patterns(),
         enforce_blocked_reason=scope.enforce_blocked_reason(),
@@ -545,8 +546,10 @@ async def start_run(
                     return drained
                 return ReconcileResult(run_id="", trigger="queue", mode=reconciler.current_mode(), status="skipped",
                                        actor=actor.id, paused_reason="The queue is empty.")
-            return reconciler.run(
-                db, trigger="manual", catalogs=body.catalogs or None, mode="plan" if body.kind == "plan" else None,
+            # Sweeps of a large catalog take minutes. Detach so the request can
+            # return a still-running row instead of sitting until the proxy times out.
+            return reconciler.run_detached(
+                trigger="manual", catalogs=body.catalogs or None, mode="plan" if body.kind == "plan" else None,
                 actor=actor.id, override_circuit_breaker=body.override_circuit_breaker,
             )
 

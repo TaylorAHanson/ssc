@@ -840,6 +840,19 @@ def test_adopting_outside_the_managed_catalogs_is_refused(db, fakes, monkeypatch
     assert change_set_count(db) == 0
 
 
+def test_adopting_a_catalog_the_last_check_couldnt_read_is_refused(db, fakes, monkeypatch):
+    fakes.observe(DEV, tags={"tier": "gold"})
+    monkeypatch.setattr(observed, "unread_catalogs", lambda db_: ["sales_dev"])
+
+    for request in (AdoptRequest(catalogs=["Sales_Dev"]), AdoptRequest(names=[DEV])):
+        with pytest.raises(errors.MetadataError, match="couldn't read sales_dev"):
+            changes.adopt(db, request, ADMIN)
+    assert change_set_count(db) == 0
+
+    monkeypatch.setattr(observed, "unread_catalogs", lambda db_: [])
+    assert changes.adopt(db, AdoptRequest(catalogs=["sales_dev"]), ADMIN).status == "committed"
+
+
 def test_large_adopts_commit_in_batches(db, fakes, monkeypatch):
     monkeypatch.setattr(changes, "ADOPT_BATCH_SIZE", 2)
     for name in ("Sales_Dev.S.A", "Sales_Dev.S.B", "Sales_Dev.S.C"):

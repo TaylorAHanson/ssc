@@ -19,23 +19,26 @@ so Admin -> Settings edits apply on the next cycle.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import html
 import logging
 import os
 import socket
+import threading
 import time
 import uuid
 from collections import defaultdict
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
+from typing import Callable, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
 
 from croniter import CroniterBadCronError, croniter
 from sqlalchemy import and_, bindparam, delete, func, insert, select, text, update
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.logging_formatter import job_log_context
 from app.db.metadata import (
     OBJECT_ACTIVE,
     MetadataObjectModel,
@@ -77,6 +80,10 @@ _last_poll_at: Optional[float] = None
 # The breaker trip and the pass error already logged, so the poller doesn't repeat them every cycle.
 _breaker_noted: Optional[str] = None
 _pass_error_noted: Optional[str] = None
+# Manual runs the API detaches so the HTTP request can return while the sweep continues.
+_live_runs: Set[threading.Thread] = set()
+# How long POST /runs waits for a sweep to finish before returning the still-running row.
+_ACCEPT_SECONDS = 2.0
 
 MODES = ("off", "plan", "enforce")
 CIRCUIT_BREAKER_KEY = "reconciler.circuit_breaker"
@@ -341,6 +348,9 @@ def _outcomes_from_rows(db: Session, rows: Sequence[MetadataReconcileItemModel])
 
 
 def _result(run: MetadataReconcileRunModel, items: Optional[List[PlanOutcome]] = None) -> ReconcileResult:
+    skipped = (run.summary or {}).get("skipped")
+    unread = (run.summary or {}).get("unread")
+    scope_ = (run.summary or {}).get("scope")
     return ReconcileResult(
         run_id=run.id,
         trigger=run.trigger,
@@ -354,6 +364,9 @@ def _result(run: MetadataReconcileRunModel, items: Optional[List[PlanOutcome]] =
         statements_failed=run.statements_failed or 0,
         removals_planned=run.removals_planned or 0,
         skipped_catalogs=list(run.skipped_catalogs or []),
+        skipped_reasons=dict(skipped) if isinstance(skipped, dict) else {},
+        unread_catalogs=[str(c) for c in unread] if isinstance(unread, list) else [],
+        full_check=isinstance(scope_, dict) and "objects" not in scope_,
         paused_reason=run.paused_reason,
         error=run.error,
         items=items or [],
@@ -583,7 +596,9 @@ def _single_flight(db: Session) -> Iterator[None]:
         got = conn.execute(text("SELECT pg_try_advisory_lock(:key)"), {"key": _ADVISORY_LOCK_KEY}).scalar()
         conn.commit()
         if not got:
-            raise ReconcileBusy("Another reconcile run is in progress.")
+            raise ReconcileBusy(
+                "A check of Unity Catalog is already running. Wait for it to finish — it appears under Sync history."
+            )
         try:
             yield
         finally:
@@ -750,6 +765,83 @@ def run(
     ).result
 
 
+def latest_running(db: Session, *, actor: Optional[str] = None) -> Optional[ReconcileResult]:
+    """The newest still-running run, optionally for ``actor``. Closes abandoned rows first."""
+    _close_abandoned_runs(db)
+    query = db.query(MetadataReconcileRunModel).filter(MetadataReconcileRunModel.status == "running")
+    if actor:
+        query = query.filter(MetadataReconcileRunModel.actor == actor)
+    row = query.order_by(MetadataReconcileRunModel.started_at.desc()).first()
+    return _result(row) if row is not None else None
+
+
+def run_detached(
+    *,
+    trigger: RunTrigger,
+    fqn_keys: Optional[List[str]] = None,
+    catalogs: Optional[List[str]] = None,
+    mode: Optional[ReconcileMode] = None,
+    actor: Optional[str] = None,
+    override_circuit_breaker: bool = False,
+    wait_seconds: float = _ACCEPT_SECONDS,
+    session_factory: Optional[Callable[[], Session]] = None,
+) -> ReconcileResult:
+    """Start ``run`` on its own session and thread.
+
+    If it finishes within ``wait_seconds``, return that result (empty catalogs, a
+    lock conflict, a skipped mode). Otherwise return the still-running row so an
+    HTTP caller can hang up; the thread keeps sweeping. A warehouse-sized catalog
+    takes minutes and would otherwise time out the request and leave the UI stuck
+    on Previewing.
+    """
+    from app.db.session import get_lakebase_session
+
+    factory = session_factory or get_lakebase_session
+    box: Dict[str, object] = {}
+
+    def work() -> None:
+        db = factory()
+        try:
+            box["result"] = run(
+                db, trigger=trigger, fqn_keys=fqn_keys, catalogs=catalogs, mode=mode, actor=actor,
+                override_circuit_breaker=override_circuit_breaker,
+            )
+        except Exception as exc:  # noqa: BLE001 - surfaced to the waiter or logged
+            box["error"] = exc
+            if not isinstance(exc, ReconcileBusy):
+                logger.error("Metadata detached reconcile failed: %s", exc, exc_info=True)
+        finally:
+            db.close()
+            _live_runs.discard(threading.current_thread())
+
+    thread = threading.Thread(
+        target=contextvars.copy_context().run, args=(work,), name="metadata-reconcile-run", daemon=True,
+    )
+    _live_runs.add(thread)
+    thread.start()
+    deadline = time.monotonic() + max(0.05, wait_seconds)
+    while time.monotonic() < deadline:
+        if "result" in box:
+            return box["result"]  # type: ignore[return-value]
+        err = box.get("error")
+        if err is not None:
+            raise err
+        time.sleep(0.05)
+        probe = factory()
+        try:
+            found = latest_running(probe, actor=actor)
+            if found is not None:
+                return found
+        finally:
+            probe.close()
+    if "result" in box:
+        return box["result"]  # type: ignore[return-value]
+    err = box.get("error")
+    if err is not None:
+        raise err
+    raise errors.MetadataError("The check didn’t start in time. Try again in a moment.")
+
+
 def _run(
     db: Session,
     *,
@@ -785,22 +877,27 @@ def _run(
         else:
             run_scope = {"catalogs": sorted({c.strip().lower() for c in catalogs or [] if c and c.strip()}) or "scope"}
         run_id = start_run(db, trigger=trigger, mode=mode, actor=actor, summary={"scope": run_scope})
-        ctx = _Context(
-            run_id=run_id, trigger=trigger, mode=mode, actor=actor, provider=provider, override=override,
-            now=_utcnow(), exempt=policy.exempt_keys(),
-        )
-        started = _monotonic()
-        try:
-            return _reconcile(db, ctx, fqn_keys=fqn_keys, catalogs=catalogs, adopt=adopt, started=started)
-        except Exception as e:  # noqa: BLE001
-            db.rollback()
-            logger.error("Metadata reconcile %s run %s failed: %s", trigger, run_id, e, exc_info=True)
-            ctx.timings["total_ms"] = _ms(started)
-            result = finish_run(
-                db, run_id, status="failed", error=_clip(f"The run stopped: {e}"), skipped_catalogs=list(ctx.skipped),
-                summary={"timings_ms": dict(ctx.timings)},
+        # Every line the run logs, down to each warehouse read, carries req_id "metadata_reconcile:<run id>".
+        with job_log_context("metadata_reconcile", run_id):
+            logger.info(
+                "Metadata reconcile %s run %s (%s) started by %s: %s.", trigger, run_id, mode, actor or "the app", run_scope,
             )
-            return _RunReport(result, error=True)
+            ctx = _Context(
+                run_id=run_id, trigger=trigger, mode=mode, actor=actor, provider=provider, override=override,
+                now=_utcnow(), exempt=policy.exempt_keys(),
+            )
+            started = _monotonic()
+            try:
+                return _reconcile(db, ctx, fqn_keys=fqn_keys, catalogs=catalogs, adopt=adopt, started=started)
+            except Exception as e:  # noqa: BLE001
+                db.rollback()
+                logger.error("Metadata reconcile %s run %s failed: %s", trigger, run_id, e, exc_info=True)
+                ctx.timings["total_ms"] = _ms(started)
+                result = finish_run(
+                    db, run_id, status="failed", error=_clip(f"The run stopped: {e}"), skipped_catalogs=list(ctx.skipped),
+                    summary={"skipped": dict(ctx.skipped), "unread": sorted(ctx.blocked), "timings_ms": dict(ctx.timings)},
+                )
+                return _RunReport(result, error=True)
 
 
 def _reconcile(
@@ -852,7 +949,10 @@ def _reconcile(
         objects_drifted=sum(1 for w in works if w.items),
         skipped_catalogs=list(ctx.skipped),
         paused_reason=paused_reason,
-        summary={"counts": dict(ctx.counts), "skipped": dict(ctx.skipped), "timings_ms": dict(ctx.timings)},
+        summary={
+            "counts": dict(ctx.counts), "skipped": dict(ctx.skipped), "unread": sorted(ctx.blocked),
+            "timings_ms": dict(ctx.timings),
+        },
     )
     _log_run(result, ctx)
     if paused_reason:
@@ -1188,6 +1288,14 @@ def _backoff_seconds(attempts: int) -> int:
     return min(_BACKOFF_CAP_SECONDS, _BACKOFF_BASE_SECONDS * 2 ** min(max(attempts, 1) - 1, 16))
 
 
+def _queue_trigger(reasons: Iterable[str]) -> RunTrigger:
+    """What Sync history says started a queue run: an edit here, a change found in UC, or a notify call."""
+    found = set(reasons)
+    if not found or "change" in found or not found <= {"new_object", "notify"}:
+        return "queue"
+    return "notify" if found == {"notify"} else "new_object"
+
+
 def drain_queue(db: Session, *, provider=None, limit: int = _BATCH_SIZE) -> Optional[ReconcileResult]:
     """Run the oldest due queue rows (up to ``limit``) as one ``queue`` run; None when nothing is due.
 
@@ -1208,7 +1316,8 @@ def drain_queue(db: Session, *, provider=None, limit: int = _BATCH_SIZE) -> Opti
         db.commit()
         return None
     report = _run(
-        db, trigger="queue", fqn_keys=[r.fqn_key for r in rows], catalogs=None, mode=None, actor=None,
+        db, trigger=_queue_trigger(r.reason for r in rows), fqn_keys=[r.fqn_key for r in rows], catalogs=None,
+        mode=None, actor=None,
         provider=provider, override=False, adopt={r.fqn_key for r in rows if r.reason in _ADOPT_REASONS},
     )
     done, retrying, exhausted = _settle(db, rows, report)

@@ -366,6 +366,11 @@ export interface ReconcileResult {
   statements_failed: number;
   removals_planned: number;
   skipped_catalogs: string[];
+  skipped_reasons?: Record<string, string>;
+  /** Catalogs this run couldn't read from Unity Catalog, so none of their objects were checked. */
+  unread_catalogs?: string[];
+  /** Whole catalogs; otherwise only named objects, so its counts say nothing about the rest. */
+  full_check?: boolean;
   paused_reason?: string | null;
   error?: string | null;
   items: PlanOutcome[];
@@ -543,6 +548,8 @@ export interface MetadataConfig {
   last_sweep_at?: string | null;
   /** Catalogs the latest full check couldn't read; their lists may be incomplete. */
   unread_catalogs?: string[];
+  /** Same catalogs with a short reason the browse page can show. */
+  unread_reasons?: Record<string, string>;
   circuit_breaker_tripped: boolean;
   /** Catalog names or patterns this deployment manages; empty = every catalog, but plan only. */
   managed_catalogs: string[];

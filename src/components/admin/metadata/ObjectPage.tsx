@@ -93,7 +93,10 @@ function ObjectBody({ detail, table, focusColumn, reload }: { detail: ObjectDeta
       )}
       {outOfSync > 0 && (
         <Notice kind="warn" title="Out of sync with Unity Catalog">
-          Unity Catalog has {plural(outOfSync, 'different value')} for this table. Someone may have changed it there directly, or a save hasn’t reached it yet.
+          Unity Catalog has {plural(outOfSync, 'different value')} for this table.
+          {config.reconcile_mode === 'enforce'
+            ? ' Someone may have changed it there directly, or a save hasn’t reached it yet.'
+            : ' Syncing is set to report only, so this won’t be written to Unity Catalog until an admin turns it on under Admin → Settings.'}
           <details className="mt-2 [&_summary]:cursor-pointer">
             <summary className="font-medium underline">Compare</summary>
             <div className="mt-2 space-y-4 rounded-md bg-white p-3 text-gray-900">
