@@ -104,6 +104,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "genie_full_experience_url": "",
     },
 
+    "logging": {
+        # The browser reports page views and its own errors to the server log, tagged
+        # with the user and their app roles. Nothing goes to an outside service.
+        "client_events": True,
+    },
+
     # Who to contact for day-to-day help. Blank by default; a Platform Admin sets it
     # under Admin -> Settings -> Links & Embedded Apps. Shown in Discover (Team &
     # Support) and given to the assistant so it can answer "who do I contact?".

@@ -13,6 +13,17 @@ Format rules (the app parses this file, so keep to them):
   before), and what the reader will notice or should do now.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
 
+## 2.7.0 — 2026-10-28
+
+### Added
+
+- **The app log now follows a person through a session.** Before, the log showed which API calls were made but not which screens someone was on, nothing that broke in their browser, and not their app roles, so watching a user-testing session or chasing a bug report meant guessing. Now each page someone opens and each error their browser hits is written to the app's own log, every line carries their email and app roles (including a role simulated with Dev persona mode), each chat turn gets one line saying which tools it used, how long it took and whether it ended in an error, and every request records how long it took. Nothing is sent outside the app, and no page content, chat text or query results are logged. To stop the browser reporting page views and errors, turn off **Log page views and browser errors** under **Admin → Settings → Infrastructure → Logging**.
+- **Bug reports now name the server's log lines for each failed call.** Every response carries a request ID, and a bug report with diagnostics attached keeps it next to each failed network call. Admins see it on the report under **Admin → Feedback** and can search the log for it, instead of matching reports to log lines by time.
+
+### Changed
+
+- **OmniGuard scans log a summary instead of every check.** A scan wrote one line for every policy check and every violation, tens of thousands of lines a run, which buried everything else in the log. It now writes one line per workspace with the number of checks and violations by policy, and one line for the whole run. Every check and violation is still recorded on the run itself, so nothing is lost from the OmniGuard pages.
+
 ## 2.6.4 — 2026-10-28
 
 ### Fixed

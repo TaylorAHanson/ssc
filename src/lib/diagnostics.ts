@@ -21,6 +21,8 @@ export interface NetworkEntry {
   url: string;
   status: number;
   status_text: string;
+  /** The server's X-Request-ID, which names the matching lines in the server log. */
+  request_id?: string;
   ts: string;
 }
 
@@ -128,6 +130,7 @@ export function initDiagnostics(): void {
               url,
               status: response.status,
               status_text: response.statusText,
+              request_id: response.headers.get('x-request-id') || undefined,
               ts: new Date().toISOString(),
             },
             MAX_NETWORK,

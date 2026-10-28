@@ -1,8 +1,10 @@
 import logging
 import json
+import uuid
+from contextlib import contextmanager
 from datetime import datetime
 from contextvars import ContextVar
-from typing import Optional
+from typing import Any, Dict, Iterator, List, Optional
 from app.core.config import settings
 
 # Context variables to hold request-scoped information
@@ -13,6 +15,37 @@ current_method: ContextVar[Optional[str]] = ContextVar("current_method", default
 current_client_ip: ContextVar[Optional[str]] = ContextVar("current_client_ip", default=None)
 current_user_agent: ContextVar[Optional[str]] = ContextVar("current_user_agent", default=None)
 current_correlation_id: ContextVar[Optional[str]] = ContextVar("current_correlation_id", default=None)
+# A dict the middleware creates per request and later steps fill in (the caller's app
+# roles). It is mutated rather than re-set: sync dependencies run in a worker thread on
+# a copy of the context, so a value set there never reaches the middleware, but a change
+# to this shared dict does.
+current_request_info: ContextVar[Optional[Dict[str, Any]]] = ContextVar("current_request_info", default=None)
+
+
+def note_request_identity(roles: List[str], role_override: Optional[str] = None) -> None:
+    """Record the caller's app roles so every later line of this request carries them."""
+    info = current_request_info.get()
+    if info is None:
+        return
+    info["roles"] = sorted(roles or [])
+    if role_override:
+        info["role_override"] = role_override
+
+
+@contextmanager
+def job_log_context(name: str, run_id: Optional[str] = None) -> Iterator[str]:
+    """Tag the lines a background job logs with its name and a run id, as a request is."""
+    run = run_id or uuid.uuid4().hex[:8]
+    tokens = (
+        (current_request_id, current_request_id.set(f"{name}:{run}")),
+        (current_endpoint, current_endpoint.set(f"job:{name}")),
+        (current_method, current_method.set("JOB")),
+    )
+    try:
+        yield run
+    finally:
+        for var, token in reversed(tokens):
+            var.reset(token)
 
 class AppLoggingFormatter(logging.Formatter):
     """
@@ -55,6 +88,16 @@ class AppLoggingFormatter(logging.Formatter):
             "method": method if method else "SYS",
             "path": endpoint if endpoint else "Background"
         }
+        info = current_request_info.get()
+        if info and "roles" in info:
+            log_record["roles"] = info["roles"]
+            if info.get("role_override"):
+                log_record["role_override"] = info["role_override"]
+        # Structured fields passed as ``extra={"data": {...}}``, so they can be filtered on
+        # instead of parsed out of the message.
+        data = getattr(record, "data", None)
+        if isinstance(data, dict):
+            log_record["data"] = data
 
         # Add exception info if any
         if record.exc_info:
@@ -67,7 +110,7 @@ class AppLoggingFormatter(logging.Formatter):
         if record.stack_info:
             log_record["stack_info"] = self.formatStack(record.stack_info)
 
-        return json.dumps(log_record)
+        return json.dumps(log_record, default=str)
 
 def setup_logging(log_level_str="INFO"):
     """
@@ -96,5 +139,7 @@ def setup_logging(log_level_str="INFO"):
 
     # httpx logs every request at INFO, and each policy evaluation is a request
     # to the local OPA server, so at INFO they bury the app's own log lines.
-    for noisy in ("httpx", "httpcore"):
+    # uvicorn.access duplicates the auth middleware's HTTP line, which also has the
+    # duration and the caller's roles.
+    for noisy in ("httpx", "httpcore", "uvicorn.access"):
         logging.getLogger(noisy).setLevel(max(log_level, logging.WARNING))

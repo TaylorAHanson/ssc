@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { recordPageView } from './lib/clientEvents';
 import { Layout } from './components/layout/Layout';
 import { Home } from './pages/Home';
 import { DataDiscovery } from './pages/DataDiscovery';
@@ -34,6 +35,15 @@ import { AccessRules } from './pages/admin/AccessRules';
 import { MetadataManager } from './pages/admin/metadata/MetadataManager';
 
 const Guide = lazy(() => import('./pages/Guide').then((m) => ({ default: m.Guide })));
+
+/** Reports each screen change; routing happens in the browser, so the server can't see it. */
+function PageViewLogger() {
+  const { pathname } = useLocation();
+  useEffect(() => {
+    recordPageView(pathname);
+  }, [pathname]);
+  return null;
+}
 
 function App() {
   const fetchBannerMessage = useRequestStore((state) => state.fetchBannerMessage);
@@ -78,6 +88,7 @@ function App() {
 
   return (
     <BrowserRouter>
+      <PageViewLogger />
       <Layout>
         <Routes>
           {/* Landing is always the unified chat. */}

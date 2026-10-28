@@ -45,6 +45,8 @@ interface BrandingState {
     workflowAuthoringLocked: boolean;
     /** True only in local/dev-flavored envs; gates the "Dev Persona Mode" toggle. */
     devFeaturesEnabled: boolean;
+    /** Whether page views and browser errors are reported to the server log. */
+    clientEventsEnabled: boolean;
     isLoading: boolean;
     hasLoaded: boolean;
     error: string | null;
@@ -73,6 +75,7 @@ export const useBrandingStore = create<BrandingState>((set) => ({
     communityLinks: {},
     workflowAuthoringLocked: false,
     devFeaturesEnabled: false,
+    clientEventsEnabled: false,
     isLoading: false,
     hasLoaded: false,
     error: null,
@@ -121,6 +124,7 @@ export const useBrandingStore = create<BrandingState>((set) => ({
                 communityLinks: branding.community_links || {},
                 workflowAuthoringLocked: branding.workflow_authoring_locked ?? false,
                 devFeaturesEnabled: branding.dev_features_enabled ?? false,
+                clientEventsEnabled: branding.client_events_enabled ?? false,
                 isLoading: false,
                 hasLoaded: true,
             });

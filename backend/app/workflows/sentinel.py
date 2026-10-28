@@ -1117,7 +1117,9 @@ async def _scan_and_evaluate(
             is_violation = result.get("is_violation")
             action = result.get("action", "KILL")
 
-            logger.info(
+            # One line per check is tens of thousands per run; the per-workspace summary
+            # below carries the counts and sentinel_findings keeps every check.
+            logger.debug(
                 "POLICY_CHECK_EVALUATED: Workspace=%s | Policy=%s | Result=%s | Action=%s | "
                 "ResourceType=%s | ResourceID=%s | Severity=%s",
                 ws_name,
@@ -1183,7 +1185,7 @@ async def _scan_and_evaluate(
                 }
                 violations.append(violation_record)
                 if is_violation:
-                    logger.warning(
+                    logger.debug(
                         "POLICY_VIOLATION_DETECTED: Workspace=%s | Policy=%s | Action=%s | "
                         "ResourceType=%s | ResourceID=%s | Reason=%s | Severity=%s",
                         ws_name,
@@ -1194,6 +1196,8 @@ async def _scan_and_evaluate(
                         violation_record["reason"],
                         violation_record["severity"],
                     )
+
+    _log_workspace_evaluation(ws_name, checks)
 
     # Certification cache writes happen HERE, on ONE fresh short-lived session.
     # A connection opened before discovery would have been idle through the whole
@@ -1217,6 +1221,22 @@ async def _scan_and_evaluate(
             cert_db.close()
 
     return violations, checks, len(discovered_resources), ws_failure
+
+
+def _log_workspace_evaluation(ws_name: str, checks: List[Dict[str, Any]]) -> None:
+    """One line per workspace: how many checks ran and which policies were violated."""
+    by_policy: Dict[str, int] = {}
+    for check in checks:
+        if check.get("result") == "VIOLATION":
+            by_policy[check.get("policy") or "?"] = by_policy.get(check.get("policy") or "?", 0) + 1
+    violation_count = sum(by_policy.values())
+    detail = ", ".join(f"{p}={n}" for p, n in sorted(by_policy.items(), key=lambda kv: -kv[1]))
+    logger.log(
+        logging.WARNING if violation_count else logging.INFO,
+        "Sentinel: workspace '%s' evaluated %d check(s): %d passed, %d violation(s)%s",
+        ws_name, len(checks), len(checks) - violation_count, violation_count,
+        f" [{detail}]" if detail else "",
+    )
 
 
 async def _scan_and_evaluate_guarded(**kwargs) -> tuple:
@@ -1637,6 +1657,7 @@ async def run_discovery(request) -> Dict[str, Any]:
         summary += f" {len(scan_errors)} workspace(s) could not be fully scanned."
     if partial_fail and not full_fail:
         summary += f" {len(partial_fail)} workspace(s) returned partial results."
+    logger.info("Sentinel: run %s finished. %s", request_id, summary)
 
     # Persistence split: high-level counts/summary go in state_context (small, so
     # the run list stays fast); the full per-record detail (ALL violations + ALL

@@ -371,9 +371,8 @@ async def _build_runner_and_history(
         k: (f"<{len(v)} keys>" if isinstance(v, dict) else v)
         for k, v in _ctx.items()
     }
-    logger.info(f"Incoming agent request context: {_loggable_ctx}")
-    logger.info(f"Current User: {current_user.email}")
-    logger.info(f"Current User Roles: {current_user.roles}")
+    # User and roles are on every line of the request; the turn summary follows at the end.
+    logger.info("Incoming agent request context: %s", _loggable_ctx)
 
     # Two chat surfaces, gated dynamically by the Tool Registry. The unified
     # self-service ("EDH") chat and the workflow-authoring studio each expose a
@@ -442,6 +441,7 @@ async def _build_runner_and_history(
         mode=agent_mode,
         user_context_block=user_context_block,
         surface_context_block=surface_context_block,
+        session_id=request.session_id,
     )
 
     history = _resolve_history(request, current_user, db)

@@ -13,7 +13,7 @@ import socket
 import time
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
-from typing import Optional
+from typing import Any, Optional
 from sqlalchemy import or_, and_
 from sqlalchemy.orm import Session
 from app.db.session import get_lakebase_session, get_engine, reset_database_connection
@@ -48,9 +48,20 @@ _next_sentinel_time = None
 _background_tasks: set = set()
 
 
-def _spawn_background(coro) -> asyncio.Task:
-    """Start a detached upkeep task, holding a strong reference until it ends."""
-    task = asyncio.create_task(coro)
+async def _in_job_context(name: str, coro) -> Any:
+    from app.core.logging_formatter import job_log_context
+
+    with job_log_context(name):
+        return await coro
+
+
+def _spawn_background(coro, name: str = "background") -> asyncio.Task:
+    """Start a detached upkeep task, holding a strong reference until it ends.
+
+    ``name`` tags every line the task logs (``path: job:<name>`` plus a run id), so
+    one run's lines can be picked out of the rest.
+    """
+    task = asyncio.create_task(_in_job_context(name, coro), name=f"job-{name}")
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
     return task
@@ -288,7 +299,7 @@ async def start_poller():
             
             # Start sync tasks in background so they don't block request processing
             if _yaml_config.get("features", {}).get("calendar", False):
-                _spawn_background(sync_calendar_task())
+                _spawn_background(sync_calendar_task(), "calendar_sync")
                 
             if _yaml_config.get("features", {}).get("data_discovery", False):
                 async def safe_sync_data_assets():
@@ -300,7 +311,7 @@ async def start_poller():
                         except Exception as e:
                             logger.error(f"Error in background data asset sync: {e}", exc_info=True)
                 
-                _spawn_background(safe_sync_data_assets())
+                _spawn_background(safe_sync_data_assets(), "data_asset_sync")
 
                 # Scheduled ODCS contract sync (cron-gated inside the task;
                 # no-op unless CONTRACT_SYNC_CRON is set). Shares the
@@ -315,7 +326,7 @@ async def start_poller():
                         except Exception as e:
                             logger.error(f"Error in background contract sync: {e}", exc_info=True)
 
-                _spawn_background(safe_sync_contracts())
+                _spawn_background(safe_sync_contracts(), "contract_sync")
 
             if _yaml_config.get("features", {}).get("sentinel", False):
                 await process_enforcement_sentinel_cron()
@@ -332,7 +343,7 @@ async def start_poller():
                         except Exception as e:
                             logger.error(f"Error in background preview-feature sync: {e}", exc_info=True)
 
-                _spawn_background(safe_sync_preview_features())
+                _spawn_background(safe_sync_preview_features(), "preview_feature_sync")
 
             if _yaml_config.get("features", {}).get("training_admin", False):
                 async def safe_sync_academy_catalog():
@@ -343,7 +354,7 @@ async def start_poller():
                     except Exception as e:
                         logger.error(f"Error in background Academy catalog sync: {e}", exc_info=True)
 
-                _spawn_background(safe_sync_academy_catalog())
+                _spawn_background(safe_sync_academy_catalog(), "academy_sync")
 
             if _yaml_config.get("features", {}).get("rbac", False):
                 async def safe_rbac_export():
@@ -357,13 +368,13 @@ async def start_poller():
                         except Exception as e:
                             logger.error(f"Error in background access-rules export: {e}", exc_info=True)
 
-                _spawn_background(safe_rbac_export())
+                _spawn_background(safe_rbac_export(), "access_rules_export")
 
             if _yaml_config.get("features", {}).get("context_catalog", False):
                 # Cron- and toggle-gated inside the task; overlapping runs are skipped there.
                 from app.workers.tasks.context_catalog_reminders import context_catalog_reminders_task
 
-                _spawn_background(context_catalog_reminders_task())
+                _spawn_background(context_catalog_reminders_task(), "context_catalog_reminders")
 
                 async def safe_context_catalog_git_sync():
                     # Toggle- and cron-gated inside; a running sync makes it a no-op.
@@ -374,17 +385,17 @@ async def start_poller():
                     except Exception as e:
                         logger.error(f"Error in background Context Catalog Git sync: {e}", exc_info=True)
 
-                _spawn_background(safe_context_catalog_git_sync())
+                _spawn_background(safe_context_catalog_git_sync(), "context_catalog_git_sync")
 
             if _metadata_reconcile_enabled():
-                _spawn_background(_safe_metadata_reconcile(metadata_reconcile_semaphore))
+                _spawn_background(_safe_metadata_reconcile(metadata_reconcile_semaphore), "metadata_reconcile")
 
             # Pre-warm user profiles + prune retained user data. Self-throttled
             # (well below the poll interval) and detached, so a slow identity
             # provider can't hold up request processing. Strong reference held
             # for the same reason as _detached_tasks below: asyncio keeps only a
             # weak one, and a GC'd task dies silently mid-run.
-            _spawn_background(user_context_maintenance_task())
+            _spawn_background(user_context_maintenance_task(), "user_context_maintenance")
 
             await process_open_requests()
             await process_scheduled_reports()

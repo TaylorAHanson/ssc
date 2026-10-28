@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from app.core.config import settings, _yaml_config, dev_features_allowed
 from app.core.settings_store import effective_ui_tabs
 from app.core.support import get_support_contact
+from app.api.v1.client_events import client_events_enabled
 
 router = APIRouter()
 
@@ -124,6 +125,8 @@ async def get_branding():
         "databricks_workspace_url": workspace_url,
         # Day-to-day support contact ({name, email, notes}); {} until an admin sets one.
         "support_contact": get_support_contact(),
+        # Whether the browser reports page views and errors to the server log.
+        "client_events_enabled": client_events_enabled(),
         # Config-driven list of iframe-embedded apps. Each renders a sidebar
         # link that opens the app in-page at /embedded/<id>, in list order.
         "embedded_apps": _embedded_apps(),

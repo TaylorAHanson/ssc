@@ -37,6 +37,32 @@ function getHeaders(contentType: string = 'application/json'): Record<string, st
   return headers;
 }
 
+/** A page view or browser error for the server log (see `lib/clientEvents.ts`). */
+export interface ClientEventPayload {
+  type: 'page_view' | 'error';
+  path: string;
+  message?: string;
+  source?: string;
+  stack?: string;
+  request_id?: string;
+  app_version?: string;
+}
+
+/** Sends a batch to the server log. Never throws: logging must not become an app error. */
+export async function postClientEvents(events: ClientEventPayload[]): Promise<void> {
+  try {
+    await fetch(`${API_BASE_URL}/client-events`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({ events }),
+      // Lets the last batch go out while the tab is closing.
+      keepalive: true,
+    });
+  } catch {
+    // Dropped: nothing useful to do when the log itself can't be reached.
+  }
+}
+
 export interface ChatMessage {
   id: string;
   type: 'user' | 'agent';
@@ -540,6 +566,7 @@ export async function getBranding(): Promise<{
   workflow_authoring_locked?: boolean;
   system_banner?: { active?: boolean; type?: 'info' | 'alert' | 'warning' | 'success'; message?: string };
   dev_features_enabled?: boolean;
+  client_events_enabled?: boolean;
 }> {
   const response = await fetch(`${API_BASE_URL}/branding`, {
     headers: getHeaders()
@@ -2929,6 +2956,7 @@ export interface FeedbackNetworkEntry {
   url?: string;
   status?: number;
   status_text?: string;
+  request_id?: string;
   ts?: string;
 }
 

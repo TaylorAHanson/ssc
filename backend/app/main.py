@@ -269,6 +269,8 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Local dev calls the API cross-origin; without this the browser hides the header.
+    expose_headers=["X-Request-ID"],
 )
 
 # Authentication Middleware (Context Propagation)

@@ -437,3 +437,28 @@ async def test_hitting_max_iterations_synthesizes_from_tool_results():
     assert messages[0].content == "Payload is ready."
     assert "maximum processing limit" not in messages[0].content
     assert not runner.llm_client.calls[1].get("tools")
+
+
+@pytest.mark.asyncio
+async def test_run_stream_logs_one_turn_summary(caplog):
+    fake_tool = _FakeTool(name="echo", result={"echoed": "ok"})
+    runner = _make_runner(
+        tools=[fake_tool],
+        scripted=[
+            _FakeLLMResponse(
+                tool_calls=[{"id": "tc-1", "type": "function", "function": {"name": "echo", "arguments": {}}}]
+            ),
+            _FakeLLMResponse(content="Done."),
+        ],
+    )
+    runner.session_id = "sess-1"
+    caplog.set_level("INFO", logger="app.agents.runner")
+
+    [ev async for ev in runner.run_stream(query="hi there")]
+
+    (turn,) = [r for r in caplog.records if r.getMessage().startswith("AGENT_TURN")]
+    assert turn.getMessage().startswith("AGENT_TURN answered in ")
+    assert turn.data["session_id"] == "sess-1"
+    assert turn.data["question_chars"] == len("hi there")
+    (tool,) = turn.data["tools"]
+    assert tool["name"] == "echo" and tool["ok"] is True and tool["ms"] >= 0

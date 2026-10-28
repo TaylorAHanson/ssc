@@ -995,6 +995,11 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "help": "How long the chat keeps waiting for an answer that arrives asynchronously — a Genie data "
              "question or a long-running external tool — before it shows a timeout. Each check is a short "
              "request, so this is not a Databricks limit."},
+    {"group": "Infrastructure", "section": "Logging", "key": "yaml:logging.client_events",
+     "label": "Log page views and browser errors", "type": "bool",
+     "help": "Each page a person opens, and any error their browser hits, is written to the app's own "
+             "log with their email and app roles, so you can follow a session or a bug report. Nothing "
+             "is sent outside the app, and no page content, chat text or query result is included."},
     {"group": "Infrastructure", "section": "Terramate provisioning", "key": "TERRAMATE_API_URL",
      "label": "Terramate API URL", "type": "string",
      "help": "Base URL of the Terramate Provisioning API (Databricks App or local dev URL) that opens "
@@ -1189,8 +1194,8 @@ GROUP_DESCRIPTIONS: Dict[str, str] = {
         "live in the scope and access grants are made in Databricks. Changes apply immediately."
     ),
     "Infrastructure": (
-        "Runtime timeouts and the Terramate provisioning connection, followed by the deploy-time settings "
-        "managed in databricks.yml."
+        "Runtime timeouts, what the browser writes to the app log, and the Terramate provisioning "
+        "connection, followed by the deploy-time settings managed in databricks.yml."
     ),
 }
 

@@ -103,3 +103,10 @@ first** — it is the source of truth for how the pieces fit together.
   offloaded with `asyncio.to_thread` (see the contract-sync path).
 - **Always check `backend.log`** after a change that reloads FastAPI to confirm it
   started cleanly.
+- **Logging:** lines are JSON (`core/logging_formatter.py`). Inside a request each
+  line already carries the user, request id and app roles, and the auth
+  middleware writes one `HTTP …` line per call, so don't log those yourself. Put
+  filterable values in `extra={"data": {...}}` rather than the message. Start a
+  background job with `_spawn_background(coro, "<job_name>")` (or wrap it in
+  `job_log_context`) so its lines are tagged. Per-item detail inside a loop is
+  DEBUG; log a summary at INFO.

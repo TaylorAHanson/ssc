@@ -42,6 +42,8 @@ class NetworkEntry(BaseModel):
     url: Optional[str] = None
     status: Optional[int] = None
     status_text: Optional[str] = None
+    # The server's X-Request-ID for the call, which names its lines in the server log.
+    request_id: Optional[str] = None
     ts: Optional[str] = None
 
 

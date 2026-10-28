@@ -22,6 +22,7 @@ carrying the resolved result so the LLM can summarize the answer.
 import json
 import logging
 import re
+import time
 from datetime import datetime
 from typing import Any, AsyncIterator, Dict, List, Optional
 
@@ -301,8 +302,11 @@ class AgentRunner:
         user_context_block: Optional[str] = None,
         surface_context_block: Optional[str] = None,
         dry_run: bool = False,
+        session_id: Optional[str] = None,
     ):
         self.llm_client = AgentLLMClient()
+        # Only for the turn summary log line, to group a conversation's turns.
+        self.session_id = session_id
         self.tools = tools or []
         self.max_iterations = max_iterations
         self.user_identity = user_identity or {}
@@ -338,6 +342,58 @@ class AgentRunner:
         return next((t for t in self.tools if t.name == name), None)
 
     async def run_stream(
+        self,
+        query: str,
+        history: Optional[List[Dict[str, str]]] = None,
+        context: Optional[Dict[str, Any]] = None,
+        obo_token: Optional[str] = None,
+    ) -> AsyncIterator[AgentEvent]:
+        """``_run_turn``, plus one ``AGENT_TURN`` log line summarising the turn when it ends."""
+        started = time.monotonic()
+        tool_started: Dict[str, float] = {}
+        tools: List[Dict[str, Any]] = []
+        outcome = "abandoned"  # the client went away before a terminal event
+        error: Optional[str] = None
+        try:
+            async for ev in self._run_turn(query, history=history, context=context, obo_token=obo_token):
+                if isinstance(ev, ToolCallEvent):
+                    tool_started[ev.id] = time.monotonic()
+                elif isinstance(ev, ToolResultEvent):
+                    began = tool_started.pop(ev.id, None)
+                    tools.append({
+                        "name": ev.name,
+                        "ok": ev.ok,
+                        "ms": round((time.monotonic() - began) * 1000) if began else None,
+                    })
+                elif isinstance(ev, PendingPollEvent):
+                    outcome = "pending_poll"
+                elif isinstance(ev, DoneEvent) and outcome != "pending_poll":
+                    outcome = "answered"
+                elif isinstance(ev, ErrorEvent) and ev.fatal:
+                    outcome, error = "error", ev.message[:300]
+                yield ev
+        finally:
+            duration_ms = round((time.monotonic() - started) * 1000)
+            failed = [t["name"] for t in tools if not t["ok"]]
+            logger.log(
+                logging.WARNING if outcome == "error" else logging.INFO,
+                "AGENT_TURN %s in %sms: %d tool call(s)%s%s",
+                outcome, duration_ms, len(tools),
+                f" ({', '.join(t['name'] for t in tools)})" if tools else "",
+                f"; failed: {', '.join(failed)}" if failed else "",
+                extra={"data": {
+                    "outcome": outcome,
+                    "duration_ms": duration_ms,
+                    "mode": self.mode,
+                    "session_id": self.session_id,
+                    "question_chars": len(query or ""),
+                    "tools": tools,
+                    "error": error,
+                    "dry_run": self.dry_run,
+                }},
+            )
+
+    async def _run_turn(
         self,
         query: str,
         history: Optional[List[Dict[str, str]]] = None,

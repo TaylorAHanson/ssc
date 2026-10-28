@@ -37,11 +37,24 @@ from app.core.logging_formatter import (
     current_endpoint,
     current_method,
     current_request_id,
+    current_request_info,
     current_user_agent,
     current_user_email,
 )
 
 logger = logging.getLogger(__name__)
+
+# The browser's own log calls; the endpoint writes the line that matters.
+_QUIET_PATHS = ("/api/v1/client-events",)
+
+
+def _request_log_level(path: str, status: int | None) -> int:
+    """INFO for API and MCP calls (WARNING on a 5xx); DEBUG for static files and the SPA shell."""
+    if not (path.startswith("/api/") or path.startswith("/mcp")) or path.startswith(_QUIET_PATHS):
+        return logging.DEBUG
+    if status is not None and status >= 500:
+        return logging.WARNING
+    return logging.INFO
 
 Scope = MutableMapping[str, object]
 Message = MutableMapping[str, object]
@@ -106,6 +119,7 @@ class AuthMiddleware:
         ip_token = current_client_ip.set(client_ip)
 
         agent_token = current_user_agent.set(headers.get("user-agent", "Unknown"))
+        info_token = current_request_info.set({})
 
         user_email_token = None
         try:
@@ -127,11 +141,7 @@ class AuthMiddleware:
 
                 obo_token = headers.get("x-forwarded-access-token")
                 if obo_token:
-                    logger.debug(
-                        "AuthMiddleware [%s %s]: OBO token present (len=%d, "
-                        "starts='%s')",
-                        method, path, len(obo_token), obo_token[:10],
-                    )
+                    logger.debug("AuthMiddleware [%s %s]: OBO token present", method, path)
                 else:
                     # Log all forwarded headers to diagnose missing token
                     fwd_headers = {
@@ -185,14 +195,12 @@ class AuthMiddleware:
                                 payload_data.get("scp")
                                 or payload_data.get("scope")
                             )
-                            logger.debug(f"DEBUG AUTH: OBO Token Scopes: {scopes}")
+                            logger.debug("AuthMiddleware: OBO token scopes: %s", scopes)
                     except Exception as e:
-                        logger.error(
-                            f"DEBUG AUTH: Failed to decode token scopes: {e}"
-                        )
+                        logger.debug("AuthMiddleware: couldn't read the OBO token's scopes: %s", e)
 
                 if email != settings.MOCK_USER_EMAIL:
-                    logger.debug(f"AuthMiddleware: User context set for {email}")
+                    logger.debug("AuthMiddleware: user context set for %s", email)
 
             # Wrap ``send`` so we can see the response status code for
             # logging without having to consume the body — that's the
@@ -211,24 +219,31 @@ class AuthMiddleware:
                                 content_length[0] = raw_value.decode("latin-1")
                         except Exception:
                             pass
+                    # Lets a bug report (or the browser console) name the exact log lines.
+                    message["headers"] = [
+                        *(message.get("headers") or []),  # type: ignore[misc]
+                        (b"x-request-id", req_id.encode("latin-1")),
+                    ]
                 await send(message)
 
             try:
                 await self.app(scope, receive, send_wrapper)
-                process_time = time.time() - start_time
-                logger.debug(
-                    "HTTP_REQUEST: "
-                    f"status_code={status_code[0]} "
-                    f"duration_ms={round(process_time * 1000, 2)} "
-                    f"bytes={content_length[0]}"
+                duration_ms = round((time.time() - start_time) * 1000, 1)
+                logger.log(
+                    _request_log_level(path, status_code[0]),
+                    "HTTP %s %s -> %s in %sms", method, path, status_code[0], duration_ms,
+                    extra={"data": {
+                        "status": status_code[0],
+                        "duration_ms": duration_ms,
+                        "bytes": content_length[0],
+                    }},
                 )
             except Exception as e:
-                process_time = time.time() - start_time
+                duration_ms = round((time.time() - start_time) * 1000, 1)
                 logger.error(
-                    "HTTP_REQUEST_FAILED: "
-                    f"duration_ms={round(process_time * 1000, 2)} "
-                    f"error='{e}'",
+                    "HTTP %s %s failed after %sms: %s", method, path, duration_ms, e,
                     exc_info=True,
+                    extra={"data": {"status": 500, "duration_ms": duration_ms}},
                 )
                 raise
         finally:
@@ -238,5 +253,6 @@ class AuthMiddleware:
             current_client_ip.reset(ip_token)
             current_user_agent.reset(agent_token)
             current_correlation_id.reset(corr_id_token)
+            current_request_info.reset(info_token)
             if user_email_token is not None:
                 current_user_email.reset(user_email_token)

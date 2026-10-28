@@ -33,6 +33,8 @@ router.include_router(context_catalog_staleness.router, prefix="/context", tags=
 from app.api.v1 import context_catalog_git  # noqa: E402
 router.include_router(context_catalog_git.router, prefix="/context/git", tags=["context-catalog"])
 router.include_router(feedback.router, prefix="/feedback", tags=["feedback"])
+from app.api.v1 import client_events  # noqa: E402
+router.include_router(client_events.router, prefix="/client-events", tags=["client-events"])
 router.include_router(workflows.router, prefix="/workflows", tags=["workflows"])
 router.include_router(tool_registry.router, prefix="/tool-registry", tags=["tool-registry"])
 router.include_router(skills.router, prefix="/skills", tags=["skills"])

@@ -117,6 +117,14 @@ visit most often:
   the **Training** page and satisfy any workflow step that requires a course.
 - **Target Workspaces**: the Databricks workspaces that OmniGuard scans and
   Data Certification checks.
+- **Infrastructure → Logging**: **Log page views and browser errors** writes
+  each page a person opens, and any error their browser hits, to
+  {{brand_name}}'s own log, with their email and app roles. It's on by
+  default. Nothing is sent outside the app, and no page content, chat text or
+  query results are included. Turn it off to stop the browser reporting
+  anything. Every line in the log, not only these, now names the person's app
+  roles, and a bug report with diagnostics attached shows a request ID for
+  each failed call, which you can search the log for.
 
 For the governance settings, see [Governance tools](governance.md). For
 Workflow Studio and Preview Features, see

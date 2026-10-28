@@ -10,6 +10,7 @@ import uuid
 import logging
 import time
 from app.api import identity
+from app.core.logging_formatter import note_request_identity
 from app.models.user import User
 from app.db.role_mapping import RoleMappingModel
 from app.providers.github.client import GitHubProvider
@@ -163,6 +164,7 @@ def resolve_user(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Service principals can only call the metadata API.",
             )
+        note_request_identity(principal_user.roles)
         return principal_user
     if identity.identifiers(fwd) and not identity.is_email_address(fwd.get("email")):
         identity.log_unrecognized_shape(fwd)
@@ -262,9 +264,11 @@ def _resolve_human(
         calculated_roles = ["Platform Admin"]
     
     # DEV FEATURE: Role Override (local/dev-flavored envs only; never stage/prod)
+    applied_override = None
     if x_dev_role_override and _dev_features_allowed():
         logger.debug(f"DEV: Overriding role for user {user_email} to {x_dev_role_override}")
         calculated_roles = [x_dev_role_override]
+        applied_override = x_dev_role_override
     elif x_dev_role_override:
         logger.warning(
             "Ignoring X-Dev-Role-Override=%r for %s: ENVIRONMENT=%r is not a "
@@ -280,7 +284,7 @@ def _resolve_human(
         roles=calculated_roles,
         identity_headers=identity_headers,
     )
-    
+    note_request_identity(calculated_roles, applied_override)
     return user
 
 def require_role(role_name: str):

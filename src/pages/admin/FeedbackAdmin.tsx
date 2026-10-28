@@ -373,6 +373,11 @@ export function FeedbackAdmin() {
                                 <span className="font-bold text-red-600">{n.status || 'ERR'}</span>
                                 <span className="text-gray-500">{n.method}</span>
                                 <span className="text-gray-700">{n.url}</span>
+                                {n.request_id && (
+                                  <span className="ml-auto shrink-0 text-gray-400" title="Request ID: search the server log for it">
+                                    {n.request_id}
+                                  </span>
+                                )}
                               </div>
                             ))}
                           </div>
