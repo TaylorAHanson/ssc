@@ -13,6 +13,12 @@ Format rules (the app parses this file, so keep to them):
   before), and what the reader will notice or should do now.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
 
+## 2.6.4 — 2026-10-28
+
+### Fixed
+
+- **The assistant now knows where admins read feedback, and no longer files a question as feedback.** A Platform Admin who asked where to see submitted feature requests was told there was no such page, and the assistant then offered to log a request to build one, even though **Admin → Feedback** already does this. Earlier in the same chat, a plain question ("how do you capture user feedback?") had been filed as feedback. The assistant now sends Platform Admins and Governance Admins to **Admin → Feedback**, tells everyone else that the admins review what is sent (without linking a page they can't open), and answers questions about how feedback works instead of filing them. It stays quiet about the page in environments where an admin has turned the Feedback page off. It still can't read what has been sent, so it won't describe the contents or status of a report.
+
 ## 2.6.3 — 2026-10-28
 
 ### Fixed

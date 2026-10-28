@@ -1,0 +1,81 @@
+# Sending feedback through the chat, and finding it again.
+#
+# Source: a real conversation where the assistant filed feedback for a plain question
+# ("how do you capture user feedback?"), then told a Platform Admin it couldn't see a
+# page for reviewing feedback (Admin -> Feedback is that page) and filed a second
+# request to build one. Expectations describe INTENDED behavior: a question is
+# answered, not filed; a report is filed once; an admin is pointed at the page that
+# exists; anyone else is told the admins review it, without a link they can't open.
+#
+# Run:   python -m app.agents.eval run --suite feedback --repeat 3 --label <name>
+#
+# None of these need the caller's identity: filing is simulated, and the roles come
+# from the case. They need the Feedback feature on (the default).
+suite: feedback
+description: Sending feedback from the chat, and where an admin reads it.
+
+defaults:
+  role: User
+  max_tool_calls: 4
+  answer_not_matches:
+    - "(?i)\\b(x-forwarded|obo token|bearer token|access token)\\b"
+
+cases:
+  - id: fb-how-captured
+    name: A question about feedback is answered, not filed
+    tags: [feedback, question]
+    question: How do you capture user feedback?
+    expected: >
+      Explains how feedback works: the user can tell the assistant in chat (it may
+      also mention Send feedback in the account menu), and the admins review what is
+      sent. It answers the question and may offer to take down feedback. It does not
+      file anything for this message: the question is not feedback. The judge only sees
+      tool results, so details taken from the assistant's own instructions (the admins
+      review it, the account menu) are not unsupported.
+    forbid_tools: [submit_feedback, execute_workflow]
+    answer_matches: ["(?i)feedback"]
+
+  - id: fb-admin-where
+    name: Admin asks where submitted feedback is read
+    tags: [feedback, admin]
+    role: Platform Admin
+    question: Where do I go to see the feedback and feature requests people have sent?
+    expected: >
+      Points the admin to the Feedback tab of the Admin page (Admin, then Feedback).
+      It does not say there is no such page, does not offer to log a request to build
+      one, and does not file anything.
+    forbid_tools: [submit_feedback, execute_workflow]
+    answer_matches: ["(?i)(admin\\s*(→|->|>|›|,\\s*then|and then)\\s*feedback|feedback (tab|page)|/admin/feedback)"]
+    answer_not_matches:
+      - "(?i)\\b(can'?t|cannot|don'?t|unable to)\\s+(see|find|locate)\\s+(a|an|the|any)\\s+(platform admin|admin)\\b"
+      - "(?i)\\b(no|isn'?t a|is not a)\\s+(platform )?admin (page|view|place|screen)\\b"
+
+  - id: fb-file-and-locate
+    name: Admin files a feature request and asks where to see it
+    tags: [feedback, admin]
+    role: Platform Admin
+    question: >
+      Please log a feature request: show the product roadmap in this app, with each
+      item's lifecycle from Preview to Beta to GA. And since I'm a platform admin, where
+      do I go to see this request?
+    expected: >
+      Files exactly one feature request for the roadmap and says it was recorded for the
+      admins. Then points the admin to the Feedback tab of the Admin page. It does not
+      file a second request, least of all one for a page to review feedback, which
+      already exists.
+    expect_tools: [submit_feedback]
+    tool_limits: {submit_feedback: 1}
+    expect_tool_args:
+      - {tool: submit_feedback, arg: feedback_type, matches: "(?i)feature"}
+    answer_matches: ["(?i)(admin\\s*(→|->|>|›|,\\s*then|and then)\\s*feedback|feedback (tab|page)|/admin/feedback)"]
+
+  - id: fb-user-where
+    name: A regular user asks where their feedback goes
+    tags: [feedback, question]
+    question: Where can I see the feedback I sent?
+    expected: >
+      Says the admins review feedback and that the user can't open that page themselves
+      (or simply that the admins review it). It does not send them to an admin page they
+      can't open and does not file anything.
+    forbid_tools: [submit_feedback, execute_workflow]
+    answer_not_matches: ["(?i)/admin/feedback"]

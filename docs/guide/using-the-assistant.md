@@ -82,6 +82,12 @@ once you say yes. You can also say "report this" straight away. You don't need
 to pick a category. A repeat of the same report within a few minutes is
 recorded once.
 
+A question about feedback, such as how it works or who reads it, is answered
+and not filed. Platform Admins and Governance Admins read what has been sent in
+**Admin → Feedback**; if you ask the assistant where to see it, it points you
+there. Anyone else is told that the admins review it. The assistant can't read
+what has been filed, so it won't tell you the status of a report.
+
 ### Work that happens in Databricks
 
 The assistant answers questions about data, but it doesn't write queries for

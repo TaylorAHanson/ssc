@@ -767,6 +767,34 @@ def _get_feedback_section() -> str:
     except Exception:  # noqa: BLE001 - prompt assembly must never crash
         return ""
 
+    # Where what's filed is read. Left unsaid, the assistant told a Platform Admin there was no
+    # page for it (Admin -> Feedback is that page) and offered to log a request to build one.
+    # The page and the account-menu form share one switch, so a deployment that turned it off
+    # is not sent to a page that isn't there.
+    try:
+        from app.core import settings_store
+
+        review_page = bool(settings_store.effective_ui_tabs().get("feedback", True))
+    except Exception:  # noqa: BLE001 - prompt assembly must never crash
+        review_page = False
+    if review_page:
+        where_it_goes = (
+            "- **Where it goes.** The admins read what is filed in the Feedback tab of the Admin "
+            "page ([Admin → Feedback](/admin/feedback)); only the Platform Admin and Governance "
+            "Admin roles can open it. **Send feedback** in the account menu files the same thing. "
+            "If the user asks where to see what was sent, send them to that tab only when the "
+            "Roles line under CURRENT USER IDENTITY lists one of those two. Otherwise (the usual "
+            "case) say the admins review it and that they can't open that page, and don't link "
+            "it. You can't read what has been filed or its status, so don't describe either. "
+            "That page exists: never offer to log a request for one.\n"
+        )
+    else:
+        where_it_goes = (
+            "- **Where it goes.** The admins review what is filed, but the Feedback page in the "
+            "Admin section is switched off here. If asked where to see it, say that; don't offer "
+            "to log a request for it. You can't read what has been filed or its status.\n"
+        )
+
     return (
         "\n## Feedback, data issues & reports to the team\n"
         "When the user wants the team to hear something, use the `submit_feedback` "
@@ -806,6 +834,9 @@ def _get_feedback_section() -> str:
         "and misleading. Note that bug reports filed from the avatar-menu form can "
         "attach browser console/network diagnostics, but ones filed here via chat "
         "cannot.\n"
+        + where_it_goes +
+        "- A question about feedback (how it works, where it goes, who reads it) is a question, "
+        "not a report: answer it and don't file it.\n"
         "\n**Proactively offer to capture feedback** (don't wait to be asked) when:\n"
         "- The user asks for something this app does NOT support yet — including the "
         "out-of-scope features listed above, or any capability you have no tool/"

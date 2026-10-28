@@ -174,3 +174,29 @@ def test_feedback_is_filed_on_request_and_only_once():
     assert "File each issue once" in flat
     # The rule can't be contradicted by an instruction to file straight away.
     assert "Capture what they saw, file it" not in flat
+
+
+def _feedback_text(tabs):
+    with patch("app.core.feature_flags.is_feature_enabled", return_value=True), patch(
+        "app.core.settings_store.effective_ui_tabs", return_value=tabs
+    ):
+        return " ".join(prompts._get_feedback_section().split())
+
+
+def test_feedback_says_where_admins_read_it_and_who_can_open_it():
+    # The assistant once told a Platform Admin there was no page for this and offered to log a
+    # request to build one: it was never told Admin -> Feedback exists.
+    flat = _feedback_text({"feedback": True})
+    assert "[Admin → Feedback](/admin/feedback)" in flat
+    assert "Platform Admin and Governance Admin" in flat
+    assert "never offer to log a request for one" in flat
+    assert "only when the Roles line under CURRENT USER IDENTITY lists one of those two" in flat
+    assert "they can't open that page, and don't link it" in flat
+    # A question about feedback is answered, not filed.
+    assert "is a question, not a report" in flat
+
+
+def test_feedback_does_not_send_anyone_to_a_page_an_admin_turned_off():
+    flat = _feedback_text({"feedback": False})
+    assert "/admin/feedback" not in flat
+    assert "switched off here" in flat

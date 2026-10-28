@@ -95,7 +95,8 @@ def _compose_description(description: Optional[str], about: Optional[str], label
         "Pass something on to the team for triage: feedback about the app, a feature request, a bug, "
         "or a problem with some data (stale, wrong, missing, broken). Use it for any report the user "
         "wants someone to see, and only after they have asked you to pass it on or said yes to your "
-        "offer; a user who merely describes a problem hasn't asked yet. It is not a provisioning request."
+        "offer; a user who merely describes a problem hasn't asked yet, and a question about how "
+        "feedback works is not a report. It is not a provisioning request."
     ),
     args_schema=SubmitFeedbackInput,
     feature_flag="core",
