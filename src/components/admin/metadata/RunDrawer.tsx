@@ -46,6 +46,11 @@ export function RunDrawer({ id, onClose }: { id: string; onClose: () => void }) 
             <dt className="text-gray-500">Statements</dt>
             <dd>
               {run.statements_planned} planned, {run.statements_applied} applied, {run.statements_failed} failed; {run.removals_planned} tag removals
+              {!!run.statements_reported && (
+                <span className="block text-xs text-gray-500">
+                  {run.statements_reported} more only reported: they’re outside the schemas syncing writes to (Enforce only in these schemas).
+                </span>
+              )}
             </dd>
           </dl>
           {run.status === 'running' && (
@@ -77,7 +82,7 @@ export function RunDrawer({ id, onClose }: { id: string; onClose: () => void }) 
                     className="h-8 rounded-md border border-gray-300 bg-white px-2 text-xs"
                   >
                     <option value="">All statements ({run.items.length})</option>
-                    {(['planned', 'applied', 'failed', 'skipped', 'noop'] as PlanStatus[])
+                    {(['planned', 'applied', 'failed', 'skipped', 'noop', 'reported'] as PlanStatus[])
                       .filter((s) => run.items.some((i) => i.status === s))
                       .map((s) => (
                         <option key={s} value={s}>

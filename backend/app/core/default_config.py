@@ -670,6 +670,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         # only catalogs it writes to, adopts in or accepts edits for. Blank = read
         # and plan every governed catalog, write none (enforce needs a list).
         "reconcile_catalogs": [],
+        # catalog.schema names or patterns (sales_dev.bronze, sales_dev.*_raw) that
+        # enforce writes to. Blank = every schema of the catalogs above. Everything
+        # else in them is still read, planned and editable, but only reported.
+        "enforce_schemas": [],
         # How often new or altered tables are looked for. 0 = only the sweep and
         # explicit reconcile calls pick them up.
         "new_object_poll_seconds": 60,

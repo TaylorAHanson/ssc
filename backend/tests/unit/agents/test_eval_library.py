@@ -470,6 +470,7 @@ def test_only_a_tool_result_can_show_the_callers_token_was_rejected():
     tool = lambda text: {"role": "tool", "name": "get_catalog_list", "content": text}  # noqa: E731
     assert runner.is_auth_failure([tool("GET /catalogs < 403 Forbidden < Invalid Token")])
     assert runner.is_auth_failure([tool("Failed to contact Genie: unhandled errors in a TaskGroup (1 sub-exception)")])
+    assert runner.is_auth_failure([tool("Genie refused the request (HTTP 403). Asking Genie needs ...")])
     assert not runner.is_auth_failure([tool("2 tables found")])
     # What the assistant or the user says about tokens is not evidence of one failing.
     assert not runner.is_auth_failure([{"role": "assistant", "content": "an invalid token would explain it"}])

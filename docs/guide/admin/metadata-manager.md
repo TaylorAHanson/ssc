@@ -194,6 +194,15 @@ existing catalogs under management before turning syncing on:
    The next full check, or **Check and sync now**, applies everything saved in
    the meantime.
 
+To start with part of a catalog that people are already using, list one schema
+under **Enforce only in these schemas** before step 2. The preview then marks
+each statement for the rest of the catalog *Report only*, and once you switch
+to Enforce only that schema is written; everything else in the catalog stays
+as it is in Unity Catalog, though edits to it are still saved here. The removal
+limit counts only removals in the listed schemas. It doesn't count a changed
+value, so read every statement for the schema in the preview, not just the
+removals.
+
 ## Who can edit
 
 - **Owners.** An object's owner tag (`data_owner` by default) names the groups
@@ -260,6 +269,12 @@ Metadata Manager**:
   list only that environment's catalogs. The governance service principal needs
   BROWSE on each catalog to see all of it; Unity Catalog hides the tables it
   has no privilege on, so they're missing from the list.
+- **Enforce only in these schemas**: limits what Enforce writes to these
+  schemas, as `catalog.schema` names or patterns such as `sales_dev.bronze` or
+  `sales_dev.*_raw`. The rest of the catalogs above is still checked and can
+  still be edited, but is only reported, and its statements show as *Report
+  only* in **Sync history**. A catalog's own tags are outside every schema.
+  Blank means every schema of the catalogs above.
 - **Browse roles**: who sees every object, besides Platform Admins and the
   editor roles. Everyone else sees only what they own. Blank = admins and
   editor roles only; clearing it never opens the page to everyone.

@@ -52,6 +52,7 @@ def _settings(monkeypatch):
     for name, value in {
         "METADATA_RECONCILE_MODE": "enforce",
         "METADATA_RECONCILE_CATALOGS": ["*"],
+        "METADATA_ENFORCE_SCHEMAS": [],
         "METADATA_EXEMPT_KEYS": ["system.certified"],
         "METADATA_MAX_REMOVALS_PER_RUN": 200,
         "METADATA_NEW_OBJECT_POLICY": "adopt",
@@ -358,6 +359,86 @@ def test_too_many_removals_trip_the_breaker_before_anything_runs(db, uc, provide
     assert reconciler.circuit_breaker_tripped(db) is False
     assert reconciler._get_state(db, reconciler.CIRCUIT_BREAKER_KEY)["cleared_by"] == "admin@x.com"
     assert len(alerts) == 1
+
+
+# --- run: enforce only in some schemas ----------------------------------------------------------
+
+
+def _pilot_catalog(db, uc, monkeypatch):
+    """c.pilot is enforced; c.other (someone else's work) and c's own tags are only reported."""
+    monkeypatch.setattr(settings, "METADATA_ENFORCE_SCHEMAS", ["c.pilot"])
+    monkeypatch.setattr(settings, "METADATA_MAX_REMOVALS_PER_RUN", 0)
+    uc.add("c", {"stray": "1"})
+    uc.add("c.pilot")
+    uc.add("c.pilot.t", {"a": "old"})
+    uc.add("c.other")
+    uc.add("c.other.t", {"a": "theirs", "stray": "1"})
+    uc.add("c.other.t::email", {"pii": "true"})
+    desired(db, "c")
+    desired(db, "c.pilot.t", {"a": "1"})
+    desired(db, "c.other.t", {"a": "1"})
+    desired(db, "c.other.t::email")
+
+
+def test_enforce_writes_only_the_listed_schemas_and_reports_the_rest(db, uc, provider, monkeypatch, alerts):
+    _pilot_catalog(db, uc, monkeypatch)
+
+    result = reconciler.run(db, trigger="sweep", provider=provider)
+
+    assert len(provider.statements.executed) == 1 and "`pilot`" in provider.statements.executed[0]
+    assert result.status == "completed" and alerts == [] and reconciler.circuit_breaker_tripped(db) is False
+    assert {(i.fqn_key, i.operation, i.status) for i in result.items} == {
+        ("c.pilot.t", "set", "applied"),
+        ("c", "unset", "reported"),
+        ("c.other.t", "unset", "reported"),
+        ("c.other.t", "set", "reported"),
+        ("c.other.t::email", "unset", "reported"),
+    }
+    assert (result.statements_planned, result.statements_applied, result.removals_planned) == (1, 1, 0)
+    assert result.statements_reported == 4 and result.objects_drifted == 4
+    assert obj(db, "c.pilot.t").last_apply_status == "applied"
+    for key in ("c", "c.other.t", "c.other.t::email"):
+        row = obj(db, key)
+        assert row.last_apply_status is None and row.drift_detected_at is not None
+    assert observed.get_observed(db, ["c.other.t"])["c.other.t"].tags == {"a": "theirs", "stray": "1"}
+    stored = reconciler.get_run(db, result.run_id)
+    assert stored.statements_reported == 4
+    assert {i.status for i in stored.items if i.fqn_key != "c.pilot.t"} == {"reported"}
+
+
+def test_a_preview_marks_what_enforce_would_leave_alone(db, uc, provider, monkeypatch):
+    _pilot_catalog(db, uc, monkeypatch)
+    monkeypatch.setattr(settings, "METADATA_RECONCILE_MODE", "plan")
+
+    result = reconciler.run(db, trigger="manual", provider=provider)
+
+    assert provider.statements.executed == []
+    assert {i.fqn_key for i in result.items if i.status == "planned"} == {"c.pilot.t"}
+    assert (result.statements_planned, result.removals_planned, result.statements_reported) == (1, 0, 4)
+
+
+def test_only_removals_in_the_enforced_schemas_trip_the_breaker(db, uc, provider, monkeypatch, alerts):
+    _pilot_catalog(db, uc, monkeypatch)
+    uc.add("c.pilot.t", {"a": "old", "stray": "1"})
+
+    result = reconciler.run(db, trigger="sweep", provider=provider)
+
+    assert provider.statements.executed == []
+    assert result.status == "paused" and "remove 1 tags" in result.paused_reason
+    assert result.removals_planned == 1 and result.statements_reported == 4
+    assert len(alerts) == 1
+
+
+def test_a_queued_edit_outside_the_enforced_schemas_is_reported_and_leaves_the_queue(db, uc, provider, monkeypatch):
+    _pilot_catalog(db, uc, monkeypatch)
+    reconciler.enqueue(db, ["c.other.t"], reason="change")
+    db.commit()
+
+    result = reconciler.drain_queue(db, provider=provider)
+
+    assert provider.statements.executed == []
+    assert {i.status for i in result.items} == {"reported"} and result.status == "completed"
+    assert queue(db) == {}
 
 
 # --- run: lifecycle, adoption ---------------------------------------------------------------

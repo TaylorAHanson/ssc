@@ -43,6 +43,11 @@ a chart. **Genie is working…** means the query is still running.
 The assistant uses your own Databricks permissions, so it can only see and
 query the data you already have access to.
 
+Asking Genie also needs access to Genie itself in Unity Catalog. If the
+assistant says **Genie refused the request**, ask a workspace admin to grant
+you `EXECUTE` on `system.ai.genie_one_mcp` (with `USE CATALOG` on `system` and
+`USE SCHEMA` on `system.ai`), then sign out of {{brand_name}} and back in.
+
 ### Ask about one table
 
 Ask about a table by name, for example "Tell me about the product table", and

@@ -28,7 +28,7 @@ from pydantic import BaseModel, Field
 from app.api.deps import get_current_user
 from app.core.config import settings
 from app.models.user import User
-from app.providers.databricks_mcp import GenieAuthUnavailableError, call_genie_tool
+from app.providers.databricks_mcp import GenieAuthUnavailableError, call_genie_tool, describe_genie_failure
 
 logger = logging.getLogger(__name__)
 
@@ -163,7 +163,9 @@ async def poll_genie(
             e,
             exc_info=True,
         )
-        return GeniePollResponse(status="failed", error=f"Poll failed: {e}")
+        return GeniePollResponse(
+            status="failed", error=describe_genie_failure(e, space_id=body.space_id or None, prefix="Poll failed")
+        )
 
     if response.get("is_error"):
         # A response can be reported "not found" for a moment after Genie hands back its

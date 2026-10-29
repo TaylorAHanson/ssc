@@ -510,7 +510,8 @@ class VersionConflictItem(BaseModel):
 # --- Reconciler ----------------------------------------------------------------------
 
 PlanOperation = Literal["set", "unset", "comment"]
-PlanStatus = Literal["planned", "applied", "noop", "failed", "skipped"]
+# reported = outside METADATA_ENFORCE_SCHEMAS: shown, never written, not counted toward the circuit breaker.
+PlanStatus = Literal["planned", "applied", "noop", "failed", "skipped", "reported"]
 RunTrigger = Literal["queue", "sweep", "manual", "new_object", "notify"]
 RunStatus = Literal["running", "completed", "partial", "failed", "paused", "skipped"]
 
@@ -565,6 +566,8 @@ class ReconcileResult(BaseModel):
     statements_applied: int = 0
     statements_failed: int = 0
     removals_planned: int = 0
+    # Statements outside the enforced schemas; not in statements_planned or removals_planned.
+    statements_reported: int = 0
     skipped_catalogs: List[str] = Field(default_factory=list)
     # catalog -> why it was skipped (read failure, outside this deployment's list, ...)
     skipped_reasons: Dict[str, str] = Field(default_factory=dict)
@@ -781,6 +784,8 @@ class MetadataConfig(BaseModel):
     circuit_breaker_tripped: bool = False
     # Catalog names or patterns this deployment manages; empty = every catalog, but plan only.
     managed_catalogs: List[str] = Field(default_factory=list)
+    # catalog.schema names or patterns enforce is limited to; empty = every schema of managed_catalogs.
+    enforce_schemas: List[str] = Field(default_factory=list)
     # Set when enforce is configured but can't run (no catalog list), so the UI can say why.
     enforce_blocked_reason: Optional[str] = None
 

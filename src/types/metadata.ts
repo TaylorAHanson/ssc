@@ -330,7 +330,8 @@ export interface VersionConflictItem {
 // --- Reconciler ----------------------------------------------------------------------
 
 export type PlanOperation = 'set' | 'unset' | 'comment';
-export type PlanStatus = 'planned' | 'applied' | 'noop' | 'failed' | 'skipped';
+/** `reported`: outside Enforce only in these schemas, so shown but never written. */
+export type PlanStatus = 'planned' | 'applied' | 'noop' | 'failed' | 'skipped' | 'reported';
 export type RunTrigger = 'queue' | 'sweep' | 'manual' | 'new_object' | 'notify';
 export type RunStatus = 'running' | 'completed' | 'partial' | 'failed' | 'paused' | 'skipped';
 
@@ -365,6 +366,8 @@ export interface ReconcileResult {
   statements_applied: number;
   statements_failed: number;
   removals_planned: number;
+  /** Statements outside the enforced schemas; not counted in statements_planned or removals_planned. */
+  statements_reported?: number;
   skipped_catalogs: string[];
   skipped_reasons?: Record<string, string>;
   /** Catalogs this run couldn't read from Unity Catalog, so none of their objects were checked. */
@@ -553,6 +556,8 @@ export interface MetadataConfig {
   circuit_breaker_tripped: boolean;
   /** Catalog names or patterns this deployment manages; empty = every catalog, but plan only. */
   managed_catalogs: string[];
+  /** catalog.schema names or patterns syncing writes to; empty = every schema of managed_catalogs. */
+  enforce_schemas?: string[];
   /** Set when enforce is configured but can't run because no catalogs are listed. */
   enforce_blocked_reason?: string | null;
 }

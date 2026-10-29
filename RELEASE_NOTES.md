@@ -13,6 +13,16 @@ Format rules (the app parses this file, so keep to them):
   before), and what the reader will notice or should do now.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
 
+## 2.8.0 — 2026-10-29
+
+### Added
+
+- **Metadata Manager syncing can now be turned on for a single schema.** Before, enforce applied to every managed object in the catalogs it was given, so starting on one schema meant also writing every saved edit elsewhere in the catalog and removing tags people had added there directly. A new setting, **Enforce only in these schemas** (Admin → Settings → Metadata Manager), limits what enforce writes to the schemas you list. Everything else in the catalog is still checked and can still be edited, but stays as it is in Unity Catalog. In Sync history and on each table, statements and saved changes outside those schemas are marked *Report only*, and the removal safety limit counts only removals in the listed schemas. Leave the setting blank to keep enforcing whole catalogs, as before.
+
+### Changed
+
+- **Questions to Genie now go through Databricks' generally available Genie service.** The assistant was still calling the preview Genie endpoint, which Databricks switches off on November 30, 2026; after that date every data question would have failed. Answers, follow-ups and Genie details look the same as before. To ask Genie, you now need `EXECUTE` on `system.ai.genie_one_mcp` in Unity Catalog. Without it, the assistant says *Genie refused the request* and names the grant to ask your workspace admin for, where it used to show an unreadable connection error. Questions pinned to a single Genie space are unchanged.
+
 ## 2.7.1 — 2026-10-28
 
 ### Fixed

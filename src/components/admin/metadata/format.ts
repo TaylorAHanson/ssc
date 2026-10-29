@@ -306,6 +306,24 @@ export function nameProblem(name: string, column?: string | null): string | null
   return null;
 }
 
+/** Whether syncing writes this object to Unity Catalog: enforce, and inside Enforce only in these schemas when set. */
+export function syncsObject(config: MetadataConfig, key: string): boolean {
+  if (config.reconcile_mode !== 'enforce') return false;
+  const schemas = config.enforce_schemas ?? [];
+  if (!schemas.length) return true;
+  const [catalog, schema] = key.split('::')[0].toLowerCase().split('.');
+  if (!schema) return false;
+  const glob = (p: string) => new RegExp(`^${p.split(/([*?])/).map((s) => (s === '*' ? '.*' : s === '?' ? '.' : s.replace(/[.+^${}()|[\]\\]/g, '\\$&'))).join('')}$`);
+  return schemas.some((p) => glob(p).test(`${catalog}.${schema}`));
+}
+
+/** Why a saved change to an object syncing doesn't write is only recorded here. */
+export function reportOnlyNote(config: MetadataConfig): string {
+  if (config.reconcile_mode === 'off') return 'Syncing is off until an admin turns it on.';
+  if (config.reconcile_mode === 'enforce') return `Syncing writes only to ${(config.enforce_schemas ?? []).join(', ')}; everything else is only reported.`;
+  return 'Syncing is set to report only until an admin turns it on.';
+}
+
 /** The environment a catalog belongs to, from the configured `{base}_dev`-style patterns. */
 export function envForCatalog(config: MetadataConfig, catalog: string): string | null {
   const c = catalog.toLowerCase();

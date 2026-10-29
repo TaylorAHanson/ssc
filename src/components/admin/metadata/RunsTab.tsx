@@ -151,6 +151,7 @@ export function RunsTab() {
                   <td className="px-3 py-2 text-right tabular-nums">
                     {r.statements_applied}/{r.statements_planned}
                     {r.statements_failed > 0 && <span className="ml-1 text-red-700">({r.statements_failed} failed)</span>}
+                    {!!r.statements_reported && <span className="block text-xs text-gray-400">+{r.statements_reported} report only</span>}
                   </td>
                   <td className={r.removals_planned > 0 ? 'px-3 py-2 text-right tabular-nums text-amber-800' : 'px-3 py-2 text-right tabular-nums'}>
                     {r.removals_planned}

@@ -225,7 +225,7 @@ def test_source_crud(db_session):
 # ------------------------------------------------------------------ discovery
 def test_discover_source_upserts_disabled_tools(db_session, monkeypatch):
     src = ToolRegistryService.create_source(
-        db_session, name="genie", server_url="https://h/api/2.0/mcp/genie"
+        db_session, name="genie", server_url="https://h/api/2.0/mcp/genie/space1"
     )
 
     fake = [

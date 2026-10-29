@@ -4,6 +4,11 @@ METADATA_RECONCILE_CATALOGS lists catalog names or glob patterns (``*_dev``; ``*
 every catalog). Left blank, the deployment reads and plans every catalog it can see
 but writes to none: enforce needs an explicit list, so a lower-environment deployment
 on a shared metastore never writes to catalogs it wasn't given.
+
+METADATA_ENFORCE_SCHEMAS narrows writes further, to ``catalog.schema`` names or
+patterns inside those catalogs. Everything else they hold is still read, planned and
+editable, but reported only, so enforcement can start on one schema of a catalog
+people are already using.
 """
 
 from __future__ import annotations
@@ -45,6 +50,28 @@ def manages(catalog: Optional[str]) -> bool:
         return True
     name = (catalog or "").strip().lower()
     return bool(name) and any(fnmatch.fnmatchcase(name, p) for p in wanted)
+
+
+def enforce_patterns() -> List[str]:
+    """METADATA_ENFORCE_SCHEMAS, lowercased and deduplicated; empty = every schema of the managed catalogs."""
+    configured = getattr(settings, "METADATA_ENFORCE_SCHEMAS", None) or []
+    if isinstance(configured, str):
+        configured = configured.split(",")
+    return list(dict.fromkeys(str(s).strip().lower() for s in configured if str(s).strip()))
+
+
+def enforces(fqn_key: str, wanted: Optional[List[str]] = None) -> bool:
+    """Whether enforce may write this object. With schemas listed, a catalog's own tags are outside all of them.
+
+    ``wanted`` is ``enforce_patterns()`` read once by the caller, so a run decides every object the same way.
+    """
+    wanted = enforce_patterns() if wanted is None else wanted
+    if not wanted:
+        return True
+    parts = (fqn_key or "").partition(COLUMN_SEPARATOR)[0].strip().lower().split(".")
+    if len(parts) < 2 or not parts[1]:
+        return False
+    return any(fnmatch.fnmatchcase(f"{parts[0]}.{parts[1]}", p) for p in wanted)
 
 
 def outside(catalogs: Iterable[Optional[str]]) -> List[str]:

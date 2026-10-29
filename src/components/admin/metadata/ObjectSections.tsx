@@ -158,7 +158,7 @@ export function ApplySection({ detail }: { detail: ObjectDetail }) {
         <dl className="grid grid-cols-[auto,1fr] gap-x-4 gap-y-1 text-sm">
           <dt className="text-gray-500">Status</dt>
           <dd>
-            <ApplyBadge status={desired.last_apply_status} />
+            <ApplyBadge status={desired.last_apply_status} fqnKey={desired.fqn_key} />
             {!desired.last_apply_status && <span className="text-gray-400">Not written yet</span>}
           </dd>
           <dt className="text-gray-500">Last written</dt>

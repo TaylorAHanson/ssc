@@ -191,6 +191,7 @@ def _config(db: Session, user: User) -> MetadataConfig:
         unread_reasons=observed.unread_reasons(db) if browse.full else {},
         circuit_breaker_tripped=reconciler.circuit_breaker_tripped(db),
         managed_catalogs=scope.patterns(),
+        enforce_schemas=scope.enforce_patterns(),
         enforce_blocked_reason=scope.enforce_blocked_reason(),
     )
 

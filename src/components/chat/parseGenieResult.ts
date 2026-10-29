@@ -96,8 +96,8 @@ export function parseGenieResult(
     const narrativeBits: string[] = [];
 
     // Top-level "answer"-style fields some versions ship.
-    // ``final_answer`` is what the managed-MCP Genie server (general
-    // ``/api/2.0/mcp/genie`` endpoint) ships — markdown including
+    // ``final_answer`` is what the managed-MCP Genie server (workspace-wide
+    // ``system.ai.genie_one_mcp``) ships — markdown including
     // headings, bullets, and inline tables. We surface it as the
     // primary narrative since attachments are usually empty on this
     // surface.

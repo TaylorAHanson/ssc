@@ -3,11 +3,11 @@
 
 Databricks Genie (the general-purpose chat in Databricks One) answers
 natural-language questions about enterprise data. By default this tool
-calls the ``/api/2.0/mcp/genie`` Managed MCP server, which searches
-across the caller's accessible Unity Catalog data *and* any Genie
-Spaces they're entitled to. An optional ``space_id`` pins the call to
-a single curated Genie Space (``/api/2.0/mcp/genie/{space_id}``) when
-that's desired.
+calls the Genie One MCP (``system.ai.genie_one_mcp`` through Unity
+Gateway), which searches across the caller's accessible Unity Catalog
+data *and* any Genie Spaces they're entitled to. An optional
+``space_id`` pins the call to a single curated Genie Space
+(``/api/2.0/mcp/genie/{space_id}``) when that's desired.
 
 The server is *asynchronous*: ``genie_ask`` starts the query, then we
 poll ``genie_poll_response`` to drain the answer. This tool only does
@@ -24,7 +24,12 @@ from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field
 
-from app.providers.databricks_mcp import GenieAuthUnavailableError, build_genie_mcp_url, call_genie_tool
+from app.providers.databricks_mcp import (
+    GenieAuthUnavailableError,
+    build_genie_mcp_url,
+    call_genie_tool,
+    describe_genie_failure,
+)
 from app.tools.mcp import tool
 
 logger = logging.getLogger(__name__)
@@ -131,7 +136,7 @@ async def ask_your_data(
         return {"error": str(e)}
     except Exception as e:  # network, MCP protocol errors
         logger.error("Genie genie_ask failed: %s", e, exc_info=True)
-        return {"error": f"Failed to contact Genie: {e}"}
+        return {"error": describe_genie_failure(e, space_id=space)}
 
     if response.get("is_error"):
         return {

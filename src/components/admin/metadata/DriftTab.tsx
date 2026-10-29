@@ -5,7 +5,7 @@ import { Button } from '../../ui/button';
 import { EmptyState, ErrorBanner, Pager, Skeleton } from '../../rbac/ui';
 import { EnvBadge } from './badges';
 import { useMetadata } from './context';
-import { DRIFT_KIND_LABELS, errorMessage, formatTime, objectLabel, plural, relativeTime, summaryDrift } from './format';
+import { DRIFT_KIND_LABELS, errorMessage, formatTime, objectLabel, plural, relativeTime, summaryDrift, syncsObject } from './format';
 import { seedFromSummary, useStagingStore } from './staging';
 import { TagChip } from './TagChips';
 import { useAsync } from './useAsync';
@@ -119,7 +119,7 @@ function DriftRow({ summary: s, entries }: { summary: ObjectSummary; entries: Dr
                 {e.kind === 'missing' ? <span className="text-gray-400">not set</span> : e.field === 'tag' ? <TagChip tagKey={e.key ?? ''} value={e.observed} tone="changed" /> : <span>{e.observed}</span>}
               </td>
               <td className="py-1">
-                {e.exempt ? 'Leaves it: another tool manages it' : config.reconcile_mode === 'enforce' ? enforceText(e) : `${DRIFT_KIND_LABELS[e.kind]} (reported only)`}
+                {e.exempt ? 'Leaves it: another tool manages it' : syncsObject(config, s.fqn_key) ? enforceText(e) : `${DRIFT_KIND_LABELS[e.kind]} (reported only)`}
               </td>
             </tr>
           ))}

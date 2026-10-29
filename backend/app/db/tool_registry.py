@@ -45,7 +45,7 @@ SURFACE_WORKFLOW_EXECUTION = "workflow_execution"  # usable as a workflow graph 
 MCP_SOURCE_KINDS = (
     "managed_functions",  # /api/2.0/mcp/functions/{catalog}/{schema}
     "sql",                # /api/2.0/mcp/sql
-    "genie",              # /api/2.0/mcp/genie[/{space_id}]
+    "genie",              # /api/2.0/mcp/genie/{space_id}
     "ai_search",          # /api/2.0/mcp/ai-search/{catalog}/{schema}[/{index}]
     "external",           # /api/2.0/mcp/external/{connection}
     "custom_app",         # https://<app-url>/mcp

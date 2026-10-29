@@ -17,6 +17,13 @@ export function SyncStatus() {
       Catalogs kept in sync: {config.managed_catalogs.includes('*') ? 'all of them' : config.managed_catalogs.join(', ')}.
     </span>
   ) : null;
+  const schemas = config.enforce_schemas ?? [];
+  const limited = schemas.length ? (
+    <span className="mt-1 block">
+      {config.reconcile_mode === 'enforce' ? 'Written to Unity Catalog only in' : 'Once syncing is on, it writes only to'} {schemas.join(', ')}. Everything else is only
+      reported.
+    </span>
+  ) : null;
   const settings = (
     <span className="mt-1 block">
       Change this under{' '}
@@ -29,9 +36,11 @@ export function SyncStatus() {
   if (config.reconcile_mode === 'enforce') {
     return (
       <Notice kind="success" title="Keeping Unity Catalog in sync">
-        Changes saved here are written to Unity Catalog within about a minute, and changes made there directly are put back, except for tags another tool manages.
+        Changes saved here are written to Unity Catalog within about a minute, and changes made there directly are put back, except for tags another tool manages
+        {schemas.length ? ' (only in the schemas below)' : ''}.
         {sweep}
         {managed}
+        {limited}
         {settings}
       </Notice>
     );
@@ -42,6 +51,7 @@ export function SyncStatus() {
         {config.enforce_blocked_reason ?? 'Changes are saved here, and differences from Unity Catalog are reported, but nothing is written to Unity Catalog yet.'}
         {sweep}
         {managed}
+        {limited}
         {settings}
       </Notice>
     );

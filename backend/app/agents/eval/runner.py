@@ -519,6 +519,7 @@ _AUTH_FAILURES = (
     "invalid token",
     "invalid access token",
     "unhandled errors in a taskgroup",
+    "genie refused the request",
 )
 
 

@@ -32,7 +32,7 @@ async def test_ask_your_data_no_auth_at_all_surfaces_actionable_error():
 async def test_ask_your_data_uses_general_genie_when_no_space_configured():
     """No space configured AND none passed => uses general Databricks Genie.
 
-    The general Genie endpoint (``/api/2.0/mcp/genie``, no space suffix)
+    The general Genie endpoint (Genie One, no space suffix)
     is a valid target on its own; we should NOT bail with a "no space
     configured" error.
     """

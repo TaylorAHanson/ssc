@@ -399,7 +399,7 @@ Tool *availability* is data-driven, not hardcoded. A single DB-backed catalog
   `/mcp` MCP server for external agents/apps; `get_external_tools()` reads this, seeded from the
   code-declared `external=True` attribute), and `enabled` (master switch).
 - **MCP discovery.** Admins register MCP server endpoints (`McpSourceModel`): managed servers
-  (`/api/2.0/mcp/functions/{catalog}/{schema}`, `/api/2.0/mcp/sql`, `/api/2.0/mcp/genie`,
+  (`/api/2.0/mcp/functions/{catalog}/{schema}`, `/api/2.0/mcp/sql`, `/api/2.0/mcp/genie/{space_id}`,
   `/api/2.0/mcp/ai-search/...`), external connections (`/api/2.0/mcp/external/{connection}`), or
   custom app servers. On sync, the **Service Principal** `WorkspaceClient` +
   `DatabricksMCPClient(server_url).list_tools()` enumerates what the SP can see. Newly

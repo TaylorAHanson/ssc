@@ -2,7 +2,7 @@ import { Bot, Cog, User } from 'lucide-react';
 import { Badge, type Tone } from '../../rbac/ui';
 import type { ActorType, ApplyStatus, ObjectState, ObjectSummary, PlanStatus, RunStatus } from '../../../types/metadata';
 import { useMetadata } from './context';
-import { ACTOR_TYPE_LABELS, sourceLabel, type Outcome } from './format';
+import { ACTOR_TYPE_LABELS, reportOnlyNote, sourceLabel, syncsObject, type Outcome } from './format';
 
 const ACTOR_ICONS = { user: User, service_principal: Bot, system: Cog };
 
@@ -48,8 +48,8 @@ const APPLY: Record<ApplyStatus, { tone: Tone; label: string }> = {
   skipped: { tone: 'gray', label: 'Skipped' },
 };
 
-export function ApplyBadge({ status }: { status: ApplyStatus | null | undefined }) {
-  const enforce = useMetadata().config.reconcile_mode === 'enforce';
+export function ApplyBadge({ status, fqnKey }: { status: ApplyStatus | null | undefined; fqnKey: string }) {
+  const enforce = syncsObject(useMetadata().config, fqnKey);
   if (!status) return null;
   if (status === 'pending' && !enforce) {
     return <Badge tone="blue">Saved here only</Badge>;
@@ -67,10 +67,11 @@ export function DriftBadge({ title }: { title?: string }) {
 
 /** At most one plain-language status, shown only when something needs attention. */
 export function AttentionBadge({ summary: s, unsaved }: {
-  summary: Pick<ObjectSummary, 'managed' | 'object_state' | 'drift' | 'last_apply_status'>;
+  summary: Pick<ObjectSummary, 'fqn_key' | 'managed' | 'object_state' | 'drift' | 'last_apply_status'>;
   unsaved?: boolean;
 }) {
-  const enforce = useMetadata().config.reconcile_mode === 'enforce';
+  const { config } = useMetadata();
+  const enforce = syncsObject(config, s.fqn_key);
   if (unsaved) return <Badge tone="indigo" title="You changed this here but haven’t saved it yet.">Unsaved changes</Badge>;
   if (!s.managed) return null;
   if (s.last_apply_status === 'failed') {
@@ -83,9 +84,7 @@ export function AttentionBadge({ summary: s, unsaved }: {
       <Badge
         tone="blue"
         title={
-          enforce
-            ? 'Saved here; Unity Catalog is updated in the background.'
-            : 'Saved here. Unity Catalog isn’t updated while syncing is set to report only.'
+          enforce ? 'Saved here; Unity Catalog is updated in the background.' : `Saved here. Unity Catalog isn’t updated: ${reportOnlyNote(config)}`
         }
       >
         {enforce ? 'Waiting to sync' : 'Saved here only'}
@@ -115,6 +114,7 @@ const PLAN: Record<PlanStatus, { tone: Tone; label: string }> = {
   noop: { tone: 'gray', label: 'No change' },
   failed: { tone: 'red', label: 'Failed' },
   skipped: { tone: 'gray', label: 'Skipped' },
+  reported: { tone: 'gray', label: 'Report only' },
 };
 
 export function PlanStatusBadge({ status }: { status: PlanStatus }) {

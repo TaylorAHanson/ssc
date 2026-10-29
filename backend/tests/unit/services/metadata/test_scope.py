@@ -25,6 +25,23 @@ def test_manages(monkeypatch, configured, catalog, managed):
     assert scope.manages(catalog) is managed
 
 
+@pytest.mark.parametrize("configured,fqn_key,enforced", [
+    ([], "c", True),
+    ([], "c.s.t::col", True),
+    (["c.pilot"], "c.pilot", True),
+    (["c.pilot"], "C.Pilot.Orders::Email", True),
+    (["c.pilot"], "c.pilot_old.t", False),
+    (["c.pilot"], "c.other.t", False),
+    (["c.pilot"], "c", False),
+    (["c.pilot"], "d.pilot.t", False),
+    (["c.*_raw"], "c.sales_raw.t", True),
+    ("c.a, c.b", "c.b.t", True),
+])
+def test_enforces(monkeypatch, configured, fqn_key, enforced):
+    monkeypatch.setattr(settings, "METADATA_ENFORCE_SCHEMAS", configured)
+    assert scope.enforces(fqn_key) is enforced
+
+
 def test_catalog_of_handles_every_level():
     assert [scope.catalog_of(k) for k in ("c", "c.s", "c.s.t", "c.s.t::col")] == ["c"] * 4
 

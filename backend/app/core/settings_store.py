@@ -534,6 +534,13 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
              "edits to. Names or patterns, such as sales_dev or *_dev; * means every catalog. Blank = it reads "
              "and plans every governed catalog but changes none, and enforce doesn't run. On a dev or stage "
              "deployment that shares the metastore with production, list only that environment's catalogs."},
+    {"group": "Metadata Manager", "section": "Reconciler", "key": "METADATA_ENFORCE_SCHEMAS",
+     "label": "Enforce only in these schemas", "type": "string_list", "add_label": "Add schema",
+     "requires": ["features.metadata_v2"],
+     "help": "Limits what enforce writes to these schemas of the catalogs above, as catalog.schema names or "
+             "patterns, such as sales_dev.bronze or sales_dev.*_raw. Everything else in those catalogs is still "
+             "checked and can still be edited here, but is only reported, as if syncing were set to plan; a "
+             "catalog's own tags are outside every schema. Blank = every schema of the catalogs above."},
     {"group": "Metadata Manager", "section": "Reconciler", "key": "METADATA_NEW_OBJECT_POLL_SECONDS",
      "label": "New-table check interval (seconds)", "type": "int", "min": 0,
      "requires": ["features.metadata_v2"],

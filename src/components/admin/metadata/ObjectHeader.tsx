@@ -45,6 +45,7 @@ export function ObjectHeader({ detail, title, actions }: { detail: ObjectDetail;
   const unsaved = useStagingStore((s) => !!s.targets[seed.key] && hasEdits(s.targets[seed.key]));
   const desired = detail.desired?.status === 'active' ? detail.desired : null;
   const summary = {
+    fqn_key: detail.fqn_key,
     managed: !!desired,
     object_state: desired?.object_state ?? null,
     drift: detail.drift.some((d) => !d.exempt),

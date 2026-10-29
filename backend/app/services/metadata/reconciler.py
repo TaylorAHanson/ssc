@@ -188,6 +188,7 @@ def _adopt_new_objects() -> bool:
 
 
 _OUTSIDE_SCOPE = "Not one of this deployment's catalogs (Catalogs to reconcile), so it's left alone."
+_REPORTED_DETAIL = "Outside the schemas this deployment enforces (Enforce only in these schemas), so it's only reported."
 
 
 def _removal_limit() -> int:
@@ -363,6 +364,7 @@ def _result(run: MetadataReconcileRunModel, items: Optional[List[PlanOutcome]] =
         statements_applied=run.statements_applied or 0,
         statements_failed=run.statements_failed or 0,
         removals_planned=run.removals_planned or 0,
+        statements_reported=int((run.summary or {}).get("reported") or 0),
         skipped_catalogs=list(run.skipped_catalogs or []),
         skipped_reasons=dict(skipped) if isinstance(skipped, dict) else {},
         unread_catalogs=[str(c) for c in unread] if isinstance(unread, list) else [],
@@ -484,14 +486,16 @@ def finish_run(
     run.status = status
     run.objects_checked = int(objects_checked)
     run.objects_drifted = int(objects_drifted)
-    run.statements_planned = len(outcomes)
-    run.statements_applied = sum(1 for o in outcomes if o.status == "applied")
-    run.statements_failed = sum(1 for o in outcomes if o.status == "failed")
-    run.removals_planned = sum(o.removals for o in outcomes)
+    written = [o for o in outcomes if o.status != "reported"]
+    run.statements_planned = len(written)
+    run.statements_applied = sum(1 for o in written if o.status == "applied")
+    run.statements_failed = sum(1 for o in written if o.status == "failed")
+    run.removals_planned = sum(o.removals for o in written)
     run.skipped_catalogs = sorted(set(skipped_catalogs))
     run.paused_reason = paused_reason
     run.error = error
-    run.summary = {k: v for k, v in {**(run.summary or {}), **(summary or {})}.items() if k != _WORKER_KEY}
+    counts = {"reported": len(outcomes) - len(written)} if len(written) < len(outcomes) else {}
+    run.summary = {k: v for k, v in {**(run.summary or {}), **(summary or {}), **counts}.items() if k != _WORKER_KEY}
     run.finished_at = now
     db.commit()
     return _result(run, list(outcomes))
@@ -918,7 +922,13 @@ def _reconcile(
     # Snapshot and object-state writes land before any statement runs, so nothing stays locked meanwhile.
     db.commit()
 
-    items = _planned_items(works)
+    wanted = scope.enforce_patterns()
+    reported_keys = {w.fqn_key for w in works if w.items and not scope.enforces(w.fqn_key, wanted)}
+    items = _planned_items([w for w in works if w.fqn_key not in reported_keys])
+    reported = [
+        PlanOutcome(**i.model_dump(), status="reported", detail=_REPORTED_DETAIL)
+        for i in _planned_items([w for w in works if w.fqn_key in reported_keys])
+    ]
     removals = sum(i.removals for i in items)
     limit = _removal_limit()
     paused_reason: Optional[str] = None
@@ -938,8 +948,9 @@ def _reconcile(
     if ctx.mode == "enforce" and ctx.override and paused_reason is None:
         if clear_circuit_breaker(db, cleared_by=ctx.actor or "override"):
             logger.info("Metadata reconcile run %s cleared the circuit breaker (override).", ctx.run_id)
+    outcomes = list(outcomes) + reported
 
-    _record_objects(db, works, outcomes, executed=executed, now=ctx.now)
+    _record_objects(db, works, outcomes, executed=executed, now=ctx.now, reported=reported_keys)
     ctx.timings["total_ms"] = _ms(started)
     result = finish_run(
         db, ctx.run_id,
@@ -1184,11 +1195,13 @@ def _patch_snapshot(db: Session, outcomes: Sequence[PlanOutcome]) -> None:
 
 def _record_objects(
     db: Session, works: Sequence[_Work], outcomes: Sequence[PlanOutcome], *, executed: bool, now: datetime,
+    reported: Set[str] = frozenset(),
 ) -> None:
     """Each row's apply status and drift, written in bulk and only where something changed.
 
     Guarded by ``desired_hash``: a row edited while the run worked keeps its state
-    (its change re-enqueued it, and the next run records it).
+    (its change re-enqueued it, and the next run records it). ``reported`` objects
+    weren't written even when the run executed, so their drift stands as in plan mode.
     """
     failures: Dict[str, str] = {}
     for outcome in outcomes:
@@ -1205,7 +1218,7 @@ def _record_objects(
                 cleared.append(guard)
         elif work.fqn_key in failures:
             failed.append({**guard, "b_error": _clip(failures[work.fqn_key])})
-        elif work.items and executed:
+        elif work.items and executed and work.fqn_key not in reported:
             converged.append({**guard, "b_applied": now, "b_seen": work.observed_at})
         elif work.items:
             if work.drift_at is None:
@@ -1239,10 +1252,11 @@ def _log_run(result: ReconcileResult, ctx: _Context) -> None:
     counts = ctx.counts
     logger.info(
         "Metadata reconcile %s run %s (%s): %s. %d object(s) checked, %d drifted; %d statement(s), %d applied, "
-        "%d failed, %d tag removal(s); %d adopted, %d now exist, %d orphaned; %d catalog(s) skipped. "
-        "Observe %s ms, apply %s ms, total %s ms.",
+        "%d failed, %d tag removal(s), %d reported only (outside the enforced schemas); %d adopted, %d now exist, "
+        "%d orphaned; %d catalog(s) skipped. Observe %s ms, apply %s ms, total %s ms.",
         result.trigger, result.run_id, result.mode, result.status, result.objects_checked, result.objects_drifted,
         result.statements_planned, result.statements_applied, result.statements_failed, result.removals_planned,
+        result.statements_reported,
         counts.get("adopted", 0), counts.get("now_exist", 0), counts.get("orphaned", 0), len(result.skipped_catalogs),
         ctx.timings.get("observe_ms", 0), ctx.timings.get("apply_ms", 0), ctx.timings.get("total_ms", 0),
     )

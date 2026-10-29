@@ -884,6 +884,7 @@ class Settings(BaseSettings):
     METADATA_RECONCILE_MODE: str = _metadata.get("reconcile_mode", "plan")
     METADATA_RECONCILE_CRON: str = _metadata.get("reconcile_cron", "30 * * * *")
     METADATA_RECONCILE_CATALOGS: List[str] = list(_metadata.get("reconcile_catalogs", []))
+    METADATA_ENFORCE_SCHEMAS: List[str] = list(_metadata.get("enforce_schemas", []))
     METADATA_NEW_OBJECT_POLL_SECONDS: int = _metadata.get("new_object_poll_seconds", 60)
     METADATA_NEW_OBJECT_POLICY: str = _metadata.get("new_object_policy", "adopt")
     METADATA_EXEMPT_KEYS: List[str] = list(_metadata.get("exempt_keys", ["system.certification_status"]))
