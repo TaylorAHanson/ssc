@@ -97,7 +97,7 @@ Let the scheduled sweeps run for a few days.
 ## 6. Switch to enforce
 
 1. Set **Reconcile mode** to `enforce`.
-2. Under **Sync history**, choose **Check and sync now** and watch the run. It should
+2. Under **Sync history**, choose **Check now** and watch the run. It should
    apply only the statements you reviewed. Changes saved while the mode was `plan` were
    only planned, so this run is what applies them.
 3. If a run is **paused** by the circuit breaker, it wanted to remove more tags or

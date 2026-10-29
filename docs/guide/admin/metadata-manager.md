@@ -157,9 +157,11 @@ confused with **Admin** in the sidebar, which opens the platform dashboard) with
   adds what Unity Catalog has to your unsaved changes, so syncing stops undoing
   it;
 - **Sync history**: what each check did or, when syncing is set to report
-  only, would do, and any failures. **Preview a sync** and **Check and sync
-  now** start a check that runs in the background; on a large catalog it takes
-  a few minutes and the list updates when it finishes. You can leave the page.
+  only, would do, and any failures. **Check now** starts a full check that runs
+  in the background and does what the mode says: while syncing is report only
+  it lists what would be written, and once it's on it writes it. On a large
+  catalog it takes a few minutes and the list updates when it finishes. You
+  can leave the page.
   Each row counts only what that check looked at: a *full check* reads whole
   catalogs, while *only these objects* re-checks what was edited here or changed
   in Unity Catalog, so its 0 out of sync says nothing about anything else. What's
@@ -176,7 +178,7 @@ confused with **Admin** in the sidebar, which opens the platform dashboard) with
 - **Bring in many tables at once**: **Start managing catalogs** and **Import
   from a file**.
 
-### Starting out: start managing, preview, then sync
+### Starting out: start managing, report, then sync
 
 The first time an object is edited here, the change becomes its complete
 desired state, including the tags it already carries. Once syncing is on, any
@@ -189,21 +191,23 @@ existing catalogs under management before turning syncing on:
    if the latest check couldn't read the catalog: saving an out-of-date copy
    would let syncing remove tags added since.
 2. Leave **Reconcile mode** on **Plan** (shown on the page as *Report only*)
-   and choose **Preview a sync** under **Sync history**. A row appears
+   and choose **Check now** under **Sync history**. A row appears
    immediately as *Running*; when it finishes, it lists what syncing would set
    and remove, without changing anything. Check the removals. Hourly scheduled
-   checks are the same preview — you don't have to start one by hand.
+   checks report the same way — you don't have to start one by hand.
 3. Switch the mode to **Enforce** (shown as *Keeping Unity Catalog in sync*).
-   The next full check, or **Check and sync now**, applies everything saved in
-   the meantime.
+   From then on every check writes: the hourly one, the one that follows a
+   change made directly in Unity Catalog, and **Check now**. The first of them
+   applies everything saved in the meantime. Report only is the preview; there
+   isn't a separate one once syncing is on.
 
 To start with part of a catalog that people are already using, list one schema
-under **Enforce only in these schemas** before step 2. The preview then marks
+under **Enforce only in these schemas** before step 2. The check then marks
 each statement for the rest of the catalog *Report only*, and once you switch
 to Enforce only that schema is written; everything else in the catalog stays
 as it is in Unity Catalog, though edits to it are still saved here. The removal
 limit counts only removals in the listed schemas. It doesn't count a changed
-value, so read every statement for the schema in the preview, not just the
+value, so read every statement for the schema in that check, not just the
 removals.
 
 ## Who can edit

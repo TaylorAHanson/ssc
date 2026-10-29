@@ -526,7 +526,7 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "label": "Full sweep schedule", "type": "cron", "requires": ["features.metadata_v2"],
      "help": "When the whole snapshot is re-read from information_schema and every managed object is "
              "reconciled (5-field cron, UTC). Saved changes don't wait for this: they are applied within a poll "
-             "cycle. Leave BLANK to run sweeps only with Run now."},
+             "cycle. Leave BLANK to run sweeps only with Check now under Sync history."},
     {"group": "Metadata Manager", "section": "Reconciler", "key": "METADATA_RECONCILE_CATALOGS",
      "label": "Catalogs to reconcile", "type": "string_list", "add_label": "Add catalog",
      "requires": ["features.metadata_v2"],

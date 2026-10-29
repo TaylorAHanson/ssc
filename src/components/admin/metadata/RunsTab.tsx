@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Play, ScanSearch, ShieldAlert } from 'lucide-react';
+import { Play, ShieldAlert } from 'lucide-react';
 import { listRuns, startRun } from '../../../services/metadataApi';
-import type { ReconcileResult, RunRequest } from '../../../types/metadata';
+import type { MetadataConfig, ReconcileResult, RunRequest } from '../../../types/metadata';
 import { Button } from '../../ui/button';
 import { EmptyState, ErrorBanner, Modal, Notice, Pager, Skeleton } from '../../rbac/ui';
 import { RunStatusBadge } from './badges';
@@ -22,7 +22,7 @@ const TRIGGER_LABELS: Record<string, string> = {
 
 /** Sync history: what each check read, planned and wrote; admins can start or resume one. */
 export function RunsTab() {
-  const { isAdmin, refreshToken, bumpRefresh, notify, openRun } = useMetadata();
+  const { config, isAdmin, refreshToken, bumpRefresh, notify, openRun } = useMetadata();
   const [page, setPage] = useState(1);
   const [busy, setBusy] = useState<RunRequest['kind'] | 'resume' | null>(null);
   const [confirmResume, setConfirmResume] = useState(false);
@@ -85,16 +85,16 @@ export function RunsTab() {
       />
       {isAdmin && (
         <div className="flex flex-wrap items-center gap-2">
-          <Button size="sm" variant="outline" className="gap-1.5" disabled={inFlight} onClick={() => run({ kind: 'plan' }, 'plan')}>
-            <ScanSearch className="h-3.5 w-3.5" /> {busy === 'plan' || running ? 'Checking…' : 'Preview a sync'}
-          </Button>
-          <Button size="sm" className="gap-1.5" disabled={inFlight} onClick={() => run({ kind: 'sweep' }, 'sweep')}>
-            <Play className="h-3.5 w-3.5" /> {busy === 'sweep' ? 'Starting…' : 'Check and sync now'}
+          <Button
+            size="sm"
+            className="gap-1.5"
+            disabled={inFlight || config.reconcile_mode === 'off'}
+            onClick={() => run({ kind: 'sweep' }, 'sweep')}
+          >
+            <Play className="h-3.5 w-3.5" /> {busy === 'sweep' || running ? 'Checking…' : 'Check now'}
           </Button>
           <span className="text-xs text-gray-500">
-            {running
-              ? 'A check is running. Large catalogs take a few minutes; you can leave this page.'
-              : 'A preview only reports what would change. Check and sync writes it to Unity Catalog when syncing is on.'}
+            {running ? 'A check is running. Large catalogs take a few minutes; you can leave this page.' : checkNowNote(config)}
           </span>
         </div>
       )}
@@ -216,6 +216,16 @@ function runMessage(r: ReconcileResult): string {
   if (r.unread_catalogs?.length && r.objects_checked === 0) {
     return `Couldn’t read ${r.unread_catalogs.join(', ')} from Unity Catalog, so nothing was checked. The sync’s details say why.`;
   }
-  if (r.mode === 'plan') return `Preview finished: ${plural(r.statements_planned, 'statement')} would run.`;
+  if (r.mode === 'plan') return `Check finished: ${plural(r.statements_planned, 'statement')} would run once syncing is on.`;
   return `Sync finished: ${r.statements_applied} of ${plural(r.statements_planned, 'statement')} written.`;
+}
+
+/** What Check now does in the current mode. */
+function checkNowNote(config: MetadataConfig): string {
+  if (config.reconcile_mode === 'off') return 'Syncing is off, so Unity Catalog isn’t checked. Turn it on under Admin → Settings (Metadata Manager).';
+  if (config.reconcile_mode === 'enforce') {
+    const schemas = config.enforce_schemas ?? [];
+    return `Checks Unity Catalog and writes the differences${schemas.length ? ` in ${schemas.join(', ')}` : ''}.`;
+  }
+  return 'Checks Unity Catalog and lists what syncing would write. Nothing is written while syncing is report only.';
 }

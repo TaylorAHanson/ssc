@@ -851,7 +851,7 @@ def run_detached(
     lock conflict, a skipped mode). Otherwise return the still-running row so an
     HTTP caller can hang up; the thread keeps sweeping. A warehouse-sized catalog
     takes minutes and would otherwise time out the request and leave the UI stuck
-    on Previewing.
+    on Checking.
     """
     from app.db.session import get_lakebase_session
 

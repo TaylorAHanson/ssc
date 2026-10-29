@@ -19,6 +19,10 @@ Format rules (the app parses this file, so keep to them):
 
 - **A Metadata Manager check cut off by a redeploy no longer shows as running for hours.** When the app was redeployed or restarted in the middle of a check, that check stayed *Running* in Sync history for up to six hours. Meanwhile **Preview a sync** and **Check and sync now** stayed greyed out, so you couldn't start a new check. Now the stopped check is marked *Failed*, with a note that the app restarted, as soon as Sync history loads, and you can start a new check straight away. Checks that are still working, including ones running in another copy of the app, are left alone.
 
+### Changed
+
+- **Sync history has one Check now button instead of Preview a sync and Check and sync now.** The two did the same thing while syncing was report only. Once syncing was on, the preview wasn't a safeguard either, because the hourly check and the checks that follow changes in Unity Catalog write without one. **Check now** does what the mode says: while syncing is report only, it lists what would be written, and once syncing is on it writes it, only in the schemas syncing is limited to. To see what syncing would do before it does anything, leave it on report only and read the checks it records. While syncing is off, the button is greyed out, because Unity Catalog isn't checked at all.
+
 ## 2.8.0 — 2026-10-29
 
 ### Added
