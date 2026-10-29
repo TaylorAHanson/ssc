@@ -3,7 +3,7 @@ import { renderMarkdownSafe } from '../../../lib/markdown';
 import type { ChangePreview, Finding, ItemDecision } from '../../../types/metadata';
 import { Badge, Notice } from '../../rbac/ui';
 import { EnvBadge, OutcomeBadge } from './badges';
-import { VIA_LABELS, describeItem, objectLabel, outcomeOf, plural, realEditCount } from './format';
+import { VIA_LABELS, describeItem, objectLabel, outcomeOf, plural, realEditCount, stopsManaging } from './format';
 
 const MAX_ITEMS = 200;
 
@@ -88,6 +88,11 @@ export function PreviewView({ preview, reasonOk }: { preview: ChangePreview; rea
                       Starts being managed
                     </Badge>
                   )}
+                  {stopsManaging(first) && (
+                    <Badge tone="gray" title="Undoing the change that started managing it. Unity Catalog keeps its tags and description.">
+                      Stops being managed
+                    </Badge>
+                  )}
                   {first.copied_from && <span className="text-xs text-gray-500">copied from {first.copied_from}</span>}
                 </div>
                 <ul className="list-plain space-y-1.5">
@@ -128,7 +133,11 @@ function DecisionRow({ decision }: { decision: ItemDecision }) {
     <li className="text-sm">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <span className={`min-w-0 break-words font-mono text-xs ${kept ? 'text-gray-500' : 'text-gray-800'}`}>{describeItem(decision.item)}</span>
-        {kept ? <Badge tone="gray">Already in Unity Catalog</Badge> : <OutcomeBadge outcome={outcome} />}
+        {kept ? (
+          <Badge tone="gray">{decision.item.object_exists ? 'Stays in Unity Catalog' : 'Already in Unity Catalog'}</Badge>
+        ) : (
+          <OutcomeBadge outcome={outcome} />
+        )}
       </div>
       {why.filter(Boolean).length > 0 && (
         <ul className="mt-0.5 list-disc pl-5 text-xs text-gray-600">

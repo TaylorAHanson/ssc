@@ -26,8 +26,10 @@ def test_manages(monkeypatch, configured, catalog, managed):
 
 
 @pytest.mark.parametrize("configured,fqn_key,enforced", [
-    ([], "c", True),
-    ([], "c.s.t::col", True),
+    ([], "c", False),
+    ([], "c.s.t::col", False),
+    (["*"], "c", True),
+    (["*"], "c.s.t::col", True),
     (["c.pilot"], "c.pilot", True),
     (["c.pilot"], "C.Pilot.Orders::Email", True),
     (["c.pilot"], "c.pilot_old.t", False),
@@ -49,12 +51,44 @@ def test_catalog_of_handles_every_level():
 def test_enforce_blocked_reason_only_when_enforce_has_no_list(monkeypatch):
     monkeypatch.setattr(settings, "METADATA_RECONCILE_MODE", "enforce")
     monkeypatch.setattr(settings, "METADATA_RECONCILE_CATALOGS", [])
+    monkeypatch.setattr(settings, "METADATA_ENFORCE_SCHEMAS", ["*"])
     assert "Catalogs to reconcile is blank" in scope.enforce_blocked_reason()
     monkeypatch.setattr(settings, "METADATA_RECONCILE_CATALOGS", ["*"])
     assert scope.enforce_blocked_reason() is None
+    monkeypatch.setattr(settings, "METADATA_ENFORCE_SCHEMAS", [])
+    assert "Enforce only in these schemas is blank" in scope.enforce_blocked_reason()
     monkeypatch.setattr(settings, "METADATA_RECONCILE_MODE", "plan")
     monkeypatch.setattr(settings, "METADATA_RECONCILE_CATALOGS", [])
     assert scope.enforce_blocked_reason() is None
+
+
+def test_a_cleared_schema_list_turns_enforce_into_report_only(monkeypatch):
+    from app.services.metadata import reconciler
+
+    monkeypatch.setattr(settings, "METADATA_RECONCILE_MODE", "enforce")
+    monkeypatch.setattr(settings, "METADATA_RECONCILE_CATALOGS", ["c"])
+    monkeypatch.setattr(settings, "METADATA_ENFORCE_SCHEMAS", ["c.pilot"])
+    assert reconciler.current_mode() == "enforce"
+    monkeypatch.setattr(settings, "METADATA_ENFORCE_SCHEMAS", [])
+    assert reconciler.current_mode() == "plan"
+
+
+@pytest.mark.parametrize("value,ok", [
+    ("*", True), ("sales_dev.bronze", True), ("sales_dev.*_raw", True), ("*_dev.bronze", True),
+    ("sales_dev", False), ("sales_dev.bronze.orders", False), ("sales_dev.", False), (".bronze", False),
+    ("sales dev.bronze", False), ("sales_dev.`x`", False),
+])
+def test_schema_list_entries_must_be_catalog_dot_schema(value, ok):
+    assert (scope.schema_pattern_problem(value) is None) is ok
+
+
+def test_saving_a_bad_schema_entry_is_refused():
+    from app.core import settings_store
+
+    field = settings_store._validate_key("METADATA_ENFORCE_SCHEMAS")
+    assert settings_store._coerce(field, ["sales_dev.bronze", "*"]) == ["sales_dev.bronze", "*"]
+    with pytest.raises(ValueError, match="isn't catalog.schema"):
+        settings_store._coerce(field, ["sales_dev"])
 
 
 def test_outside_message_lists_a_few_names(monkeypatch):

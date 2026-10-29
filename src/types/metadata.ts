@@ -218,7 +218,11 @@ export interface ChangeItem {
   after?: string | null;
   object_exists: boolean;
   object_state: ObjectState;
-  /** The change starts managing an existing object, and Unity Catalog already has this value. */
+  /**
+   * Nothing changes in Unity Catalog. With `object_exists` false, the change starts managing an existing object and
+   * Unity Catalog already has this value (it's kept). With `object_exists` true, an undo stops managing the object
+   * and Unity Catalog keeps this value.
+   */
   unchanged_in_uc?: boolean;
   /** The caller can't browse this object, so `before` is withheld. */
   before_hidden?: boolean;
@@ -258,7 +262,7 @@ export interface ChangePreview {
   approval_count: number;
   denied_count: number;
   noop_count: number;
-  /** Of direct_count: items that are `unchanged_in_uc`. */
+  /** Of direct_count: kept values (`unchanged_in_uc` on an object not managed yet). */
   kept_count?: number;
   needs_approval: boolean;
   approver_groups: string[];
@@ -400,7 +404,6 @@ export interface ReconcileAccepted {
 export interface RunRequest {
   kind?: 'sweep' | 'plan' | 'queue';
   catalogs?: string[];
-  override_circuit_breaker?: boolean;
 }
 
 // --- Search and detail ---------------------------------------------------------------
@@ -554,11 +557,15 @@ export interface MetadataConfig {
   /** Same catalogs with a short reason the browse page can show. */
   unread_reasons?: Record<string, string>;
   circuit_breaker_tripped: boolean;
+  /** The paused sync to review while syncing is paused. */
+  circuit_breaker_run_id?: string | null;
+  /** Whether this user may resume or clear a paused sync (Platform Admins). */
+  can_resume_sync?: boolean;
   /** Catalog names or patterns this deployment manages; empty = every catalog, but plan only. */
   managed_catalogs: string[];
-  /** catalog.schema names or patterns syncing writes to; empty = every schema of managed_catalogs. */
+  /** catalog.schema names or patterns syncing writes to; `*` = everything, empty = nothing. */
   enforce_schemas?: string[];
-  /** Set when enforce is configured but can't run because no catalogs are listed. */
+  /** Set when enforce is configured but can't run because no catalogs or schemas are listed. */
   enforce_blocked_reason?: string | null;
 }
 

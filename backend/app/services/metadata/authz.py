@@ -458,11 +458,35 @@ class _Batch:
         if settings.METADATA_UC_OWNER_IS_AUTHORITY and actor.actor_type == "user" and not actor.is_admin:
             self.uc_owners = _observed_owners(db, (f for k in self.keys for f in _uc_owner_keys(k)), observed)
 
-    def decide(self, item: ChangeItem, key: ObjectKey) -> ItemDecision:
+    def decide(self, item: ChangeItem, key: ObjectKey, *, seeded: bool = False) -> ItemDecision:
         findings = policy.check_item(item, governed=self.governed)
-        if item.unchanged_in_uc:
-            return _kept(item, findings)
+        if item.kept:
+            return self._kept(item, key, findings, seeded=seeded)
+        if item.stops_managing:
+            findings = _soften(findings, _UC_KEEPS_NOTE)
         return ItemDecision(item=item, decision=self._decision(item, key, findings), findings=findings)
+
+    def _kept(self, item: ChangeItem, key: ObjectKey, findings: List[Finding], *, seeded: bool) -> ItemDecision:
+        """A value UC already has, carried into an object's first desired row.
+
+        It changes nothing there, so a caller who may make or request the change gets it
+        directly and a policy problem with it is only a warning; one who may do neither
+        is denied. A ``seeded`` value (one no op named) is only checked against the
+        object: the caller's own edit of the object carries it in.
+        """
+        findings = _soften(findings, _KEPT_NOTE)
+        if seeded:
+            problem = (_principal_problem(self.actor, key, _environment(item, key))
+                       if self.actor.actor_type == "service_principal" else None)
+            if problem:
+                return ItemDecision(item=item, decision=AuthzDecision(can_request=False, reasons=[problem]),
+                                    findings=findings)
+        else:
+            decision = self._decision(item, key, findings)
+            if not decision.allowed and not decision.can_request:
+                return ItemDecision(item=item, decision=decision, findings=findings)
+        return ItemDecision(item=item, decision=AuthzDecision(allowed=True, reasons=["Unity Catalog already has this."]),
+                            findings=findings)
 
     def _decision(self, item: ChangeItem, key: ObjectKey, findings: List[Finding]) -> AuthzDecision:
         actor = self.actor
@@ -552,19 +576,13 @@ class _Batch:
 
 
 _KEPT_NOTE = " Unity Catalog already has this value, so it's kept as is."
+_UC_KEEPS_NOTE = " Unity Catalog keeps this value: it's only no longer managed."
 
 
-def _kept(item: ChangeItem, findings: List[Finding]) -> ItemDecision:
-    """A value UC already has, carried into an object's first desired row: it changes nothing
-    there, so it needs no approval and a policy problem with it is only a warning."""
-    return ItemDecision(
-        item=item,
-        decision=AuthzDecision(allowed=True, reasons=["Unity Catalog already has this."]),
-        findings=[
-            f.model_copy(update={"severity": "warn", "message": f.message + _KEPT_NOTE}) if f.severity == "deny" else f
-            for f in findings
-        ],
-    )
+def _soften(findings: List[Finding], note: str) -> List[Finding]:
+    """Deny findings as warnings, for an item that changes nothing in UC."""
+    return [f.model_copy(update={"severity": "warn", "message": f.message + note}) if f.severity == "deny" else f
+            for f in findings]
 
 
 def decide(
@@ -573,10 +591,16 @@ def decide(
     items: Sequence[ChangeItem],
     *,
     observed: Optional[Dict[str, ObservedState]] = None,
+    seeded: Iterable[Tuple[str, str, Optional[str]]] = (),
 ) -> List[ItemDecision]:
     """One decision per item, in order, with its policy findings (``policy.check_item``).
 
-    An ``unchanged_in_uc`` item is allowed directly and its deny findings become warnings.
+    A ``kept`` item (a value UC already has, in an object's first desired row) is
+    decided as usual, then allowed directly when the actor may make or request it,
+    and denied when it may do neither; its deny findings become warnings. ``seeded``
+    lists the (fqn_key, field, tag key or None) of kept items no op named: those are
+    only checked against the object. A ``stops_managing`` item is decided as usual,
+    with its deny findings as warnings.
 
     ``observed`` (fqn_key -> snapshot row) supplies UC owners when
     METADATA_UC_OWNER_IS_AUTHORITY is on; keys it lacks are read from the snapshot table.
@@ -589,7 +613,11 @@ def decide(
     if not items:
         return []
     batch = _Batch(db, actor, items, observed)
-    return [batch.decide(item, key) for item, key in zip(items, batch.keys)]
+    seeded = set(seeded)
+    return [
+        batch.decide(item, key, seeded=(item.fqn_key, item.field, item.key if item.field == "tag" else None) in seeded)
+        for item, key in zip(items, batch.keys)
+    ]
 
 
 # --- Editable scope -------------------------------------------------------------------

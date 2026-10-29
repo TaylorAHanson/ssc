@@ -117,13 +117,19 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
           <label className="flex cursor-pointer items-start gap-2 text-sm">
             <input type="radio" name={`${id}-mode`} checked={mode === 'merge'} onChange={() => setMode('merge')} className="mt-0.5" />
             <span>
-              Add and update <span className="block text-xs text-gray-500">Tags in the file are set; tags not in the file are left alone.</span>
+              Add and update{' '}
+              <span className="block text-xs text-gray-500">
+                Tags in the file are set; the object’s other tags are left alone, including ones it has in Unity Catalog but that aren’t managed here yet.
+              </span>
             </span>
           </label>
           <label className="flex cursor-pointer items-start gap-2 text-sm">
             <input type="radio" name={`${id}-mode`} checked={mode === 'replace'} onChange={() => setMode('replace')} className="mt-0.5" />
             <span>
-              Replace <span className="block text-xs text-gray-500">Each object ends up with exactly the tags in the file; others are removed.</span>
+              Replace{' '}
+              <span className="block text-xs text-gray-500">
+                Each object ends up with exactly the tags in the file. Its other tags are removed, including ones it only has in Unity Catalog, and the preview lists each removal.
+              </span>
             </span>
           </label>
         </fieldset>

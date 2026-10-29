@@ -272,37 +272,9 @@ def expand_request(db: Session, request: ChangeRequest, *, browse: Optional[auth
     return Expansion(request=request.model_copy(update={"ops": ops}), findings=findings, matched=matched)
 
 
-UNMANAGED_SHOWN = 3
-
-
-def _collapse_unmanaged(findings: List[Finding]) -> List[Finding]:
-    """One warning per unmanaged object drowns a bulk preview; keep a few and summarize the rest."""
-    unmanaged = [f for f in findings if f.code == "unmanaged_object"]
-    if len(unmanaged) <= UNMANAGED_SHOWN:
-        return findings
-    rest = len(unmanaged) - UNMANAGED_SHOWN
-    summary = Finding(
-        code="unmanaged_objects", severity="warn",
-        message=(f"{rest:,} more object(s) aren't managed yet either, so this change becomes their complete "
-                 "desired state and the tags they carry in Unity Catalog now will be removed. Adopt their "
-                 "catalog or schema first to keep them."),
-    )
-    out: List[Finding] = []
-    shown = 0
-    for f in findings:
-        if f.code != "unmanaged_object":
-            out.append(f)
-        elif shown < UNMANAGED_SHOWN:
-            out.append(f)
-            shown += 1
-            if shown == UNMANAGED_SHOWN:
-                out.append(summary)
-    return out
-
-
 def _with_findings(preview: Optional[ChangePreview], findings: List[Finding]) -> None:
     if preview is not None:
-        preview.findings = _collapse_unmanaged([*findings, *preview.findings])
+        preview.findings = [*findings, *preview.findings]
 
 
 def preview(db: Session, request: ChangeRequest, actor: Actor, *,

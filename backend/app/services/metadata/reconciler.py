@@ -5,8 +5,9 @@ It refreshes the snapshot for that scope, diffs every managed row against UC und
 full enforcement, then records the plan (``plan``) or applies it and records the
 outcome (``enforce``). Catalogs outside
 METADATA_RECONCILE_CATALOGS (``scope``) are never touched, and enforce needs that list
-to be set. A run that would remove more tags or descriptions than
-METADATA_MAX_REMOVALS_PER_RUN trips the circuit breaker and applies nothing.
+to be set. A run that would take removals (tags or descriptions removed or blanked)
+over METADATA_MAX_REMOVALS_PER_RUN within the last hour trips the circuit breaker
+and applies nothing.
 
 ``drain_queue`` runs the oldest due queue rows as one run, deletes the rows that
 converged and backs off the rest. ``reconcile_task`` is the poller's entry point
@@ -34,7 +35,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
 
 from croniter import CroniterBadCronError, croniter
-from sqlalchemy import and_, bindparam, delete, func, insert, select, text, update
+from sqlalchemy import and_, bindparam, case, delete, event, func, insert, or_, select, text, update
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -87,10 +88,22 @@ _ACCEPT_SECONDS = 2.0
 
 MODES = ("off", "plan", "enforce")
 CIRCUIT_BREAKER_KEY = "reconciler.circuit_breaker"
+# Removals count against METADATA_MAX_REMOVALS_PER_RUN together across this window, so
+# queue batches and back-to-back runs can't each stay under the limit.
+REMOVAL_WINDOW = timedelta(hours=1)
+DEFAULT_REMOVAL_LIMIT = 50
 # Session-level Postgres advisory lock key that keeps reconcile runs single flight across replicas.
 _ADVISORY_LOCK_KEY = 5_006_202_610_200_001
 # True while this context holds that lock; start_run then knows no other run can be live.
 _holding_run_lock: contextvars.ContextVar[bool] = contextvars.ContextVar("metadata_holding_run_lock", default=False)
+# While a run holds the lock: whether its own connection still does (Postgres only).
+_lock_check: contextvars.ContextVar[Optional[Callable[[], bool]]] = contextvars.ContextVar(
+    "metadata_lock_check", default=None,
+)
+# Set on app shutdown: a writing run stops between relations instead of being cut off mid-statement.
+_shutdown = threading.Event()
+# How often, at most, a writing run re-checks its lock and the settings.
+_STOP_CHECK_SECONDS = 5.0
 _MAX_PAGE_SIZE = 500
 _IN_CHUNK = 500
 _WRITE_CHUNK = 1000
@@ -106,13 +119,34 @@ _DEFAULT_APPLY_WORKERS = 8
 # Desired rows planned per step of a sweep (whole relations, so a relation's columns stay together).
 _SWEEP_CHUNK = 2000
 _MAX_ERROR = 2000
+# Per statement of a run against the app database (the warehouse reads have their own limits).
+# Every statement is chunked, so the slowest takes seconds; these only end a stuck one.
+_STATEMENT_TIMEOUT_MS = 15 * 60 * 1000
+_LOCK_TIMEOUT_MS = 60 * 1000
+# Sync history older than METADATA_RUN_HISTORY_DAYS is deleted this many runs at a time.
+_PRUNE_BATCH = 200
 # Queue reasons whose unmanaged objects the new-object policy adopts. Other reasons
 # (a change, a manual run) name objects that should already have desired state.
 _ADOPT_REASONS = ("new_object", "notify")
 _ADOPT_REASON = "New in Unity Catalog with no desired state; adopted as observed (METADATA_NEW_OBJECT_POLICY=adopt)."
+_MERGE_REASON = (
+    "Created or recreated in Unity Catalog under existing desired state; kept the tags and description it was "
+    "created with that the desired state doesn't set."
+)
+# UC created times that differ by less than this are the same object (stored precision varies).
+_CREATED_SLACK = timedelta(seconds=1)
+# Queue reasons that only report a change seen in Unity Catalog. Re-queueing a row for one keeps its
+# attempt count and backoff, so an object something else keeps changing still reaches the alert.
+_OBSERVED_REASONS = ("new_object",)
+# A queue row for a change seen in UC whose object was written in this many runs within the window
+# is backed off rather than done: something keeps changing it back, or UC stores it differently.
+_REWRITE_LIMIT = 3
+_REWRITE_WINDOW = timedelta(hours=1)
 
 _QUEUE = MetadataReconcileQueueModel.__table__
 _OBJECTS = MetadataObjectModel.__table__
+_ITEMS = MetadataReconcileItemModel.__table__
+_RUNS = MetadataReconcileRunModel.__table__
 
 
 def queue_key(fqn_key: str) -> str:
@@ -127,45 +161,79 @@ def enqueue(
     reason: str = "change",
     requested_by: Optional[str] = None,
     change_set_id: Optional[str] = None,
+    not_before: Optional[datetime] = None,
 ) -> List[str]:
-    """Add objects to the queue (deduplicated per relation), due now. Doesn't commit: callers enqueue inside their transaction.
+    """Add objects to the queue (deduplicated per relation), due at ``not_before`` (default now).
+    Doesn't commit: callers enqueue inside their transaction.
 
-    Re-enqueueing a row that was backing off makes it due now with a fresh attempt count.
+    Re-enqueueing a row that was backing off makes it due then with a fresh attempt
+    count, except for a change seen in Unity Catalog (``new_object``), which keeps
+    both and never makes a row due sooner. One upsert, so two edits queueing the same
+    new object at once don't collide.
     """
     keys = sorted({queue_key(k) for k in fqn_keys if k})
     if not keys:
         return []
+    enqueued_at = _utcnow()
+    now = max(not_before, enqueued_at) if not_before is not None else enqueued_at
+    dialect = db.get_bind().dialect.name
+    if dialect in ("postgresql", "sqlite"):
+        if dialect == "postgresql":
+            from sqlalchemy.dialects.postgresql import insert as upsert
+        else:
+            from sqlalchemy.dialects.sqlite import insert as upsert
+        stmt = upsert(_QUEUE)
+        new = stmt.excluded
+        updates = {
+            "reason": new.reason,
+            "requested_by": func.coalesce(new.requested_by, _QUEUE.c.requested_by),
+            "change_set_id": func.coalesce(new.change_set_id, _QUEUE.c.change_set_id),
+        }
+        if reason in _OBSERVED_REASONS:
+            updates["not_before"] = case((_QUEUE.c.not_before > new.not_before, _QUEUE.c.not_before), else_=new.not_before)
+        else:
+            updates.update(not_before=new.not_before, attempts=0, last_error=None)
+        stmt = stmt.on_conflict_do_update(index_elements=[_QUEUE.c.fqn_key], set_=updates)
+        rows = [{
+            "fqn_key": key, "reason": reason, "requested_by": requested_by, "change_set_id": change_set_id,
+            "attempts": 0, "last_error": None, "enqueued_at": enqueued_at, "not_before": now,
+        } for key in keys]
+        for start in range(0, len(rows), _WRITE_CHUNK):
+            db.execute(stmt, rows[start:start + _WRITE_CHUNK])
+        return keys
     existing: Dict[str, MetadataReconcileQueueModel] = {}
     for start in range(0, len(keys), _IN_CHUNK):
         chunk = keys[start:start + _IN_CHUNK]
         for row in db.query(MetadataReconcileQueueModel).filter(MetadataReconcileQueueModel.fqn_key.in_(chunk)):
             existing[row.fqn_key] = row
-    now = _utcnow()
     for key in keys:
         row = existing.get(key)
         if row is None:
             db.add(MetadataReconcileQueueModel(
                 fqn_key=key, reason=reason, requested_by=requested_by, change_set_id=change_set_id,
-                enqueued_at=now, not_before=now,
+                enqueued_at=enqueued_at, not_before=now,
             ))
         else:
             row.reason = reason
             row.requested_by = requested_by or row.requested_by
             row.change_set_id = change_set_id or row.change_set_id
-            row.not_before = now
-            row.attempts = 0
-            row.last_error = None
+            if reason in _OBSERVED_REASONS:
+                row.not_before = max(row.not_before or now, now)
+            else:
+                row.not_before, row.attempts, row.last_error = now, 0, None
     return keys
 
 
 def current_mode() -> ReconcileMode:
-    """METADATA_RECONCILE_MODE; blank or unknown is ``plan`` (writes nothing), and so is enforce with no catalog list."""
+    """METADATA_RECONCILE_MODE; blank or unknown is ``plan`` (writes nothing), and so is enforce with no
+    catalog list or no schema list."""
     global _bad_mode
     raw = str(getattr(settings, "METADATA_RECONCILE_MODE", "") or "").strip().lower()
-    if raw == "enforce" and not scope.is_explicit():
+    if raw == "enforce" and (not scope.is_explicit() or not scope.enforce_patterns()):
         if _bad_mode != "enforce":
-            logger.warning("METADATA_RECONCILE_MODE is enforce but METADATA_RECONCILE_CATALOGS is blank; "
-                           "reconciling in plan mode (no writes).")
+            blank = "METADATA_RECONCILE_CATALOGS" if not scope.is_explicit() else "METADATA_ENFORCE_SCHEMAS"
+            logger.warning("METADATA_RECONCILE_MODE is enforce but %s is blank; reconciling in plan mode (no writes).",
+                           blank)
             _bad_mode = "enforce"
         return "plan"
     if raw in MODES:
@@ -194,7 +262,7 @@ _REPORTED_DETAIL = "Outside the schemas this deployment enforces (Enforce only i
 
 
 def _removal_limit() -> int:
-    return max(0, _int_setting("METADATA_MAX_REMOVALS_PER_RUN", 200))
+    return max(0, _int_setting("METADATA_MAX_REMOVALS_PER_RUN", DEFAULT_REMOVAL_LIMIT))
 
 
 def _apply_workers() -> int:
@@ -251,15 +319,21 @@ def circuit_breaker_tripped(db: Session) -> bool:
 
 
 def trip_circuit_breaker(
-    db: Session, *, run_id: str, removals: int, limit: int, reason: Optional[str] = None,
+    db: Session, *, run_id: str, removals: int, limit: int, reason: Optional[str] = None, recent: int = 0,
 ) -> dict:
     """Record that a run was paused for too many removals. Doesn't commit."""
+    if reason is None:
+        reason = f"The run would remove {removals} tags or descriptions; the limit is {limit} an hour."
+        if recent:
+            reason = (f"The run would remove {removals} tags or descriptions, and {recent} were already removed in "
+                      f"the last hour; the limit is {limit} an hour.")
     value = {
         "tripped": True,
         "run_id": run_id,
         "removals": int(removals),
+        "recent_removals": int(recent),
         "limit": int(limit),
-        "reason": reason or f"The run would remove {removals} tags or descriptions; the limit is {limit}.",
+        "reason": reason,
         "tripped_at": _utcnow().isoformat(),
     }
     _set_state(db, CIRCUIT_BREAKER_KEY, value)
@@ -275,6 +349,33 @@ def clear_circuit_breaker(db: Session, *, cleared_by: Optional[str] = None) -> b
         "tripped": False, "cleared_by": cleared_by, "cleared_at": _utcnow().isoformat(), "last_trip": previous,
     })
     return True
+
+
+def _parse_time(value: object) -> Optional[datetime]:
+    try:
+        parsed = datetime.fromisoformat(str(value)) if value else None
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=None) if parsed else None
+
+
+def recent_removals(db: Session, *, now: Optional[datetime] = None) -> int:
+    """Tags and descriptions enforce removed or blanked in the last REMOVAL_WINDOW.
+
+    Counting restarts when an admin clears the breaker, and overriding runs (reviewed
+    removals) aren't counted.
+    """
+    since = (now or _utcnow()) - REMOVAL_WINDOW
+    cleared = _parse_time((_get_state(db, CIRCUIT_BREAKER_KEY) or {}).get("cleared_at"))
+    if cleared is not None and cleared > since:
+        since = cleared
+    Run = MetadataReconcileRunModel
+    rows = (
+        db.query(Run.summary)
+        .filter(Run.mode == "enforce", Run.started_at >= since - _ABANDONED_RUN_AGE, Run.finished_at >= since)
+        .all()
+    )
+    return sum(int((s or {}).get("removals_applied") or 0) for (s,) in rows if not (s or {}).get("override"))
 
 
 def _paused_reason(breaker: dict) -> str:
@@ -397,6 +498,10 @@ _ABANDONED_RUN_ERROR = (
     "This run stopped before it finished, most likely because the app restarted while it was working. "
     "Later runs aren't affected."
 )
+_LOST_LOCK_ERROR = (
+    "This run lost its database lock while working, so it was marked stopped and another run could start. "
+    "It stopped writing when it noticed; what it did is listed below."
+)
 
 
 def _worker() -> str:
@@ -417,6 +522,15 @@ def _worker_gone(worker: object) -> bool:
     return False
 
 
+# A bigint advisory key shows in pg_locks as classid (high 32 bits), objid (low 32 bits), objsubid 1.
+_LOCK_ROW = (
+    "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND granted AND objsubid = 1"
+    " AND database = (SELECT oid FROM pg_database WHERE datname = current_database())"
+    " AND classid::bigint = :hi AND objid::bigint = :lo{extra})"
+)
+_LOCK_PARAMS = {"hi": (_ADVISORY_LOCK_KEY >> 32) & 0xFFFFFFFF, "lo": _ADVISORY_LOCK_KEY & 0xFFFFFFFF}
+
+
 def _run_lock_held(db: Session) -> Optional[bool]:
     """Whether any session holds the reconcile advisory lock; ``None`` when that can't be told (SQLite, an error)."""
     bind = db.get_bind()
@@ -425,12 +539,7 @@ def _run_lock_held(db: Session) -> Optional[bool]:
     engine = getattr(bind, "engine", bind)
     try:
         with engine.connect() as conn:
-            # A bigint advisory key shows in pg_locks as classid (high 32 bits), objid (low 32 bits), objsubid 1.
-            return bool(conn.execute(text(
-                "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND granted AND objsubid = 1"
-                " AND database = (SELECT oid FROM pg_database WHERE datname = current_database())"
-                " AND classid::bigint = :hi AND objid::bigint = :lo)"
-            ), {"hi": _ADVISORY_LOCK_KEY >> 32, "lo": _ADVISORY_LOCK_KEY & 0xFFFFFFFF}).scalar())
+            return bool(conn.execute(text(_LOCK_ROW.format(extra="")), _LOCK_PARAMS).scalar())
     except Exception:  # noqa: BLE001
         logger.warning("Metadata: couldn't check whether a reconcile run holds the lock", exc_info=True)
         return None
@@ -442,7 +551,7 @@ def _close_abandoned_runs(db: Session, *, holding_lock: bool = False) -> int:
     On Postgres every live run holds the advisory lock, so when nobody holds it each ``running``
     row is left over, wherever it ran. ``holding_lock`` says the caller holds it and has no row
     yet (a run starting), so every ``running`` row is. Without that signal, a row counts as left
-    over once its process on this host is gone. A very old row always does.
+    over once its process on this host is gone. A very old row does too, unless the lock is held.
     """
     running = (
         db.query(MetadataReconcileRunModel.id, MetadataReconcileRunModel.started_at, MetadataReconcileRunModel.summary)
@@ -458,7 +567,7 @@ def _close_abandoned_runs(db: Session, *, holding_lock: bool = False) -> int:
     for run_id, started_at, summary in running:
         left_over = (
             held is False
-            or started_at < cutoff
+            or (started_at < cutoff and held is not True)
             or (held is None and _worker_gone((summary or {}).get(_WORKER_KEY)))
         )
         if not left_over:
@@ -511,10 +620,21 @@ def finish_run(
     error: Optional[str] = None,
     summary: Optional[dict] = None,
 ) -> ReconcileResult:
-    """Write the run's statements and counters, close it and commit. Raises ``errors.NotFound``."""
+    """Write the run's statements and counters, close it and commit. Raises ``errors.NotFound``.
+
+    A row another process already closed (it saw the run's lock gone) keeps its status; what
+    the run did is still recorded on it.
+    """
     run = db.get(MetadataReconcileRunModel, run_id)
     if run is None:
         raise errors.NotFound(f"Reconcile run '{run_id}' not found.")
+    db.refresh(run)
+    closed_as = run.status if run.status != "running" else None
+    if closed_as:
+        logger.warning("Metadata reconcile run %s was closed as %s while it was still working; recording what it "
+                       "did without reopening it.", run_id, closed_as)
+        status = closed_as  # type: ignore[assignment]
+        error = _LOST_LOCK_ERROR + (f" {error}" if error else "")
     now = _utcnow()
     rows = [
         {
@@ -546,6 +666,9 @@ def finish_run(
     run.paused_reason = paused_reason
     run.error = error
     counts = {"reported": len(outcomes) - len(written)} if len(written) < len(outcomes) else {}
+    removed = sum(int(o.removals or 0) for o in written if o.status == "applied")
+    if removed:
+        counts["removals_applied"] = removed
     run.summary = {k: v for k, v in {**(run.summary or {}), **(summary or {}), **counts}.items() if k != _WORKER_KEY}
     run.finished_at = now
     db.commit()
@@ -656,10 +779,22 @@ def _single_flight(db: Session) -> Iterator[None]:
             raise ReconcileBusy(
                 "A check of Unity Catalog is already running. Wait for it to finish — it appears under Sync history."
             )
+
+        def still_held() -> bool:
+            try:
+                held = conn.execute(text(_LOCK_ROW.format(extra=" AND pid = pg_backend_pid()")), _LOCK_PARAMS).scalar()
+                conn.commit()
+                return bool(held)
+            except Exception:  # noqa: BLE001 - a dropped connection means the lock is gone
+                logger.warning("Metadata: couldn't confirm the reconcile run still holds its lock", exc_info=True)
+                return False
+
         holding = _holding_run_lock.set(True)
+        checking = _lock_check.set(still_held)
         try:
             yield
         finally:
+            _lock_check.reset(checking)
             _holding_run_lock.reset(holding)
             try:
                 conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": _ADVISORY_LOCK_KEY})
@@ -670,6 +805,31 @@ def _single_flight(db: Session) -> Iterator[None]:
                 conn.invalidate()
     finally:
         conn.close()
+
+
+@contextmanager
+def _bounded_waits(db: Session) -> Iterator[None]:
+    """Postgres statement and lock timeouts on each of ``db``'s transactions while a run holds the lock.
+
+    A query stuck behind another session's lock would otherwise hang the run, and
+    with it every later check, for as long as that session stays open. SET LOCAL ends
+    with each transaction, so a pooled connection doesn't keep the limits.
+    """
+    if db.get_bind().dialect.name != "postgresql":
+        yield
+        return
+
+    def limit(_session, _transaction, connection) -> None:
+        connection.exec_driver_sql(f"SET LOCAL statement_timeout = {_STATEMENT_TIMEOUT_MS}")
+        connection.exec_driver_sql(f"SET LOCAL lock_timeout = {_LOCK_TIMEOUT_MS}")
+
+    event.listen(db, "after_begin", limit)
+    try:
+        if db.in_transaction():
+            limit(db, None, db.connection())
+        yield
+    finally:
+        event.remove(db, "after_begin", limit)
 
 
 def _sweep_due(now: Optional[datetime] = None) -> bool:
@@ -753,6 +913,70 @@ def _alert_governance(subject: str, lines: Sequence[str]) -> None:
         logger.warning("Couldn't email the metadata reconciler alert '%s': %s", subject, e)
 
 
+# --- Stopping a run that's writing ------------------------------------------------------
+
+
+def request_shutdown(wait_seconds: float = 10.0) -> None:
+    """Tell running reconciles to stop writing, and give detached ones a moment to record it. App shutdown."""
+    _shutdown.set()
+    deadline = time.monotonic() + max(0.0, wait_seconds)
+    for thread in list(_live_runs):
+        thread.join(max(0.0, deadline - time.monotonic()))
+
+
+def _refresh_settings(db: Session) -> None:
+    """Pick up Metadata Manager settings saved on another replica."""
+    from app.core import settings_store
+
+    settings_store.refresh_overrides(db, "METADATA_")
+
+
+def _write_scope() -> Tuple:
+    return current_mode(), tuple(scope.patterns()), tuple(scope.enforce_patterns())
+
+
+class _StopCheck:
+    """Why a writing run must stop, or None.
+
+    It stops when the app is shutting down, when its connection no longer holds the run
+    lock (another run may have started), or when the mode or what it may write changed
+    since it started, on this replica or another. Checks at most every few seconds,
+    thread-safe; once it says stop it keeps saying so.
+    """
+
+    def __init__(self, db: Session, *, interval: Optional[float] = None):
+        self._bind = db.get_bind()
+        self._lock_alive = _lock_check.get()
+        self._scope = _write_scope()
+        interval = _STOP_CHECK_SECONDS if interval is None else interval
+        self._interval = interval
+        self._next = _monotonic() + interval
+        self._mutex = threading.Lock()
+        self.reason: Optional[str] = None
+
+    def __call__(self, *, force: bool = False) -> Optional[str]:
+        with self._mutex:
+            if self.reason is None and _shutdown.is_set():
+                self.reason = "The app is shutting down."
+            if self.reason is not None or (not force and _monotonic() < self._next):
+                return self.reason
+            self._next = _monotonic() + self._interval
+            self.reason = self._check()
+            return self.reason
+
+    def _check(self) -> Optional[str]:
+        if self._lock_alive is not None and not self._lock_alive():
+            return "The run lost its database lock, so another run may have started."
+        session = Session(bind=self._bind)
+        try:
+            _refresh_settings(session)
+        finally:
+            session.close()
+        if _write_scope() != self._scope:
+            return "The sync settings changed while it was writing (mode, catalogs or schemas)."
+        return None
+
+
 # --- Run --------------------------------------------------------------------------------
 
 
@@ -781,6 +1005,8 @@ class _Context:
     override: bool
     now: datetime
     exempt: List[str]
+    # A resume's ceiling: the removals the admin reviewed on the paused run.
+    max_removals: Optional[int] = None
     # Catalog -> why it was skipped (shown on the run). ``blocked`` ones had nothing planned at all.
     skipped: Dict[str, str] = field(default_factory=dict)
     blocked: Set[str] = field(default_factory=set)
@@ -788,14 +1014,19 @@ class _Context:
     timings: Dict[str, int] = field(default_factory=dict)
     # Queue keys to retry and why: their catalog couldn't be read, or adopting them failed.
     retry: Dict[str, str] = field(default_factory=dict)
+    # Queue keys re-queued for when they've been quiet long enough (not failures).
+    waiting: Set[str] = field(default_factory=set)
 
 
 @dataclass
 class _RunReport:
     result: ReconcileResult
     retry: Dict[str, str] = field(default_factory=dict)
+    waiting: Set[str] = field(default_factory=set)
     # The run stopped before per-object outcomes were known.
     error: bool = False
+    # The stop check ended it mid-apply; its objects aren't failures, just not finished.
+    stopped: bool = False
 
 
 def run(
@@ -808,19 +1039,21 @@ def run(
     actor: Optional[str] = None,
     provider=None,
     override_circuit_breaker: bool = False,
+    max_removals: Optional[int] = None,
 ) -> ReconcileResult:
     """Reconcile named objects (``fqn_keys``, filtered to ``catalogs`` if given) or whole catalogs (a sweep).
 
     A sweep covers ``catalogs``, default the scope (``observed.scope_catalogs``). ``mode``
     defaults to METADATA_RECONCILE_MODE; ``plan`` records statements without running
     any. In ``enforce``, a tripped breaker records a ``paused`` run unless overridden,
-    and an overriding run clears it. Unmanaged keys named here are adopted under
+    and an overriding run clears it; with ``max_removals`` it applies nothing and stays
+    paused if it would remove more than that. Unmanaged keys named here are adopted under
     METADATA_NEW_OBJECT_POLICY=adopt. Raises ``ReconcileBusy``; any other failure is
     recorded as a ``failed`` run and returned.
     """
     return _run(
         db, trigger=trigger, fqn_keys=fqn_keys, catalogs=catalogs, mode=mode, actor=actor,
-        provider=provider, override=override_circuit_breaker,
+        provider=provider, override=override_circuit_breaker, max_removals=max_removals,
     ).result
 
 
@@ -842,6 +1075,7 @@ def run_detached(
     mode: Optional[ReconcileMode] = None,
     actor: Optional[str] = None,
     override_circuit_breaker: bool = False,
+    max_removals: Optional[int] = None,
     wait_seconds: float = _ACCEPT_SECONDS,
     session_factory: Optional[Callable[[], Session]] = None,
 ) -> ReconcileResult:
@@ -863,7 +1097,7 @@ def run_detached(
         try:
             box["result"] = run(
                 db, trigger=trigger, fqn_keys=fqn_keys, catalogs=catalogs, mode=mode, actor=actor,
-                override_circuit_breaker=override_circuit_breaker,
+                override_circuit_breaker=override_circuit_breaker, max_removals=max_removals,
             )
         except Exception as exc:  # noqa: BLE001 - surfaced to the waiter or logged
             box["error"] = exc
@@ -901,6 +1135,57 @@ def run_detached(
     raise errors.MetadataError("The check didn’t start in time. Try again in a moment.")
 
 
+class PauseChanged(errors.MetadataError):
+    """The paused run the admin reviewed isn't the one the breaker holds now (409)."""
+
+    status_code = 409
+
+
+def _reviewed_pause(db: Session, run_id: str) -> dict:
+    breaker = circuit_breaker_state(db)
+    if breaker is None:
+        raise PauseChanged("Syncing isn't paused any more. Reload Sync history.")
+    if breaker.get("run_id") != run_id:
+        raise PauseChanged("Syncing paused again on a different sync since you opened it. Review that one instead.")
+    return breaker
+
+
+def resume_paused(db: Session, *, run_id: str, actor: str, **detach) -> ReconcileResult:
+    """Apply the paused run ``run_id`` after review: re-check only its objects, and apply only if that
+    removes no more than it planned. Otherwise the new run is paused for review instead.
+
+    Raises ``PauseChanged`` when the breaker no longer holds ``run_id``.
+    """
+    _reviewed_pause(db, run_id)
+    if current_mode() != "enforce":
+        raise errors.MetadataError("Syncing is report only now, so there's nothing to apply. Clear the pause instead.")
+    rows = (
+        db.query(MetadataReconcileItemModel.fqn_key, MetadataReconcileItemModel.removals)
+        .filter(MetadataReconcileItemModel.run_id == run_id, MetadataReconcileItemModel.status == "planned")
+        .all()
+    )
+    keys = sorted({queue_key(k) for k, _ in rows})
+    if not keys:
+        raise errors.MetadataError("The paused sync has nothing planned to apply. Clear the pause instead.")
+    reviewed = sum(int(r or 0) for _, r in rows)
+    logger.info("Metadata: %s resumed paused run %s (%d object(s), %d removal(s) reviewed).",
+                actor, run_id, len(keys), reviewed)
+    return run_detached(
+        trigger="manual", fqn_keys=keys, actor=actor, override_circuit_breaker=True, max_removals=reviewed, **detach,
+    )
+
+
+def clear_paused(db: Session, *, run_id: str, actor: str) -> None:
+    """Lift the pause on ``run_id`` without applying its removals. Commits.
+
+    Raises ``PauseChanged`` when the breaker no longer holds ``run_id``.
+    """
+    _reviewed_pause(db, run_id)
+    clear_circuit_breaker(db, cleared_by=actor)
+    db.commit()
+    logger.warning("Metadata: %s cleared the pause on run %s without applying its removals.", actor, run_id)
+
+
 def _run(
     db: Session,
     *,
@@ -912,8 +1197,10 @@ def _run(
     provider,
     override: bool,
     adopt: Optional[Set[str]] = None,
+    max_removals: Optional[int] = None,
 ) -> _RunReport:
     """``run``, plus what ``drain_queue`` needs; ``adopt`` limits adoption to those keys (None: all named)."""
+    _refresh_settings(db)
     mode = mode or current_mode()
     if mode == "enforce" and not scope.is_explicit():
         mode = "plan"
@@ -922,7 +1209,7 @@ def _run(
             db, trigger=trigger, mode="off", status="skipped", actor=actor,
             paused_reason="Reconciliation is off (METADATA_RECONCILE_MODE).",
         ))
-    with _single_flight(db):
+    with _single_flight(db), _bounded_waits(db):
         if mode == "enforce" and not override:
             breaker = circuit_breaker_state(db)
             if breaker is not None:
@@ -935,7 +1222,8 @@ def _run(
                 run_scope["catalogs"] = sorted({c.strip().lower() for c in catalogs if c and c.strip()})
         else:
             run_scope = {"catalogs": sorted({c.strip().lower() for c in catalogs or [] if c and c.strip()}) or "scope"}
-        run_id = start_run(db, trigger=trigger, mode=mode, actor=actor, summary={"scope": run_scope})
+        run_summary: dict = {"scope": run_scope, **({"override": True} if override and mode == "enforce" else {})}
+        run_id = start_run(db, trigger=trigger, mode=mode, actor=actor, summary=run_summary)
         # Every line the run logs, down to each warehouse read, carries req_id "metadata_reconcile:<run id>".
         with job_log_context("metadata_reconcile", run_id):
             logger.info(
@@ -943,7 +1231,7 @@ def _run(
             )
             ctx = _Context(
                 run_id=run_id, trigger=trigger, mode=mode, actor=actor, provider=provider, override=override,
-                now=_utcnow(), exempt=policy.exempt_keys(),
+                now=_utcnow(), exempt=policy.exempt_keys(), max_removals=max_removals if override else None,
             )
             started = _monotonic()
             try:
@@ -968,6 +1256,7 @@ def _reconcile(
     adopt: Optional[Set[str]],
     started: float,
 ) -> _RunReport:
+    stop = _StopCheck(db) if ctx.mode == "enforce" else None
     if ctx.provider is None:
         ctx.provider = _governance_provider()
     if fqn_keys is not None:
@@ -986,35 +1275,56 @@ def _reconcile(
     ]
     removals = sum(i.removals for i in items)
     limit = _removal_limit()
+    recent = recent_removals(db, now=ctx.now) if ctx.mode == "enforce" and not ctx.override and removals else 0
     paused_reason: Optional[str] = None
     executed = False
-    if ctx.mode == "enforce" and not ctx.override and removals > limit:
-        breaker = trip_circuit_breaker(db, run_id=ctx.run_id, removals=removals, limit=limit)
+    if ctx.mode == "enforce" and not ctx.override and removals + recent > limit:
+        breaker = trip_circuit_breaker(db, run_id=ctx.run_id, removals=removals, limit=limit, recent=recent)
         paused_reason = _paused_reason(breaker)
         outcomes = [_planned(i) for i in items]
+    elif ctx.mode == "enforce" and ctx.max_removals is not None and removals > ctx.max_removals:
+        breaker = trip_circuit_breaker(
+            db, run_id=ctx.run_id, removals=removals, limit=limit,
+            reason=(f"Resuming would now remove {removals} tags or descriptions, more than the {ctx.max_removals} "
+                    "reviewed on the paused sync, so nothing was applied. Review this sync's removals and resume again."),
+        )
+        paused_reason = _paused_reason(breaker)
+        outcomes = [_planned(i) for i in items]
+    elif ctx.mode == "enforce" and items and stop is not None and stop(force=True):
+        outcomes = [apply_.not_run(i, stop.reason) for i in items]
     elif ctx.mode == "enforce" and items:
         applying = _monotonic()
-        outcomes = apply_.execute(ctx.provider, items, workers=_apply_workers())
+        outcomes = apply_.execute(ctx.provider, items, workers=_apply_workers(), stop=stop)
         ctx.timings["apply_ms"] = _ms(applying)
         executed = True
         _patch_snapshot(db, outcomes)
     else:
         outcomes = [_planned(i) for i in items]
-    if ctx.mode == "enforce" and ctx.override and paused_reason is None:
+    stopped = stop.reason if stop is not None and paused_reason is None and items else None
+    if stopped:
+        logger.warning("Metadata reconcile run %s stopped writing: %s", ctx.run_id, stopped)
+    if ctx.mode == "enforce" and ctx.override and paused_reason is None and not stopped:
         if clear_circuit_breaker(db, cleared_by=ctx.actor or "override"):
             logger.info("Metadata reconcile run %s cleared the circuit breaker (override).", ctx.run_id)
     outcomes = list(outcomes) + reported
 
     _record_objects(db, works, outcomes, executed=executed, now=ctx.now, reported=reported_keys)
     ctx.timings["total_ms"] = _ms(started)
+    if paused_reason:
+        status: RunStatus = "paused"
+    elif stopped:
+        status = "partial" if any(o.status in ("applied", "noop") for o in outcomes) else "failed"
+    else:
+        status = run_status(outcomes, mode=ctx.mode)
     result = finish_run(
         db, ctx.run_id,
-        status="paused" if paused_reason else run_status(outcomes, mode=ctx.mode),
+        status=status,
         outcomes=outcomes,
         objects_checked=sum(1 for w in works if w.present),
         objects_drifted=sum(1 for w in works if w.items),
         skipped_catalogs=list(ctx.skipped),
         paused_reason=paused_reason,
+        error=f"Stopped before writing everything: {stopped} The rest is picked up by the next run." if stopped else None,
         summary={
             "counts": dict(ctx.counts), "skipped": dict(ctx.skipped), "unread": sorted(ctx.blocked),
             "timings_ms": dict(ctx.timings),
@@ -1022,10 +1332,12 @@ def _reconcile(
     )
     _log_run(result, ctx)
     if paused_reason:
-        _report_breaker_trip(ctx, removals, limit)
-    if ctx.trigger == "sweep":
+        _report_breaker_trip(ctx, removals, limit, recent)
+    if ctx.trigger == "sweep" and ctx.mode == "enforce" and not stopped:
         _purge_orphans(db)
-    return _RunReport(result, retry=dict(ctx.retry))
+    if ctx.trigger == "sweep" and not stopped:
+        _prune_history(db)
+    return _RunReport(result, retry=dict(ctx.retry), waiting=set(ctx.waiting), stopped=bool(stopped))
 
 
 def _planned(item: PlanItem) -> PlanOutcome:
@@ -1066,13 +1378,18 @@ def _targeted(db: Session, ctx: _Context, keys: List[str], adopt: Optional[Set[s
     db.commit()
     ctx.timings["observe_ms"] = _ms(observing)
 
-    unreadable = sorted({k.catalog.lower() for k in requested if k.fqn_key not in seen})
+    # A refresh returns the catalog's own row whenever it could read the catalog.
+    unreadable = sorted({k.catalog.lower() for k in requested if k.fqn_key not in seen and k.catalog.lower() not in seen})
     for catalog in unreadable:
         ctx.skipped[catalog] = "Couldn't read it from Unity Catalog; its objects will be retried."
         ctx.blocked.add(catalog)
-    for key in keys:
-        if _catalog_of(key) in ctx.blocked:
-            ctx.retry[key] = ctx.skipped[_catalog_of(key)]
+    withheld = {k for k in keys if k not in seen}
+    for key in sorted(withheld):
+        ctx.retry[key] = ctx.skipped.get(_catalog_of(key)) or (
+            "Its schema didn't come back from Unity Catalog although it was there before; it will be retried, "
+            "and the next full check confirms whether the schema was dropped."
+        )
+    keys = [k for k in keys if k not in withheld]
 
     relations = [k for k in keys if _level_type(k) == "table"]
     desired = store.get_objects(db, keys + _desired_column_keys(db, relations))
@@ -1133,9 +1450,10 @@ def _sweep_scope(db: Session, ctx: _Context, catalogs: Optional[Sequence[str]]) 
         if not scope.manages(catalog):
             ctx.skipped[catalog] = _OUTSIDE_SCOPE
     targets = [c for c in targets if scope.manages(c)]
-    if not targets:
+    vanished = [] if wanted else snapshot.vanished_catalogs(db, targets)
+    if not targets and not vanished:
         return []
-    swept = snapshot.sweep(db, provider=ctx.provider, catalogs=targets)
+    swept = snapshot.sweep(db, provider=ctx.provider, catalogs=targets, vanished=vanished)
     ctx.timings["observe_ms"] = _ms(observing)
     for catalog, error in swept.failed_catalogs.items():
         ctx.skipped[catalog] = _clip(f"Couldn't read it from Unity Catalog: {error}", 500)
@@ -1163,6 +1481,9 @@ def _adopt(db: Session, ctx: _Context, keys: Sequence[str], seen: Dict[str, Obse
         k for k in keys
         if _catalog_of(k) not in ctx.skipped and seen.get(k) is not None and seen[k].present
     ]
+    waiting = _still_changing(candidates, seen)
+    _wait_until_quiet(db, ctx, waiting)
+    candidates = [k for k in candidates if k not in waiting]
     if not candidates:
         return
     from app.services.metadata import changes
@@ -1178,6 +1499,66 @@ def _adopt(db: Session, ctx: _Context, keys: Sequence[str], seen: Dict[str, Obse
     ctx.counts["adopted"] += len(candidates)
 
 
+def _still_changing(keys: Iterable[str], seen: Dict[str, ObservedState]) -> Dict[str, datetime]:
+    """Of these keys, those UC changed within METADATA_NEW_OBJECT_QUIET_MINUTES, with when that ends.
+
+    A column goes by its relation, whose times change when the column does.
+    """
+    minutes = _int_setting("METADATA_NEW_OBJECT_QUIET_MINUTES", 10)
+    if minutes <= 0:
+        return {}
+    now = _utcnow()
+    waiting: Dict[str, datetime] = {}
+    for key in keys:
+        obs = seen.get(_relation_of(key) if COLUMN_SEPARATOR in key else key)
+        stamps = [t for t in (obs.created, obs.last_altered) if t is not None] if obs is not None else []
+        quiet_at = max(stamps) + timedelta(minutes=minutes) if stamps else None
+        if quiet_at is not None and quiet_at > now:
+            waiting[key] = quiet_at
+    return waiting
+
+
+def _wait_until_quiet(db: Session, ctx: _Context, waiting: Dict[str, datetime]) -> None:
+    """Queue objects that changed too recently to take over for when they've gone quiet."""
+    if not waiting:
+        return
+    queued = enqueue(db, list(waiting), reason="new_object", not_before=max(waiting.values()))
+    fresh = set(queued) - ctx.waiting
+    ctx.waiting.update(queued)
+    ctx.counts["waiting"] += len(fresh)
+    logger.info("Metadata reconcile: %d new or recreated object(s) changed in the last %s minute(s); "
+                "left alone until they've been quiet that long.", len(fresh),
+                _int_setting("METADATA_NEW_OBJECT_QUIET_MINUTES", 10))
+
+
+def _created_anew(row: DesiredState, obs: ObservedState, relation_new: bool) -> bool:
+    """Whether UC's object is new to this desired row: it was pending or orphaned, UC reports a
+    later created time than the one last reconciled against, or (a column) its relation is new."""
+    if row.object_state in ("pending", "orphaned") or relation_new:
+        return True
+    return (row.observed_created is not None and obs.created is not None
+            and obs.created - row.observed_created > _CREATED_SLACK)
+
+
+def _merge_created(db: Session, ctx: _Context, keys: Sequence[str]) -> Set[str]:
+    """Add the tags new or recreated objects were created with to their desired state; returns the keys
+    that couldn't be merged, which mustn't be planned (syncing would remove those tags)."""
+    from app.services.metadata import changes
+
+    db.commit()
+    try:
+        changes.merge_observed(db, keys, reason=_MERGE_REASON)
+    except Exception as e:  # noqa: BLE001
+        db.rollback()
+        logger.warning("Metadata reconcile: couldn't keep the create-time tags of %d object(s): %s",
+                       len(keys), e, exc_info=True)
+        for key in keys:
+            ctx.retry[queue_key(key)] = _clip(f"Couldn't keep the tags it was created with: {e}")
+        return set(keys)
+    ctx.counts["created_anew"] += len(keys)
+    return set()
+
+
 def _seen_type(desired: DesiredState, observed: ObservedState) -> Optional[str]:
     """UC's relation type when it differs from the desired row's (a view created as pending 'table')."""
     if observed.securable_type in RELATION_TYPES and observed.securable_type != desired.securable_type:
@@ -1188,13 +1569,32 @@ def _seen_type(desired: DesiredState, observed: ObservedState) -> Optional[str]:
 def _plan_objects(
     db: Session, ctx: _Context, desired: Dict[str, DesiredState], seen: Dict[str, ObservedState],
 ) -> List[_Work]:
-    """Lifecycle (pending/orphaned -> exists, exists -> orphaned), then each present row's statements."""
+    """Lifecycle (pending/orphaned -> exists, exists -> orphaned), then each present row's statements.
+
+    An object new to its row (``_created_anew``) is left alone while it's still changing,
+    then keeps the tags it was created with before it's planned, so syncing adds the
+    desired state instead of removing what its creator set.
+    """
     from app.services.metadata import store
 
+    keys = [k for k in sorted(desired) if _catalog_of(k) not in ctx.blocked]
+    anew: Dict[str, None] = {}
+    for fqn_key in keys:
+        obs = seen.get(fqn_key)
+        relation_new = COLUMN_SEPARATOR in fqn_key and _relation_of(fqn_key) in anew
+        if obs is not None and obs.present and _created_anew(desired[fqn_key], obs, relation_new):
+            anew[fqn_key] = None
+    waiting = _still_changing(anew, seen)
+    _wait_until_quiet(db, ctx, waiting)
+    merging = [k for k in anew if k not in waiting]
+    held = set(waiting) | (_merge_created(db, ctx, merging) if merging else set())
+    if merging and not held & set(merging):
+        desired = {**desired, **store.get_objects(db, merging)}
+
     works: List[_Work] = []
-    for fqn_key in sorted(desired):
-        catalog = _catalog_of(fqn_key)
-        if catalog in ctx.blocked:
+    stamps: List[dict] = []
+    for fqn_key in keys:
+        if fqn_key in held:
             continue
         row = desired[fqn_key]
         obs = seen.get(fqn_key)
@@ -1205,6 +1605,10 @@ def _plan_objects(
         elif not present and row.object_state == "exists":
             store.set_object_state(db, fqn_key, "orphaned")
             ctx.counts["orphaned"] += 1
+        if present and obs.created is not None and (
+            row.observed_created is None or abs(obs.created - row.observed_created) > _CREATED_SLACK
+        ):
+            stamps.append({"b_id": row.id, "b_created": obs.created})
         work = _Work(
             object_id=row.id, fqn_key=fqn_key, desired_hash=row.desired_hash, present=present,
             observed_at=obs.observed_at if present else None, drift_at=row.drift_detected_at,
@@ -1216,6 +1620,13 @@ def _plan_objects(
                 parent = seen.get(_relation_of(fqn_key)) if COLUMN_SEPARATOR in fqn_key else None
                 work.items = diff_.plan(object_diff, observed=obs, object_id=row.id, parent=parent)
         works.append(work)
+    if stamps:
+        db.execute(
+            update(_OBJECTS).where(_OBJECTS.c.id == bindparam("b_id")).values(
+                observed_created=bindparam("b_created", type_=_OBJECTS.c.observed_created.type),
+            ),
+            stamps,
+        )
     return works
 
 
@@ -1308,27 +1719,31 @@ def _log_run(result: ReconcileResult, ctx: _Context) -> None:
     logger.info(
         "Metadata reconcile %s run %s (%s): %s. %d object(s) checked, %d drifted; %d statement(s), %d applied, "
         "%d failed, %d tag removal(s), %d reported only (outside the enforced schemas); %d adopted, %d now exist, "
-        "%d orphaned; %d catalog(s) skipped. Observe %s ms, apply %s ms, total %s ms.",
+        "%d created or recreated, %d waiting to go quiet, %d orphaned; %d catalog(s) skipped. "
+        "Observe %s ms, apply %s ms, total %s ms.",
         result.trigger, result.run_id, result.mode, result.status, result.objects_checked, result.objects_drifted,
         result.statements_planned, result.statements_applied, result.statements_failed, result.removals_planned,
         result.statements_reported,
-        counts.get("adopted", 0), counts.get("now_exist", 0), counts.get("orphaned", 0), len(result.skipped_catalogs),
+        counts.get("adopted", 0), counts.get("now_exist", 0), counts.get("created_anew", 0), counts.get("waiting", 0),
+        counts.get("orphaned", 0), len(result.skipped_catalogs),
         ctx.timings.get("observe_ms", 0), ctx.timings.get("apply_ms", 0), ctx.timings.get("total_ms", 0),
     )
 
 
-def _report_breaker_trip(ctx: _Context, removals: int, limit: int) -> None:
+def _report_breaker_trip(ctx: _Context, removals: int, limit: int, recent: int = 0) -> None:
     logger.warning(
-        "Metadata reconcile run %s tripped the circuit breaker: it would remove %d tags or descriptions (limit %d). "
-        "Nothing was applied; enforcement is paused until an override run.", ctx.run_id, removals, limit,
+        "Metadata reconcile run %s tripped the circuit breaker: it would remove %d tags or descriptions, with %d "
+        "already removed in the last hour (limit %d an hour). Nothing was applied; enforcement is paused until an "
+        "admin resumes or clears it.", ctx.run_id, removals, recent, limit,
     )
     _alert_governance(
         "[Action required] Metadata reconciler paused: too many removals",
         [
-            f"A {ctx.trigger} run would remove {removals} tags or descriptions from Unity Catalog; the limit is {limit} "
-            "(METADATA_MAX_REMOVALS_PER_RUN).",
-            "Nothing was applied. Runs that change Unity Catalog stay paused until an admin reviews the run "
-            "on the Runs tab and runs again with the circuit-breaker override.",
+            f"A {ctx.trigger} run would remove {removals} tags or descriptions from Unity Catalog"
+            + (f", after {recent} already removed in the last hour" if recent else "")
+            + f"; the limit is {limit} an hour (METADATA_MAX_REMOVALS_PER_RUN).",
+            "Nothing was applied. Runs that change Unity Catalog stay paused until an admin reviews the paused "
+            "run under Sync history and either applies its removals or clears the pause without applying them.",
             f"Run: {ctx.run_id}",
         ],
     )
@@ -1341,13 +1756,60 @@ def _purge_orphans(db: Session) -> None:
     if days < 1:
         return
     try:
-        purged = store.purge_orphans(db, older_than_days=days)
+        purged = store.purge_orphans(db, older_than_days=days, read_after=snapshot.confirmed_reads(db))
     except Exception as e:  # noqa: BLE001
         db.rollback()
         logger.warning("Metadata reconcile: purging orphaned objects failed: %s", e, exc_info=True)
         return
     if purged:
         logger.info("Metadata reconcile purged %d object(s) orphaned for more than %d days.", purged, days)
+
+
+def _prune_history(db: Session, *, budget_seconds: float = 60.0) -> int:
+    """Delete runs older than METADATA_RUN_HISTORY_DAYS with their statements; returns the runs deleted.
+
+    Paused and running runs and the newest run of each trigger are kept. Works in
+    small committed batches and stops after ``budget_seconds``; the next sweep goes on.
+    """
+    days = _int_setting("METADATA_RUN_HISTORY_DAYS", 30)
+    if days < 1:
+        return 0
+    deadline = _monotonic() + budget_seconds
+    pruned = 0
+    try:
+        newest = {
+            db.execute(
+                select(_RUNS.c.id).where(_RUNS.c.trigger == trigger).order_by(_RUNS.c.started_at.desc()).limit(1)
+            ).scalar()
+            for trigger in db.execute(select(_RUNS.c.trigger).distinct()).scalars()
+        }
+        old = (
+            select(_RUNS.c.id)
+            .where(_RUNS.c.started_at < _utcnow() - timedelta(days=days), _RUNS.c.status.not_in(("paused", "running")),
+                   _RUNS.c.id.not_in(newest - {None}))
+            .order_by(_RUNS.c.started_at)
+            .limit(_PRUNE_BATCH)
+        )
+        while _monotonic() < deadline:
+            ids = list(db.execute(old).scalars())
+            if not ids:
+                break
+            items_gone = False
+            while not items_gone and _monotonic() < deadline:
+                batch = select(_ITEMS.c.id).where(_ITEMS.c.run_id.in_(ids)).limit(_WRITE_CHUNK * 10)
+                items_gone = not db.execute(delete(_ITEMS).where(_ITEMS.c.id.in_(batch))).rowcount
+                db.commit()
+            if not items_gone:
+                break
+            db.execute(delete(_RUNS).where(_RUNS.c.id.in_(ids)))
+            db.commit()
+            pruned += len(ids)
+    except Exception as e:  # noqa: BLE001
+        db.rollback()
+        logger.warning("Metadata reconcile: pruning sync history failed: %s", e, exc_info=True)
+    if pruned:
+        logger.info("Metadata reconcile deleted %d run(s) older than %d days from Sync history.", pruned, days)
+    return pruned
 
 
 # --- Queue ------------------------------------------------------------------------------
@@ -1404,7 +1866,7 @@ def drain_queue(db: Session, *, provider=None, limit: int = _BATCH_SIZE) -> Opti
 def _settle(db: Session, rows: Sequence, report: _RunReport) -> Tuple[int, int, List[Tuple[str, str]]]:
     """Delete converged rows and back off the rest; returns (done, retrying, rows that just hit the attempt limit)."""
     result = report.result
-    if result.status in ("paused", "skipped"):
+    if result.status in ("paused", "skipped") or report.stopped:
         return 0, 0, []
     if report.error:
         failures = {r.fqn_key: result.error or "The run failed." for r in rows}
@@ -1416,10 +1878,20 @@ def _settle(db: Session, rows: Sequence, report: _RunReport) -> Tuple[int, int, 
                     queue_key(outcome.fqn_key), outcome.detail or f"The {outcome.operation} statement didn't run.",
                 )
     now = _utcnow()
+    written = {queue_key(o.fqn_key) for o in result.items if o.status == "applied"}
+    seen_in_uc = [r.fqn_key for r in rows if r.reason in _OBSERVED_REASONS and r.fqn_key in written]
+    for key, runs in _rewrites(db, seen_in_uc, since=now - _REWRITE_WINDOW).items():
+        if runs >= _REWRITE_LIMIT and key not in failures:
+            failures[key] = (
+                f"Written {runs} times in the last hour: something else keeps changing it back, or Unity Catalog "
+                "stores a value differently from how it was written. Retried less often until it stays in sync."
+            )
     deletes: List[dict] = []
     backoffs: List[dict] = []
     exhausted: List[Tuple[str, str]] = []
     for row in rows:
+        if row.fqn_key in report.waiting:
+            continue
         error = failures.get(row.fqn_key)
         if error is None:
             deletes.append({"b_id": row.id, "b_before": row.not_before})
@@ -1450,6 +1922,22 @@ def _settle(db: Session, rows: Sequence, report: _RunReport) -> Tuple[int, int, 
     return len(deletes), len(backoffs), exhausted
 
 
+def _rewrites(db: Session, keys: Sequence[str], *, since: datetime) -> Dict[str, int]:
+    """Queue key -> how many runs started since ``since`` applied a statement to it or its columns."""
+    runs: Dict[str, Set[str]] = defaultdict(set)
+    for start in range(0, len(keys), 50):
+        chunk = keys[start:start + 50]
+        matches = [_ITEMS.c.fqn_key.in_(chunk)] + [
+            _ITEMS.c.fqn_key.startswith(f"{key}{COLUMN_SEPARATOR}", autoescape=True) for key in chunk
+        ]
+        for fqn_key, run_id in db.execute(
+            select(_ITEMS.c.fqn_key, _ITEMS.c.run_id).join(_RUNS, _RUNS.c.id == _ITEMS.c.run_id)
+            .where(_RUNS.c.started_at >= since, _ITEMS.c.status == "applied", or_(*matches))
+        ):
+            runs[queue_key(fqn_key)].add(run_id)
+    return {key: len(ids) for key, ids in runs.items() if key in keys}
+
+
 def _report_exhausted(exhausted: Sequence[Tuple[str, str]]) -> None:
     shown = list(exhausted[:50])
     logger.warning(
@@ -1471,7 +1959,7 @@ async def reconcile_task() -> None:
 
     The pass runs in a worker thread so the poller's event loop keeps serving its other tasks.
     """
-    if current_mode() == "off":
+    if _shutdown.is_set():
         return
     try:
         await asyncio.to_thread(_reconcile_pass)
@@ -1492,11 +1980,18 @@ def _queue_due(db: Session) -> bool:
 
 
 def _reconcile_pass(*, budget_seconds: float = _PASS_BUDGET_SECONDS) -> None:
-    """One poller cycle: the new-object poll when due, drain batches until the budget runs out, then a due sweep."""
+    """One poller cycle: the new-object poll when due, drain batches until the budget runs out, then a due sweep.
+
+    Settings saved on another replica are picked up first, so turning syncing off there stops it here.
+    """
     global _pass_error_noted
     deadline = _monotonic() + budget_seconds
     db = _session()
     try:
+        _refresh_settings(db)
+        db.commit()
+        if current_mode() == "off":
+            return
         poll, sweep = _poll_due(), _sweep_due()
         if not (poll or sweep or _queue_due(db)):
             return
@@ -1512,7 +2007,7 @@ def _reconcile_pass(*, budget_seconds: float = _PASS_BUDGET_SECONDS) -> None:
                 db.rollback()
                 _note_pass_error(f"Metadata new-object poll failed: {e}")
         _drain_until(db, provider, deadline)
-        if sweep:
+        if sweep and not _shutdown.is_set():
             try:
                 run(db, trigger="sweep", provider=provider)
             except ReconcileBusy:
@@ -1526,7 +2021,7 @@ def _drain_until(db: Session, provider, deadline: float) -> None:
     """Drain batches while work is due and the pass has time; stop on a paused, skipped or failed batch."""
     if current_mode() == "enforce" and _breaker_blocks(db):
         return
-    while _monotonic() < deadline:
+    while _monotonic() < deadline and not _shutdown.is_set():
         try:
             result = drain_queue(db, provider=provider)
         except ReconcileBusy:

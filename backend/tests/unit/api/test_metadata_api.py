@@ -21,13 +21,14 @@ from app.core.config import _yaml_config, settings
 from app.db.base import Base
 from app.db.session import get_db
 from app.models.user import User
-from app.services.metadata import authz, changes, reconciler
+from app.services.metadata import authz, changes, observed, reconciler
 from app.services.metadata.errors import ChangeBlocked, Forbidden, NotFound, VersionConflict
 from app.services.metadata.types import (
     Actor,
     ChangePreview,
     ChangeResult,
     Finding,
+    ObservedState,
     PrincipalScope,
     ReconcileResult,
     VersionConflictItem,
@@ -43,13 +44,15 @@ def _user(email, roles=(), actor_type="user"):
 
 
 ADMIN = _user("admin@example.com", roles=["Platform Admin"])
+EDITOR = _user("editor@example.com", roles=["Governance Admin"])
 OWNER = _user("owner@example.com")
 NOBODY = _user("nobody@example.com")
 PIPELINE = _user(APP_ID, actor_type="service_principal")
-USERS = {u.email: u for u in (ADMIN, OWNER, NOBODY, PIPELINE)}
+USERS = {u.email: u for u in (ADMIN, EDITOR, OWNER, NOBODY, PIPELINE)}
 
 ACTORS = {
     ADMIN.email: Actor(id=ADMIN.email, email=ADMIN.email, roles=ADMIN.roles, is_admin=True),
+    EDITOR.email: Actor(id=EDITOR.email, email=EDITOR.email, roles=EDITOR.roles, is_admin=True),
     OWNER.email: Actor(id=OWNER.email, email=OWNER.email, groups=["crm-owners"]),
     NOBODY.email: Actor(id=NOBODY.email, email=NOBODY.email),
     APP_ID: Actor(id=APP_ID, actor_type="service_principal",
@@ -69,6 +72,15 @@ def _feature(monkeypatch):
     monkeypatch.setattr(authz, "actor_from_user", lambda db, user: ACTORS[user.id])
     monkeypatch.setattr(authz, "browse_scope", lambda db, actor, editable=None: authz.BrowseScope(
         level="none" if actor.id == NOBODY.email else "full"))
+    monkeypatch.setattr(observed, "refresh", _refresh_from_snapshot)
+
+
+def _refresh_from_snapshot(db, keys, *, provider=None):
+    """There's no warehouse here: a re-read from UC finds what the snapshot has."""
+    keys = list(keys)
+    seen = observed.get_observed(db, [k.fqn_key for k in keys])
+    return {k.fqn_key: seen.get(k.fqn_key) or ObservedState(fqn_key=k.fqn_key, key=k, securable_type="table",
+                                                            present=False) for k in keys}
 
 
 @pytest.fixture
@@ -160,6 +172,29 @@ def test_only_admins_start_reconciler_runs(api, monkeypatch):
     assert refused.status_code == 403
     assert started.status_code == 200
     assert started.json()["actor"] == ADMIN.email
+
+
+def test_a_run_request_cant_override_the_breaker(api):
+    response = api(ADMIN).post(f"{BASE}/runs", json={"kind": "sweep", "override_circuit_breaker": True})
+
+    assert response.status_code == 400 and "/runs/paused/resume" in response.json()["detail"]
+
+
+def test_only_platform_admins_resume_or_clear_a_pause(api, monkeypatch):
+    calls = []
+    monkeypatch.setattr(reconciler, "resume_paused", lambda db, **kw: calls.append(("resume", kw)) or ReconcileResult(
+        run_id="r2", trigger="manual", mode="enforce", status="running", actor=kw["actor"]))
+    monkeypatch.setattr(reconciler, "clear_paused", lambda db, **kw: calls.append(("clear", kw)))
+
+    for path in ("resume", "clear"):
+        assert api(EDITOR).post(f"{BASE}/runs/paused/{path}", json={"run_id": "r1"}).status_code == 403
+        assert api(PIPELINE).post(f"{BASE}/runs/paused/{path}", json={"run_id": "r1"}).status_code == 403
+    resumed = api(ADMIN).post(f"{BASE}/runs/paused/resume", json={"run_id": "r1"})
+    cleared = api(ADMIN).post(f"{BASE}/runs/paused/clear", json={"run_id": "r1"})
+
+    assert resumed.status_code == 200 and cleared.status_code == 200
+    assert calls == [("resume", {"run_id": "r1", "actor": ADMIN.email}), ("clear", {"run_id": "r1", "actor": ADMIN.email})]
+    assert cleared.json()["can_resume_sync"] is True
 
 
 def test_an_empty_queue_run_reports_skipped(api, monkeypatch):
@@ -340,7 +375,7 @@ def test_whoami_recognizes_a_person(db, monkeypatch):
 # --- Name patterns ------------------------------------------------------------------------
 
 
-def _observe(db, *names):
+def _observe(db, *names, tags=None, comment=None):
     from app.db.metadata import MetadataObservedModel
     from app.services.metadata.types import ObjectKey
 
@@ -348,8 +383,8 @@ def _observe(db, *names):
         key = ObjectKey.parse(name)
         db.add(MetadataObservedModel(
             fqn_key=key.fqn_key, catalog=key.catalog, schema_name=key.schema_name, object_name=key.object_name,
-            parent_key=key.parent().fqn_key, display_name=key.display, securable_type="table", tags={},
-            present=True,
+            parent_key=key.parent().fqn_key, display_name=key.display, securable_type="table", tags=tags or {},
+            comment=comment, present=True,
         ))
     db.commit()
 
@@ -408,6 +443,34 @@ def test_a_bulk_change_round_trips_through_the_real_services(api, db):
 
     history = client.get(f"{BASE}/changes").json()
     assert history["items"][0]["id"] == result["change_set"]["id"]
+
+
+def test_a_first_edit_keeps_what_uc_has_and_lists_its_removals(api, db, monkeypatch):
+    refreshed = []
+
+    def refresh(db_, keys, **kw):
+        refreshed.append([k.fqn_key for k in keys])
+        return _refresh_from_snapshot(db_, keys)
+
+    monkeypatch.setattr(observed, "refresh", refresh)
+    monkeypatch.setattr(reconciler, "current_mode", lambda: "plan")
+    monkeypatch.setattr(settings, "METADATA_ADOPT_MAX_READ_AGE_MINUTES", 30)
+    _observe(db, "sales_dev.crm.customers", tags={"legacy": "x", "steward": "ana"}, comment="From UC")
+    body = {"ops": [{"op": "set_tags", "name": "sales_dev.crm.customers", "tags": {"dataset": "crm"}},
+                    {"op": "unset_tags", "name": "sales_dev.crm.customers", "keys": ["legacy"]}],
+            "reason": "Label the CRM table"}
+    client = api(ADMIN)
+
+    preview = client.post(f"{BASE}/changes/preview", json=body).json()
+    items = {(d["item"]["key"], d["item"]["action"]): d["item"]["unchanged_in_uc"] for d in preview["items"]}
+    assert items == {("dataset", "set"): False, ("legacy", "unset"): False, ("steward", "set"): True,
+                     (None, "comment_set"): True}
+    assert (preview["kept_count"], preview["blocked"], refreshed) == (2, False, [])
+
+    assert client.post(f"{BASE}/changes", json=body).json()["status"] == "committed"
+    assert refreshed == [["sales_dev.crm.customers"]]
+    desired = client.get(f"{BASE}/object", params={"name": "sales_dev.crm.customers"}).json()["desired"]
+    assert (desired["tags"], desired["comment"]["value"]) == ({"dataset": "crm", "steward": "ana"}, "From UC")
 
 
 # --- Browse scope, real services -------------------------------------------------------------

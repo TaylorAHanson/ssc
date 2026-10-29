@@ -83,9 +83,13 @@ Catalog*.
    admins can turn them off under **Admin → Settings → Metadata Manager**
    (*Warn about suspected typos in previews*). The first time you change a
    table here it's marked *Starts being managed*, and the tags and description
-   it already has are listed as *Already in Unity Catalog*: they're kept, not
+   it already has are listed as *Stays in Unity Catalog*: they're kept, not
    counted as edits, and need no approval. If one breaks a tag rule, the
-   review shows a warning instead of stopping the save. When more than one
+   review shows a warning instead of stopping the save. Only what you change
+   changes: removing one of those tags is listed as a removal and follows the
+   usual approval rules. So nothing added in Unity Catalog since the last check
+   is missed, a first edit of up to 200 tables reads them from Unity Catalog
+   again before saving, and isn't saved if that read fails. When more than one
    environment is set up, **Also make these changes in** lets you tick other
    environments to make the same changes there (see [Environments](#environments)).
 4. Add a reason (if your admin requires one) and save. Changes you're allowed to make are saved straight
@@ -129,9 +133,9 @@ change made to it here).
 
 **Preview** shows how many objects each pattern matched and exactly what
 changes. The usual approval rules apply to every object. One change covers up
-to 5,000 objects by default. If the preview warns that objects aren't managed
-yet, start managing their catalog first (see below), or the tags they carry now
-are removed once syncing is on.
+to 5,000 objects by default. Objects that aren't managed yet keep the tags and
+description they have in Unity Catalog, as with a single edit; a change that
+replaces an object's tags lists each tag it removes.
 
 **More → Prepare tags for a table that doesn't exist yet** sets tags and a
 description for a name before the table is created.
@@ -142,7 +146,10 @@ description for a name before the table is created.
 **Everyone's** to see all changes and who made them, from this page, the
 assistant, a pipeline or the sync. **Filters** narrows by table and by where
 the change came from. Open a change to see each tag it touched; **Undo this
-change** saves the opposite change. Changes still waiting for approval are under
+change** saves the opposite change. Undoing the change that started managing an
+object stops managing it instead: Unity Catalog keeps the tags and description
+it has, and the preview marks the object *Stops being managed* and warns about
+anything changed on it since. Changes still waiting for approval are under
 **Requests** → **My requests**.
 
 ## Sync & admin
@@ -167,12 +174,23 @@ confused with **Admin** in the sidebar, which opens the platform dashboard) with
   in Unity Catalog, so its 0 out of sync says nothing about anything else. What's
   out of sync right now is under **Out of sync with Unity Catalog**.
   A row marked *Couldn't read* didn't check that catalog at all (its details
-  say why) and changed nothing in it. To see whether a long *Running* check is
-  still working, search the app's logs for the id shown at the top of its
-  details: a slow read logs a line every minute. A check cut off because the
-  app restarted or was redeployed shows as *Failed* the next time Sync history
-  loads; it wrote nothing more after it stopped, and the next check carries on
-  as normal.
+  say why) and changed nothing in it. That includes a read that would have
+  marked a large share of the catalog as dropped, because losing access to part
+  of a catalog looks exactly like a mass drop (see **Max share missing per
+  check** below), and a catalog too large to hold in memory. To see whether a
+  long *Running* check is still working, search the app's logs for the id shown
+  at the top of its details: a slow read logs a line every minute. A check cut
+  off because the app restarted or was redeployed shows as *Failed* the next
+  time Sync history loads; it wrote nothing more after it stopped, and the next
+  check carries on as normal. A check that's writing also stops before its next
+  statement if the sync settings change or the app starts shutting down; its
+  row says why, and the next check writes the rest.
+  A sync *Paused* by the removal limit writes nothing until a Platform Admin
+  chooses **Review and resume**. **Apply these removals** re-checks only that
+  sync's objects and writes their changes, as long as that removes no more than
+  it planned (and only while syncing is on). **Clear without applying** lifts
+  the pause and writes nothing. Fix what caused the removals first, or the next
+  check pauses again.
 - **Automation access**: the pipelines and systems that may change tags through
   the API or MCP, and their scope. See [Metadata API and MCP](metadata-api.md);
 - **Bring in many tables at once**: **Start managing catalogs** and **Import
@@ -180,16 +198,19 @@ confused with **Admin** in the sidebar, which opens the platform dashboard) with
 
 ### Starting out: start managing, report, then sync
 
-The first time an object is edited here, the change becomes its complete
-desired state, including the tags it already carries. Once syncing is on, any
-tag it carries in Unity Catalog that isn't saved here is removed. So bring
-existing catalogs under management before turning syncing on:
+Syncing looks after managed objects only. Once it's on, any tag a managed
+object carries in Unity Catalog that isn't saved here is removed. An object's
+first edit here keeps what it already has, but objects nobody has edited aren't
+managed, so drift on them isn't noticed. Bring existing catalogs under
+management before turning syncing on:
 
 1. **Start managing catalogs** saves what Unity Catalog holds now for a catalog
    or schema, so those tags are kept. **Import from a file** loads tags from a
-   CSV or JSON file instead. It copies the last successful check, so it waits
-   if the latest check couldn't read the catalog: saving an out-of-date copy
-   would let syncing remove tags added since.
+   CSV or JSON file instead. Both copy the last full check, so they're refused
+   unless that check read the catalog in the last 30 minutes (**Freshest copy
+   to start managing from**): an out-of-date copy would let syncing remove tags
+   added since. If it's refused, choose **Check now** under **Sync history**,
+   wait for it to finish, and try again.
 2. Leave **Reconcile mode** on **Plan** (shown on the page as *Report only*)
    and choose **Check now** under **Sync history**. A row appears
    immediately as *Running*; when it finishes, it lists what syncing would set
@@ -267,7 +288,7 @@ Metadata Manager**:
   only*) reports what would change without changing anything; **Enforce**
   (*Keeping Unity Catalog in sync*) makes Unity Catalog match, including
   removing tags not saved here; **Off** stops syncing. Enforce only runs once
-  **Catalogs to reconcile** is filled in.
+  **Catalogs to reconcile** and **Enforce only in these schemas** are filled in.
 - **Catalogs to reconcile**: the catalogs this deployment manages, as names or
   patterns such as `*_dev` (`*` is every catalog). It only changes, adopts new
   tables in and accepts edits for these; an edit to any other catalog is
@@ -280,8 +301,10 @@ Metadata Manager**:
   schemas, as `catalog.schema` names or patterns such as `sales_dev.bronze` or
   `sales_dev.*_raw`. The rest of the catalogs above is still checked and can
   still be edited, but is only reported, and its statements show as *Report
-  only* in **Sync history**. A catalog's own tags are outside every schema.
-  Blank means every schema of the catalogs above.
+  only* in **Sync history**. A catalog's own tags are outside every named
+  schema. `*` means every schema and the catalogs' own tags. Blank means
+  Enforce writes nothing, so clearing the list can never widen what's written.
+  Each entry is checked when you save.
 - **Browse roles**: who sees every object, besides Platform Admins and the
   editor roles. Everyone else sees only what they own. Blank = admins and
   editor roles only; clearing it never opens the page to everyone.
@@ -297,9 +320,29 @@ Metadata Manager**:
   masks and row filters on the changed objects. It needs READ METADATA for the
   governance service principal; for changes to more than 50 tables only the
   catalog and schema policies are read.
-- **Max removals per run**: a run that would remove more tags, or clear more
-  descriptions, stops and alerts governance instead. Saved changes are applied
-  in batches of up to 200 objects, and the limit counts per batch. Set it to 0
-  and every removal waits for you to review and resume the run.
+- **Max removals per hour**: how many tags or descriptions syncing may remove
+  or blank out in an hour, counted across every run (50 by default). A run
+  that would go over writes nothing, is paused under **Sync history** and
+  alerts governance. Removals a Platform Admin applies from a paused sync don't
+  count. Set it to 0 and every removal waits for review.
 - **Statements in parallel**: how many tables the reconciler updates at once.
 - **Max objects per change**: 5,000 by default.
+- **Wait after a new table changes**: a new table, or one dropped and
+  recreated, is left alone until it has gone this many minutes without
+  changing (10 by default). Pipelines often create a table and tag it a moment
+  later; taking it over in between would treat those tags as drift. When a
+  table that already has tags saved here is created or recreated, tags it was
+  created with that aren't saved here are kept.
+- **Max share missing per check**: a full check that would mark more than this
+  percent of a catalog's objects as dropped (and more than 500 of them) saves
+  nothing and shows the catalog as *Couldn't read* (5% by default). If a large
+  drop is real, raise it, choose **Check now**, then set it back.
+- **Largest catalog read (rows)**: a catalog whose tables, columns or tags come
+  to more rows than this in one read is skipped and shows as *Couldn't read*,
+  so it can't run the app out of memory (2,000,000 by default).
+- **Freshest copy to start managing from**: how recent, in minutes, the last
+  full read of a catalog must be for **Start managing** and imports (30 by
+  default; 0 turns the check off).
+- **Keep sync history**: Sync history rows older than this many days are
+  deleted (30 by default; 0 keeps everything). Paused syncs and the newest run
+  of each kind are kept, and changes stay in **History** regardless.

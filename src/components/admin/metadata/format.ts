@@ -187,7 +187,7 @@ const ACTION_LABELS: Record<string, string> = {
   comment_set: 'Set description',
   comment_clear: 'Cleared description',
   object_create: 'Started being managed',
-  object_delete: 'Deleted object',
+  object_delete: 'Stopped being managed',
   object_restore: 'Restored object',
   object_state: 'Object state changed',
 };
@@ -214,6 +214,7 @@ const SUMMARY_LABELS: Record<string, [string, string]> = {
   comments: ['description changed', 'descriptions changed'],
   created: ['object started being managed', 'objects started being managed'],
   restored: ['object restored', 'objects restored'],
+  unmanaged: ['object no longer managed', 'objects no longer managed'],
 };
 
 /** Readable counts from a change set's summary (falls back to its events). */
@@ -237,8 +238,15 @@ export const eventsByObject = (events: ChangeEvent[]): [string, ChangeEvent[]][]
 
 // --- Preview decisions ---------------------------------------------------------------
 
+/** Part of an undo that stops managing the object; Unity Catalog keeps the value. */
+export const stopsManaging = (item: ChangeItem): boolean => !!item.unchanged_in_uc && item.object_exists;
+
 export function describeItem(item: ChangeItem): string {
   const v = (s: string | null | undefined) => (s === null || s === undefined || s === '' ? '(key only)' : s);
+  if (stopsManaging(item)) {
+    if (item.field === 'tag') return `Stop managing ${item.key} (Unity Catalog keeps ${v(item.before)})`;
+    return item.before_exists ? `Stop managing the description (Unity Catalog keeps “${item.before ?? ''}”)` : 'Stop managing this object';
+  }
   if (item.unchanged_in_uc) {
     return item.field === 'comment' ? `Keep the description “${item.after ?? ''}”` : `Keep ${item.key}${item.after ? `=${item.after}` : ' (key only)'}`;
   }
@@ -306,11 +314,17 @@ export function nameProblem(name: string, column?: string | null): string | null
   return null;
 }
 
-/** Whether syncing writes this object to Unity Catalog: enforce, and inside Enforce only in these schemas when set. */
+/** The schemas syncing is limited to, or [] when it writes everywhere (`*`). */
+export function limitedSchemas(config: MetadataConfig): string[] {
+  const schemas = config.enforce_schemas ?? [];
+  return schemas.includes('*') ? [] : schemas;
+}
+
+/** Whether syncing writes this object to Unity Catalog: enforce, and inside Enforce only in these schemas. */
 export function syncsObject(config: MetadataConfig, key: string): boolean {
   if (config.reconcile_mode !== 'enforce') return false;
   const schemas = config.enforce_schemas ?? [];
-  if (!schemas.length) return true;
+  if (schemas.includes('*')) return true;
   const [catalog, schema] = key.split('::')[0].toLowerCase().split('.');
   if (!schema) return false;
   const glob = (p: string) => new RegExp(`^${p.split(/([*?])/).map((s) => (s === '*' ? '.*' : s === '?' ? '.' : s.replace(/[.+^${}()|[\]\\]/g, '\\$&'))).join('')}$`);
@@ -320,7 +334,7 @@ export function syncsObject(config: MetadataConfig, key: string): boolean {
 /** Why a saved change to an object syncing doesn't write is only recorded here. */
 export function reportOnlyNote(config: MetadataConfig): string {
   if (config.reconcile_mode === 'off') return 'Syncing is off until an admin turns it on.';
-  if (config.reconcile_mode === 'enforce') return `Syncing writes only to ${(config.enforce_schemas ?? []).join(', ')}; everything else is only reported.`;
+  if (config.reconcile_mode === 'enforce') return `Syncing writes only to ${limitedSchemas(config).join(', ')}; everything else is only reported.`;
   return 'Syncing is set to report only until an admin turns it on.';
 }
 

@@ -12,7 +12,8 @@ constraint), so two writers can't both win on Postgres. Reads use
 ``populate_existing`` so the session's identity map never serves stale versions.
 
 A deleted row (``status=deleted``) reads as no tags, no description and every
-version 0; writing to it restores it.
+version 0; writing to it restores it. Items that are ``stops_managing`` (an undo of
+the change set that created the row) soft-delete it instead.
 """
 from __future__ import annotations
 
@@ -23,7 +24,7 @@ import uuid
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence
+from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 from pydantic import BaseModel
 from sqlalchemy import delete, func, insert, or_, select, update
@@ -163,6 +164,7 @@ def _desired(row: MetadataObjectModel, tags: Sequence[MetadataTagModel]) -> Desi
         last_apply_status=row.last_apply_status,
         last_apply_error=row.last_apply_error,
         last_observed_at=row.last_observed_at,
+        observed_created=row.observed_created,
         drift_detected_at=row.drift_detected_at,
         desired_hash=row.desired_hash,
     )
@@ -306,6 +308,14 @@ def _load_current(db: Session, targets: Dict[str, _Target]) -> None:
 def _conflicts(targets: Dict[str, _Target]) -> List[VersionConflictItem]:
     found: List[VersionConflictItem] = []
     for target in targets.values():
+        if target.active and any(i.stops_managing for i in target.items):
+            # Dropping the row drops every tag on it, so one set since the undo was planned is a conflict too.
+            planned = {i.key for i in target.items if i.field == "tag"}
+            found.extend(
+                VersionConflictItem(fqn_key=target.fqn_key, name=target.display, key=key, expected_version=0,
+                                    current_version=tag.version, current_value=tag.value)
+                for key, tag in sorted(target.tags.items()) if key not in planned
+            )
         for item in target.items:
             if item.field == "tag":
                 current = target.tags.get(item.key)
@@ -359,6 +369,7 @@ class _Writer:
         self.names: Dict[str, str] = {}
         self.counts: Counter = Counter()
         self.touched: Dict[str, str] = {}
+        self.dropped: set = set()
         self.raced: List[ChangeItem] = []
         self.environments: set = set()
 
@@ -474,6 +485,11 @@ class _Writer:
     def _unset_tag(self, object_id: str, target: _Target, item: ChangeItem) -> None:
         current = target.tags.get(item.key)
         if current is None:
+            if item.before_exists:
+                # A first row leaving out a value UC has: nothing to delete here, but syncing removes it from UC.
+                self._event(object_id, target.fqn_key, EVENT_TAG_UNSET, key=item.key,
+                            before={"value": item.before, "version": 0})
+                self.counts["tags_unset"] += 1
             return
         result = self.db.execute(
             delete(_TAGS).where(_TAGS.c.id == current.id, _TAGS.c.version == item.before_version)
@@ -504,14 +520,54 @@ class _Writer:
         if result.rowcount != 1:
             self.raced.append(item)
             return
-        previous = target.row.comment if target.active else None
+        if target.active:
+            previous = target.row.comment
+        else:
+            previous = item.before if value is None and item.before_exists else None
         before = {"value": previous, "version": item.before_version} if previous is not None else None
         after = {"value": value, "version": version} if value is not None else None
         self._event(object_id, target.fqn_key, EVENT_COMMENT_SET if value is not None else EVENT_COMMENT_CLEAR,
                     before=before, after=after)
         self.counts["comments"] += 1
 
+    def _drop(self, target: _Target) -> None:
+        """Soft-delete the row, so the object is no longer managed; the object_delete event keeps what it held."""
+        if any(not i.stops_managing for i in target.items):
+            raise errors.MetadataError(f"{target.display} can't stop being managed and change in the same change.")
+        if not target.active:
+            return
+        row = target.row
+        for tag in target.tags.values():
+            if self.db.execute(delete(_TAGS).where(_TAGS.c.id == tag.id, _TAGS.c.version == tag.version)).rowcount != 1:
+                self.raced.extend(target.items)
+                return
+        left = self.db.execute(select(func.count()).select_from(_TAGS).where(_TAGS.c.object_id == row.id)).scalar()
+        result = self.db.execute(
+            update(_OBJECTS)
+            .where(_OBJECTS.c.id == row.id, _OBJECTS.c.status == OBJECT_ACTIVE,
+                   _OBJECTS.c.comment_version == (row.comment_version or 0))
+            .values(status=OBJECT_DELETED, comment=None, comment_version=0, comment_set_by=None,
+                    comment_set_by_type=None, comment_source=None, comment_set_at=None,
+                    comment_change_set_id=None, desired_hash=None, updated_at=self.now)
+        )
+        if left or result.rowcount != 1:
+            self.raced.extend(target.items)
+            return
+        self._event(row.id, target.fqn_key, EVENT_OBJECT_DELETE, before={
+            "status": OBJECT_ACTIVE,
+            "object_state": row.object_state,
+            "securable_type": target.securable_type,
+            "tags": {key: tag.value for key, tag in sorted(target.tags.items())},
+            "comment": row.comment,
+        }, after={"status": OBJECT_DELETED})
+        self.names[row.id] = target.display
+        self.dropped.add(row.id)
+        self.counts["unmanaged"] += 1
+
     def write(self, target: _Target) -> None:
+        if any(i.stops_managing for i in target.items):
+            self._drop(target)
+            return
         if target.row is None:
             object_id = self._create(target)
         elif target.row.status == OBJECT_DELETED:
@@ -532,7 +588,7 @@ class _Writer:
 
     def finish_objects(self) -> None:
         """Recompute desired_hash from what the rows hold now (a concurrent writer may have set other keys)."""
-        ids = list(self.touched)
+        ids = [i for i in self.touched if i not in self.dropped]
         tags: Dict[str, Dict[str, Optional[str]]] = {i: {} for i in ids}
         comments: Dict[str, Optional[str]] = {}
         for chunk in _chunks(ids):
@@ -621,7 +677,8 @@ def write_items(
     raises ``errors.VersionConflict`` listing every conflict and writes nothing.
     ``securable_types`` gives the type for objects created by this write;
     ``ensure_objects`` creates (or restores) rows even when nothing on them changes.
-    With no items and no seeds it records a change set with no events (an
+    ``stops_managing`` items soft-delete their object's row instead (every item on
+    it must be one). With no items and no seeds it records a change set with no events (an
     idempotency record for a change filed for approval). Commits the session unless
     ``commit`` is false, when the write is only flushed and joins the caller's
     transaction. A second change set with the same actor and idempotency key raises
@@ -689,6 +746,8 @@ def _write(
         "restored": counts["restored"],
         "environments": sorted({i.environment for i in items if i.environment} | writer.environments),
     }
+    if counts["unmanaged"]:
+        summary["unmanaged"] = counts["unmanaged"]
     change_set = MetadataChangeSetModel(
         id=change_set_id,
         actor=actor.id,
@@ -705,9 +764,9 @@ def _write(
     db.add(change_set)
     db.add_all(writer.events)
     db.flush()
-    if writer.touched:
-        reconciler.enqueue(db, writer.touched.values(), reason="change", requested_by=actor.id,
-                           change_set_id=change_set_id)
+    queued = [fqn for object_id, fqn in writer.touched.items() if object_id not in writer.dropped]
+    if queued:
+        reconciler.enqueue(db, queued, reason="change", requested_by=actor.id, change_set_id=change_set_id)
     events = [_event_dto(e, writer.names.get(e.object_id)) for e in writer.events]
     return _change_set_dto(change_set, events)
 
@@ -868,57 +927,106 @@ def object_history(db: Session, fqn_key: str, *, limit: int = 50) -> List[Change
     return _events_dto(db, models)
 
 
-def revert_items(db: Session, change_set_id: str) -> List[ChangeItem]:
-    """Items that restore every tag and description the change set touched to its before value.
+_VALUE_EVENTS = (EVENT_TAG_SET, EVENT_TAG_UNSET, EVENT_COMMENT_SET, EVENT_COMMENT_CLEAR)
+_ROW_EVENTS = (EVENT_OBJECT_CREATE, EVENT_OBJECT_RESTORE, EVENT_OBJECT_DELETE)
 
-    Built against current state, so a value changed again since is still restored
-    (and its current version is the expected one). Values already back where they
-    were produce no item. Raises ``errors.NotFound`` and ``errors.MetadataError``
-    (already reverted, or nothing to revert).
+
+def _field_of(event: MetadataEventModel) -> Tuple[str, Optional[str]]:
+    return ("tag", event.key) if event.action in (EVENT_TAG_SET, EVENT_TAG_UNSET) else ("comment", None)
+
+
+@dataclass
+class RevertPlan:
+    """What undoing a change set does, built against current state."""
+
+    items: List[ChangeItem]
+    # Objects whose row the change set created: the undo drops the row (``ChangeItem.stops_managing``).
+    unmanaged: List[str] = field(default_factory=list)
+    # (fqn_key, display name, tag key or None for the description) a later change set changed again.
+    changed_since: List[Tuple[str, str, Optional[str]]] = field(default_factory=list)
+
+
+def revert_items(db: Session, change_set_id: str) -> List[ChangeItem]:
+    return revert_plan(db, change_set_id).items
+
+
+def revert_plan(db: Session, change_set_id: str) -> RevertPlan:
+    """Items that undo the change set: restore every tag and description it touched to its before value.
+
+    An object whose row the change set created (Start managing, or a first edit) and
+    that is still that row gets one ``stops_managing`` item per desired tag, plus one
+    for the description, so the undo drops the row: the object is no longer managed
+    and UC keeps what it has. Built against current state, so a value changed again
+    since is still restored (and its current version is the expected one); those are
+    listed in ``changed_since``. Values already back where they were produce no item.
+    Raises ``errors.NotFound`` and ``errors.MetadataError`` (already reverted, or
+    nothing to revert).
     """
     cs = db.get(MetadataChangeSetModel, change_set_id, populate_existing=True) if change_set_id else None
     if cs is None:
         raise errors.NotFound(f"Change set {change_set_id} doesn't exist.")
     if cs.reverted_by:
         raise errors.MetadataError(f"Change set {change_set_id} was already reverted by change set {cs.reverted_by}.")
-    events = (
+    own = (
         db.query(MetadataEventModel)
-        .filter(MetadataEventModel.change_set_id == cs.id,
-                MetadataEventModel.action.in_((EVENT_TAG_SET, EVENT_TAG_UNSET, EVENT_COMMENT_SET, EVENT_COMMENT_CLEAR)))
+        .filter(MetadataEventModel.change_set_id == cs.id)
         .order_by(MetadataEventModel.id)
         .all()
     )
-    if not events:
+    events = [e for e in own if e.action in _VALUE_EVENTS]
+    created = {e.object_id for e in own if e.action in (EVENT_OBJECT_CREATE, EVENT_OBJECT_RESTORE)}
+    if not events and not created:
+        if any(e.action == EVENT_OBJECT_DELETE for e in own):
+            raise errors.MetadataError(f"Change set {change_set_id} stopped managing objects, so there's nothing to "
+                                       "revert. To manage them again, use Start managing.")
         raise errors.MetadataError(f"Change set {change_set_id} didn't change any tags or descriptions, "
                                    "so there's nothing to revert.")
     # The first event per tag or description holds the value from before the change set.
     targets: Dict[tuple, MetadataEventModel] = {}
     for event in events:
-        field_name = "tag" if event.action in (EVENT_TAG_SET, EVENT_TAG_UNSET) else "comment"
-        targets.setdefault((event.fqn_key, field_name, event.key if field_name == "tag" else None), event)
+        field_name, key = _field_of(event)
+        targets.setdefault((event.fqn_key, field_name, key), event)
 
-    rows = {
-        r.fqn_key: r
-        for r in db.query(MetadataObjectModel).populate_existing()
-        .filter(MetadataObjectModel.id.in_(list({e.object_id for e in events})))
+    object_ids = list({e.object_id for e in events} | created)
+    by_id = {
+        r.id: r
+        for r in db.query(MetadataObjectModel).populate_existing().filter(MetadataObjectModel.id.in_(object_ids))
     }
+    rows = {r.fqn_key: r for r in by_id.values()}
+    later: List[MetadataEventModel] = []
+    for chunk in _chunks(object_ids):
+        later.extend(
+            db.query(MetadataEventModel)
+            .filter(MetadataEventModel.object_id.in_(chunk), MetadataEventModel.id > own[-1].id,
+                    MetadataEventModel.action.in_(_VALUE_EVENTS + _ROW_EVENTS))
+            .order_by(MetadataEventModel.id)
+            .all()
+        )
+    # Still the row the change set created: no later change set deleted it or brought it back.
+    recreated = {e.object_id for e in later if e.action in _ROW_EVENTS}
+    dropped = {by_id[i].fqn_key for i in created
+               if i in by_id and by_id[i].status == OBJECT_ACTIVE and i not in recreated}
     current = get_objects(db, rows)
+
+    changed_since: Dict[tuple, Tuple[str, str, Optional[str]]] = {}
+    for event in later:
+        if event.action not in _VALUE_EVENTS:
+            continue
+        field_name, key = _field_of(event)
+        if event.fqn_key in dropped or (event.fqn_key, field_name, key) in targets:
+            changed_since.setdefault((event.fqn_key, field_name, key),
+                                     (event.fqn_key, rows[event.fqn_key].display_name, key))
+
     items: List[ChangeItem] = []
+    for fqn in sorted(dropped):
+        items.extend(_unmanage_items(rows[fqn], current[fqn]))
     for (fqn, field_name, key), event in targets.items():
         row = rows.get(fqn)
-        if row is None:
+        if row is None or fqn in dropped:
             continue
         desired = current.get(fqn)
         wanted = (event.before or {}).get("value") if event.before is not None else None
-        base = dict(
-            fqn_key=fqn,
-            name=_object_key(row).name,
-            column=row.column_name,
-            securable_type=row.securable_type,
-            environment=row.environment,
-            object_exists=desired is not None,
-            object_state=row.object_state,
-        )
+        base = _row_item_base(row, object_exists=desired is not None)
         if field_name == "tag":
             tags = desired.tags if desired else {}
             versions = {t.key: t.version for t in desired.tag_details} if desired else {}
@@ -940,6 +1048,32 @@ def revert_items(db: Session, change_set_id: str) -> List[ChangeItem]:
                 before=now_value, before_exists=now_value is not None,
                 before_version=desired.comment.version if desired else 0, after=wanted,
             ))
+    return RevertPlan(items=items, unmanaged=sorted(dropped), changed_since=list(changed_since.values()))
+
+
+def _row_item_base(row: MetadataObjectModel, *, object_exists: bool) -> Dict[str, Any]:
+    return dict(
+        fqn_key=row.fqn_key,
+        name=_object_key(row).name,
+        column=row.column_name,
+        securable_type=row.securable_type,
+        environment=row.environment,
+        object_exists=object_exists,
+        object_state=row.object_state,
+    )
+
+
+def _unmanage_items(row: MetadataObjectModel, desired: DesiredState) -> List[ChangeItem]:
+    base = dict(_row_item_base(row, object_exists=True), unchanged_in_uc=True)
+    items = [
+        ChangeItem(**base, field="tag", key=t.key, action="unset", before=t.value, before_exists=True,
+                   before_version=t.version, after=None)
+        for t in sorted(desired.tag_details, key=lambda t: t.key)
+    ]
+    items.append(ChangeItem(
+        **base, field="comment", action="comment_clear", before=desired.comment.value,
+        before_exists=desired.comment.value is not None, before_version=desired.comment.version, after=None,
+    ))
     return items
 
 
@@ -969,20 +1103,25 @@ def set_object_state(db: Session, fqn_key: str, state: str, *, securable_type: O
         logger.debug("Metadata: no active desired row for %s; state %s not recorded", fqn_key, state)
 
 
-def purge_orphans(db: Session, *, older_than_days: int) -> int:
+def purge_orphans(db: Session, *, older_than_days: int, read_after: Mapping[str, datetime]) -> int:
     """Soft-delete rows orphaned longer than the retention, under one system change set. Commits.
 
-    A purged row keeps its identity but loses its tags and description; its
-    ``object_delete`` event keeps what they were.
+    Only rows whose catalog (lowercased) is in ``read_after`` with a successful read
+    that began after the row was orphaned: an orphan is purged only once a later full
+    read confirmed the object is still gone. A purged row keeps its identity but loses
+    its tags and description; its ``object_delete`` event keeps what they were.
     """
     cutoff = _now() - timedelta(days=max(int(older_than_days or 0), 0))
-    rows = db.execute(
-        select(_OBJECTS.c.id, _OBJECTS.c.fqn_key, _OBJECTS.c.display_name, _OBJECTS.c.securable_type,
-               _OBJECTS.c.comment, _OBJECTS.c.orphaned_at)
-        .where(_OBJECTS.c.status == OBJECT_ACTIVE, _OBJECTS.c.object_state == STATE_ORPHANED,
-               _OBJECTS.c.orphaned_at.is_not(None), _OBJECTS.c.orphaned_at < cutoff)
-        .order_by(_OBJECTS.c.fqn_key)
-    ).all()
+    rows = [
+        row for row in db.execute(
+            select(_OBJECTS.c.id, _OBJECTS.c.fqn_key, _OBJECTS.c.catalog, _OBJECTS.c.display_name,
+                   _OBJECTS.c.securable_type, _OBJECTS.c.comment, _OBJECTS.c.orphaned_at)
+            .where(_OBJECTS.c.status == OBJECT_ACTIVE, _OBJECTS.c.object_state == STATE_ORPHANED,
+                   _OBJECTS.c.orphaned_at.is_not(None), _OBJECTS.c.orphaned_at < cutoff)
+            .order_by(_OBJECTS.c.fqn_key)
+        ).all()
+        if (read_after.get((row.catalog or "").lower()) or datetime.min) > row.orphaned_at
+    ]
     if not rows:
         return 0
     actor = authz.system_actor()

@@ -38,6 +38,9 @@ _KIND_NAMES = {
     "column": "columns",
 }
 _warned_tokens: set = set()
+# Unity Catalog's limits on a tag; a longer one is refused when the statement runs.
+_MAX_KEY_LENGTH = 255
+_MAX_VALUE_LENGTH = 1000
 
 
 def _as_list(value: object) -> List[str]:
@@ -170,6 +173,12 @@ def check_item(item: ChangeItem, *, governed: Optional[Dict[str, List[str]]] = N
         if pol is not None and pol.required and applies_to(pol, item.securable_type):
             deny("required_key", f"'{key}' is required, so it can't be removed. You can change its value.")
         return findings
+
+    if len(key) > _MAX_KEY_LENGTH:
+        deny("key_too_long", f"tag keys can be at most {_MAX_KEY_LENGTH} characters; this one has {len(key):,}.")
+    if item.after is not None and len(item.after) > _MAX_VALUE_LENGTH:
+        deny("value_too_long", f"the value for '{key}' has {len(item.after):,} characters; Unity Catalog allows "
+                               f"at most {_MAX_VALUE_LENGTH:,}.")
 
     if pol is None:
         if str(settings.METADATA_KEY_MODE or "").strip().lower() == "known_only":

@@ -176,6 +176,16 @@ def test_governed_values():
     assert policy.check_item(item("region", action="unset", before="apac"), governed=governed) == []
 
 
+def test_tags_longer_than_unity_catalog_allows_are_denied_when_edited():
+    assert policy.check_item(item("free_" + "k" * 250, "v" * 1000)) == []
+    assert codes(policy.check_item(item("free_" + "k" * 251, "v"))) == ["key_too_long"]
+    found = policy.check_item(item("free", "v" * 1001))
+
+    assert codes(found) == ["value_too_long"]
+    assert "1,001 characters" in found[0].message
+    assert policy.check_item(item("free_" + "k" * 251, action="unset", before="x")) == []
+
+
 def test_removing_a_required_key_is_denied_where_it_applies():
     assert codes(policy.check_item(item("dataset", action="unset", before="orders"))) == ["required_key"]
     assert policy.check_item(item("dataset", action="unset", before="orders",

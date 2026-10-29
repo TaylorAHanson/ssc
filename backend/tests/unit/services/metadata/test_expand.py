@@ -247,7 +247,7 @@ def test_blocked_submit_keeps_the_counts(world, monkeypatch):
     assert exc.value.preview.findings[0].code == "pattern_matched"
 
 
-def test_many_unmanaged_warnings_collapse_into_one(db_session):
+def test_a_pattern_edit_keeps_the_tags_unmanaged_objects_have_in_uc(db_session):
     for t in range(10):
         _, cols = _key(f"dev.raw.t{t}")
         db_session.add(MetadataObservedModel(securable_type="table", tags={"legacy": "x"}, present=True, **cols))
@@ -257,8 +257,7 @@ def test_many_unmanaged_warnings_collapse_into_one(db_session):
 
     pv = expand.preview(db_session, ask, admin)
 
-    codes = [f.code for f in pv.findings]
-    assert codes.count("unmanaged_object") == expand.UNMANAGED_SHOWN
-    summary = next(f for f in pv.findings if f.code == "unmanaged_objects")
-    assert summary.message.startswith("7 more object(s)")
     assert pv.object_count == 10
+    assert sorted({(d.item.key, d.item.unchanged_in_uc) for d in pv.items}) == [("domain", False), ("legacy", True)]
+    assert (pv.direct_count, pv.kept_count) == (20, 10)
+    assert not [f for f in pv.findings if f.severity != "info" and f.code != "pattern_matched"]

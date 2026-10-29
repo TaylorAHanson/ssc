@@ -9,14 +9,21 @@ lists what the identity can only ``BROWSE`` (``<catalog>.information_schema``
 would need ``USE CATALOG``), and an object in a catalog that doesn't exist yet
 comes back as not found rather than as an error.
 
-* ``sweep`` reads whole catalogs (five statements per catalog, a few catalogs in
-  parallel) and commits per catalog. A table, column or tag read whose result is
-  over the warehouse's inline limit (25 MiB) is read again in halves, by schema and
-  then by table, until each part fits. A catalog whose query fails, or whose own
+* ``sweep`` reads whole catalogs (five statements per catalog, the last four at
+  once, and a few catalogs in parallel) and commits per catalog. Tables, columns and
+  their tags come back by external link, which has no size limit. Where those links
+  can't be downloaded they're read inline, and a result over the warehouse's inline
+  limit (25 MiB) is read again in halves, by schema and then by table, until each
+  part fits. A catalog whose query fails, or whose own
   ``catalogs`` row is missing (the identity lost ``BROWSE``), is reported and its
   rows are left untouched: information_schema filters silently, so an empty read
-  is never taken to mean "everything was dropped".
-* ``refresh`` and ``poll_new_objects`` read specific objects. Neither commits.
+  is never taken to mean "everything was dropped". For the same reason a read that
+  would mark more than METADATA_MAX_MISSING_PERCENT of a catalog missing isn't
+  saved, and a catalog the scope matched before that no longer shows up is reported
+  rather than dropped from the sweep.
+* ``refresh`` and ``poll_new_objects`` read specific objects. Neither commits. A
+  refresh also reads the catalog's own row and its relations' schemas, so losing
+  sight of either leaves the objects as they were instead of marking them dropped.
 
 Skipped everywhere: the ``information_schema`` schema itself, and relations whose
 name starts with ``__`` (Databricks-managed materializations), with their columns.
@@ -24,14 +31,16 @@ Names that ``ObjectKey.parse`` refuses can't be managed and aren't stored.
 """
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import fnmatch
 import logging
+import threading
 import time
 from collections import defaultdict, deque
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
 
 from dateutil import parser as date_parser
@@ -49,6 +58,7 @@ logger = logging.getLogger(__name__)
 
 LAST_SWEEP_KEY = "observed.last_sweep_at"
 CATALOG_READ_KEY = "observed.catalog_read_at"
+CATALOG_ATTEMPT_KEY = "observed.catalog_attempt_at"
 GOVERNED_TAGS_KEY = "observed.governed_tags"
 NEW_OBJECT_WATERMARK_KEY = "observed.new_object_watermark"
 
@@ -60,6 +70,12 @@ _HIDDEN_RELATION_PREFIX = "__"
 
 # Catalogs read concurrently; writes stay on the caller's thread, in catalog order.
 _READ_WORKERS = 4
+# Warehouse statements a sweep runs at once, across every catalog it's reading.
+_SWEEP_STATEMENTS = threading.BoundedSemaphore(8)
+# Parts of one over-limit inline read run at once.
+_PART_WORKERS = 4
+# After an external-link download fails, sweeps read inline for this long before trying links again.
+_EXTERNAL_LINKS_RETRY_SECONDS = 3600
 # A warehouse read at least this long is logged with its row count.
 _SLOW_READ_SECONDS = 30
 _UPSERT_CHUNK = 1000
@@ -73,6 +89,16 @@ _POLL_CATALOG_CHUNK = 100
 _KEY_CHUNK = 500
 # Longest full_data_type kept; a longer one (a wide nested struct) is stored as its bare type name.
 _DATA_TYPE_MAX = 500
+# A full read may always mark this many objects missing, whatever METADATA_MAX_MISSING_PERCENT says.
+_MISSING_FLOOR = 500
+# A catalog read started this long ago that never finished counts as unread (the check was killed).
+# Longer than any one catalog's read, so a check still running isn't reported as interrupted.
+_INTERRUPTED_AFTER = timedelta(minutes=20)
+_INTERRUPTED = "interrupted: the check reading this catalog stopped before it finished"
+_VANISHED = (
+    "no longer listed in Unity Catalog: it was dropped or renamed, or the app lost BROWSE on it. Its objects "
+    "are kept as they were last read"
+)
 
 _TABLE_TYPES = {
     "VIEW": "view",
@@ -220,16 +246,58 @@ def _warehouse_id(provider) -> str:
     return configured or settings.DATABRICKS_WAREHOUSE_ID
 
 
-def _rows(provider, sql: str, label: Optional[str] = None) -> List[list]:
-    """Every row of ``sql`` (polled to completion, all result chunks). Raises on failure."""
-    from app.providers.databricks.uc_metadata import _run_statement
+def _statement(
+    provider, sql: str, label: Optional[str] = None, *, external_links: bool = False, gated: bool = False,
+    max_rows: Optional[int] = None,
+):
+    """``sql``'s ``StatementResult``; ``gated`` waits for one of the sweep's warehouse slots. Raises on failure."""
+    from app.providers.databricks.uc_metadata import statement_result
 
-    began = time.monotonic()
-    rows = [list(r) for r in _run_statement(provider.client, sql, _warehouse_id(provider), label=label) or []]
+    with _SWEEP_STATEMENTS if gated else contextlib.nullcontext():
+        began = time.monotonic()
+        result = statement_result(
+            provider.client, sql, _warehouse_id(provider), label, external_links=external_links, max_rows=max_rows,
+        )
     took = time.monotonic() - began
     if label and took >= _SLOW_READ_SECONDS:
-        logger.info("Observed read: %s — %d row(s) in %d s.", label, len(rows), took)
-    return rows
+        logger.info("Observed read: %s — %d row(s) in %d s.", label, len(result.rows), took)
+    return result
+
+
+def _rows(
+    provider, sql: str, label: Optional[str] = None, *, gated: bool = False, max_rows: Optional[int] = None,
+) -> List[list]:
+    """Every row of ``sql`` (polled to completion, all result chunks). Raises on failure."""
+    return [list(r) for r in _statement(provider, sql, label, gated=gated, max_rows=max_rows).rows or []]
+
+
+def _max_rows_per_read() -> Optional[int]:
+    """METADATA_MAX_ROWS_PER_READ for one statement of a sweep; None when 0 (no limit)."""
+    limit = _int_setting("METADATA_MAX_ROWS_PER_READ", 2_000_000)
+    return limit if limit > 0 else None
+
+
+_external_links_lock = threading.Lock()
+_external_links_retry_at = 0.0
+_external_links_warned = False
+
+
+def _external_links_usable() -> bool:
+    return time.monotonic() >= _external_links_retry_at
+
+
+def _external_links_failed(label: str, error: Exception) -> None:
+    """Sweeps read inline for a while; the first failure in this process is a warning."""
+    global _external_links_retry_at, _external_links_warned
+    with _external_links_lock:
+        _external_links_retry_at = time.monotonic() + _EXTERNAL_LINKS_RETRY_SECONDS
+        first, _external_links_warned = not _external_links_warned, True
+    (logger.warning if first else logger.info)(
+        "Observed read: %s could not be fetched by external link (%s); reading it inline, as are large reads for "
+        "the next %d min. Inline reads of a big catalog are slower: check that the app can reach the "
+        "workspace's cloud storage.",
+        label, error, _EXTERNAL_LINKS_RETRY_SECONDS // 60,
+    )
 
 
 def _over_inline_limit(error: Exception) -> bool:
@@ -246,12 +314,18 @@ class _Part:
     tables: Optional[Tuple[str, ...]] = None
 
 
-def _halves(part: _Part, tables: Optional[Dict[str, List[str]]]) -> List[_Part]:
-    """``part`` split in two: by schema, then by the tables of a single schema; [] when it can't split."""
+_Tables = Callable[[], Dict[str, List[str]]]
+
+
+def _halves(part: _Part, tables: Optional[_Tables]) -> List[_Part]:
+    """``part`` split in two: by schema, then by the tables of a single schema; [] when it can't split.
+
+    ``tables()`` (schema -> its relations' names) is only called to split a single schema.
+    """
     if len(part.schemas) > 1:
         mid = len(part.schemas) // 2
         return [_Part(part.schemas[:mid]), _Part(part.schemas[mid:])]
-    names = part.tables if part.tables is not None else tuple((tables or {}).get(part.schemas[0], ()))
+    names = part.tables if part.tables is not None else tuple((tables() if tables else {}).get(part.schemas[0], ()))
     if len(names) < 2:
         return []
     mid = len(names) // 2
@@ -260,37 +334,101 @@ def _halves(part: _Part, tables: Optional[Dict[str, List[str]]]) -> List[_Part]:
 
 def _rows_in_parts(
     provider, label: str, build: Callable[[Optional[_Part]], str], schemas: Sequence[str],
-    tables: Optional[Dict[str, List[str]]] = None,
-) -> List[list]:
-    """Rows of ``build(None)``; a result over the inline limit is read again in halves until each fits.
+    tables: Optional[_Tables] = None, *, gated: bool = False, max_rows: Optional[int] = None,
+) -> Tuple[List[list], int]:
+    """Rows of ``build(None)`` and how many parts that took (0 = one statement).
 
-    Halving goes by schema, then (when ``tables`` lists a schema's tables) by table. Any
-    other failure, or a single table still over the limit, raises.
+    A result over the inline limit is read again in halves, a few parts at a time, until
+    each fits. Halving goes by schema, then (when ``tables`` lists a schema's tables) by
+    table. Any other failure, a single table still over the limit, or parts adding up to
+    more than ``max_rows``, raises.
     """
+    from app.providers.databricks.uc_metadata import ResultTooLarge
+
     try:
-        return _rows(provider, build(None), label)
+        return _rows(provider, build(None), label, gated=gated, max_rows=max_rows), 0
     except Exception as e:  # noqa: BLE001 - re-raised unless it's the size limit
         if not _over_inline_limit(e):
             raise
         first = e
-    logger.info("Observed read: %s is over the warehouse's inline result limit; reading it in parts.", label)
-    rows: List[list] = []
-    statements = 0
     pending = _halves(_Part(tuple(schemas)), tables) if schemas else []
     if not pending:
         raise first
-    while pending:
-        part = pending.pop()
-        statements += 1
+    logger.info("Observed read: %s is over the warehouse's inline result limit; reading it in parts.", label)
+    rows: List[list] = []
+    statements = 0
+    running: Dict[Future, _Part] = {}
+    with ThreadPoolExecutor(max_workers=_PART_WORKERS, thread_name_prefix="observed-part") as pool:
+        def submit(part: _Part) -> None:
+            nonlocal statements
+            statements += 1
+            sql = build(part)
+            running[pool.submit(
+                contextvars.copy_context().run, _rows, provider, sql, f"{label} (part {statements})", gated=gated,
+                max_rows=max_rows,
+            )] = part
+
+        for part in pending:
+            submit(part)
         try:
-            rows.extend(_rows(provider, build(part), f"{label} (part {statements})"))
-        except Exception as e:  # noqa: BLE001 - re-raised unless it's the size limit
-            halves = _halves(part, tables) if _over_inline_limit(e) else []
-            if not halves:
-                raise
-            pending.extend(halves)
+            while running:
+                done, _ = wait(running, return_when=FIRST_COMPLETED)
+                for future in done:
+                    part = running.pop(future)
+                    try:
+                        rows.extend(future.result())
+                    except Exception as e:  # noqa: BLE001 - re-raised unless it's the size limit
+                        halves = _halves(part, tables) if _over_inline_limit(e) else []
+                        if not halves:
+                            raise
+                        for half in halves:
+                            submit(half)
+                    if max_rows is not None and len(rows) > max_rows:
+                        raise ResultTooLarge(len(rows), max_rows)
+        finally:
+            for future in running:
+                future.cancel()
     logger.info("Observed read: %s read in %d statement(s).", label, statements)
-    return rows
+    return rows, statements
+
+
+@dataclass
+class _StatementRead:
+    """One statement's rows and how they were read, for a sweep's per-catalog timing line."""
+
+    label: str
+    rows: List[list]
+    seconds: float
+    how: str
+
+
+def _read_statement(
+    provider, catalog: str, label: str, build: Callable[[Optional[_Part]], str], schemas: Sequence[str] = (),
+    tables: Optional[_Tables] = None, *, sweep: bool = False, large: bool = False,
+) -> _StatementRead:
+    """Rows of ``build(None)``: by external link for a ``large`` read in a ``sweep``, else inline (in parts if need be).
+
+    A failed external-link read is read again inline.
+    """
+    from app.providers.databricks.uc_metadata import ExternalLinksUnavailable
+
+    began = time.monotonic()
+    after = ""
+    max_rows = _max_rows_per_read() if sweep else None
+    if sweep and large and _external_links_usable():
+        try:
+            result = _statement(provider, build(None), f"{catalog} {label}", external_links=True, gated=True,
+                                max_rows=max_rows)
+        except ExternalLinksUnavailable as e:
+            _external_links_failed(f"{catalog} {label}", e)
+            after = " after external links failed"
+        else:
+            how = "external links" if result.chunks <= 1 else f"external links, {result.chunks} chunks"
+            return _StatementRead(label, [list(r) for r in result.rows], time.monotonic() - began, how)
+    rows, parts = _rows_in_parts(provider, f"{catalog} {label}", build, schemas, tables, gated=sweep,
+                                 max_rows=max_rows)
+    how = (f"inline in {parts} parts" if parts else "inline") + after
+    return _StatementRead(label, rows, time.monotonic() - began, how)
 
 
 def scope_catalogs(provider=None) -> List[str]:
@@ -420,14 +558,32 @@ def _statements(info: str, catalog: str, targets: _Targets, part: Optional[_Part
     return out
 
 
-def _read(provider, info: str, catalog: str, targets: _Targets, observed_at: datetime) -> Dict[str, dict]:
-    """Snapshot rows keyed by fqn_key for what ``targets`` selects (relations filtered to exact pairs)."""
+def _read(
+    provider, info: str, catalog: str, targets: _Targets, observed_at: datetime, *, sweep: bool = False,
+) -> Dict[str, dict]:
+    """Snapshot rows keyed by fqn_key for what ``targets`` selects (relations filtered to exact pairs).
+
+    After the catalog and schema rows, the relation, column and tag statements run at
+    once. A ``sweep`` (a whole-catalog read) fetches the relation-level ones by external
+    link, counts every statement against the sweep's warehouse cap, and logs how each
+    statement was read.
+    """
+    began = time.monotonic()
     sql = _statements(info, catalog, targets)
     rows: Dict[str, dict] = {}
-    # (schema, table) lowercased -> the relation's row, for attaching columns and tags.
-    relations: Dict[Tuple[str, str], dict] = {}
+    reads: List[_StatementRead] = []
 
-    for r in _rows(provider, sql["containers"], f"{catalog} schemas") if "containers" in sql else []:
+    def read(name: str, label: str, schemas: Sequence[str] = (), tables: Optional[_Tables] = None,
+             large: bool = False) -> _StatementRead:
+        return _read_statement(
+            provider, catalog, label, lambda part: _statements(info, catalog, targets, part)[name], schemas, tables,
+            sweep=sweep, large=large,
+        )
+
+    containers = read("containers", "schemas") if "containers" in sql else None
+    if containers is not None:
+        reads.append(containers)
+    for r in containers.rows if containers is not None else []:
         if len(r) < 7:
             continue
         kind, cat_name, schema, owner, comment, created, altered = r[:7]
@@ -447,15 +603,11 @@ def _read(provider, info: str, catalog: str, targets: _Targets, observed_at: dat
         else {str(row["schema_name"]).lower() for row in rows.values() if row["securable_type"] == "schema"}
     )
 
-    def read(name: str, tables: Optional[Dict[str, List[str]]] = None) -> List[list]:
-        return _rows_in_parts(
-            provider, f"{catalog} {name}", lambda part: _statements(info, catalog, targets, part)[name], schemas, tables,
-        )
-
-    # schema -> its relations' names, once read, for splitting the column and tag reads by table.
-    tables: Dict[str, List[str]] = defaultdict(list)
-    if "relations" in sql:
-        for r in read("relations"):
+    def read_relations() -> Tuple[_StatementRead, Dict[Tuple[str, str], dict], Dict[str, List[str]]]:
+        """The relations read; its rows by (schema, table) lowercased; and schema -> its relations' names."""
+        done = read("relations", "relations", schemas, large=True)
+        found: Dict[Tuple[str, str], dict] = {}
+        for r in done.rows:
             if len(r) < 7:
                 continue
             schema, table, table_type, owner, comment, created, altered = r[:7]
@@ -467,31 +619,61 @@ def _read(provider, info: str, catalog: str, targets: _Targets, observed_at: dat
             key = _object_key(catalog, schema, table)
             if key is None:
                 continue
-            row = _snapshot_row(
+            found[pair] = _snapshot_row(
                 securable_type_for(table_type), key, observed_at,
                 table_type=table_type or None, owner=owner or None, comment=normalize_value(comment),
                 created=_ts(created), last_altered=_ts(altered),
             )
-            rows[key.fqn_key] = relations[pair] = row
-        for schema, table in sorted(relations):
-            tables[schema].append(table)
-        for r in read("columns", tables):
-            if len(r) < 6:
-                continue
-            schema, table, column, data_type, ordinal, comment = r[:6]
-            relation = relations.get((str(schema).lower(), str(table).lower()))
-            key = _object_key(catalog, schema, table, column) if relation is not None else None
-            if key is None:
-                continue
-            rows[key.fqn_key] = _snapshot_row(
-                "column", key, observed_at,
-                table_type=relation["table_type"], data_type=data_type or None,
-                ordinal_position=_int(ordinal), comment=normalize_value(comment),
-            )
+        names: Dict[str, List[str]] = defaultdict(list)
+        for schema, table in sorted(found):
+            names[schema].append(table)
+        return done, found, names
 
-    tag_rows = _rows(provider, sql["tags"], f"{catalog} catalog and schema tags") if "tags" in sql else []
-    if "relation_tags" in sql:
-        tag_rows += read("relation_tags", tables)
+    # A thread per statement: the column and tag reads may wait on the relations read to split by table.
+    with ThreadPoolExecutor(max_workers=4, thread_name_prefix="observed-statement") as pool:
+        def submit(fn: Callable, *args: Any, **kwargs: Any) -> Future:
+            return pool.submit(contextvars.copy_context().run, fn, *args, **kwargs)
+
+        relations_job = columns_job = tags_job = relation_tags_job = None
+        if "relations" in sql:
+            relations_job = submit(read_relations)
+
+            def tables() -> Dict[str, List[str]]:
+                return relations_job.result()[2]
+
+            columns_job = submit(read, "columns", "columns", schemas, tables, large=True)
+            relation_tags_job = submit(read, "relation_tags", "relation tags", schemas, tables, large=True)
+        if "tags" in sql:
+            tags_job = submit(read, "tags", "catalog and schema tags")
+
+        # (schema, table) lowercased -> the relation's row, for attaching columns and tags.
+        relations: Dict[Tuple[str, str], dict] = {}
+        if relations_job is not None:
+            relations_read, relations, _ = relations_job.result()
+            reads.append(relations_read)
+            rows.update((row["fqn_key"], row) for row in relations.values())
+        if columns_job is not None:
+            columns_read = columns_job.result()
+            reads.append(columns_read)
+            for r in columns_read.rows:
+                if len(r) < 6:
+                    continue
+                schema, table, column, data_type, ordinal, comment = r[:6]
+                relation = relations.get((str(schema).lower(), str(table).lower()))
+                key = _object_key(catalog, schema, table, column) if relation is not None else None
+                if key is None:
+                    continue
+                rows[key.fqn_key] = _snapshot_row(
+                    "column", key, observed_at,
+                    table_type=relation["table_type"], data_type=data_type or None,
+                    ordinal_position=_int(ordinal), comment=normalize_value(comment),
+                )
+        tag_rows: List[list] = []
+        for job in (tags_job, relation_tags_job):
+            if job is not None:
+                reads.append(job.result())
+                tag_rows += reads[-1].rows
+
     for r in tag_rows:
         if len(r) < 6:
             continue
@@ -509,6 +691,17 @@ def _read(provider, info: str, catalog: str, targets: _Targets, observed_at: dat
                 row = rows.get(key.fqn_key) if key is not None else None
         if row is not None:
             row["tags"][str(tag_name)] = normalize_value(tag_value)
+
+    if sweep:
+        took = time.monotonic() - began
+        logger.info(
+            "Observed read: %s — %s; %d s in all.", catalog,
+            "; ".join(f"{r.label} {len(r.rows):,} rows {r.seconds:.0f} s ({r.how})" for r in reads), took,
+            extra={"data": {"catalog": catalog, "seconds": round(took, 1), "statements": [
+                {"statement": r.label, "rows": len(r.rows), "seconds": round(r.seconds, 1), "read": r.how}
+                for r in reads
+            ]}},
+        )
     return rows
 
 
@@ -543,6 +736,22 @@ def _missing_values(at: datetime) -> dict:
     return {"present": False, "missing_since": func.coalesce(_T.c.missing_since, at)}
 
 
+class TooManyMissing(RuntimeError):
+    """A full read would mark more of a catalog missing than METADATA_MAX_MISSING_PERCENT allows."""
+
+
+def _int_setting(name: str, default: int) -> int:
+    try:
+        return int(getattr(settings, name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _missing_allowed(present: int) -> int:
+    percent = min(max(_int_setting("METADATA_MAX_MISSING_PERCENT", 5), 0), 100)
+    return present if percent >= 100 else max(_MISSING_FLOOR, present * percent // 100)
+
+
 def _write_catalog(db: Session, catalog: str, rows: Dict[str, dict], observed_at: datetime) -> Tuple[int, int]:
     """Save a whole-catalog read; returns (rows written, rows newly missing).
 
@@ -550,16 +759,19 @@ def _write_catalog(db: Session, catalog: str, rows: Dict[str, dict], observed_at
     ``observed_at``; reads report the catalog's last successful read instead (see
     ``_seen_at``), since even a one-column UPDATE rewrites every row in Postgres. Rows
     saved after this read began (a targeted refresh meanwhile) are newer than it:
-    they're neither overwritten nor marked missing.
+    they're neither overwritten nor marked missing. Raises ``TooManyMissing``, having
+    written nothing, when the read is missing too much of what was there.
     """
     keep: Set[str] = set()
     missing: List[str] = []
+    present = 0
     stored = db.execute(
         select(_T.c.fqn_key, _T.c.observed_at, *(_T.c[name] for name in _COMPARED_FIELDS))
         .where(_T.c.catalog == catalog)
         .execution_options(yield_per=_COMPARE_CHUNK)
     )
     for row in stored:
+        present += bool(row.present)
         if row.observed_at is not None and row.observed_at >= observed_at:
             keep.add(row.fqn_key)
             continue
@@ -569,6 +781,13 @@ def _write_catalog(db: Session, catalog: str, rows: Dict[str, dict], observed_at
                 missing.append(row.fqn_key)
         elif all(getattr(row, name) == read[name] for name in _COMPARED_FIELDS):
             keep.add(row.fqn_key)
+    allowed = _missing_allowed(present)
+    if len(missing) > allowed:
+        raise TooManyMissing(
+            f"this check would have marked {len(missing):,} of its {present:,} objects "
+            f"({len(missing) * 100 / present:.1f}%) as dropped, more than Max share missing per check allows "
+            f"({allowed:,}), so nothing from it was saved"
+        )
     changed = [row for key, row in rows.items() if key not in keep]
     _upsert(db, changed)
     _mark_keys_missing(db, missing, observed_at)
@@ -582,8 +801,49 @@ def _note_catalog_read(db: Session, catalog: str, at: datetime) -> None:
 
 def _catalog_reads(db: Session) -> Dict[str, datetime]:
     """Catalog -> when its last successful whole read began."""
-    found = {c: _parse_iso(at) for c, at in (_get_state(db, CATALOG_READ_KEY) or {}).items()}
+    return _timestamps(db, CATALOG_READ_KEY)
+
+
+def _timestamps(db: Session, key: str) -> Dict[str, datetime]:
+    found = {c: _parse_iso(at) for c, at in (_get_state(db, key) or {}).items()}
     return {c: at for c, at in found.items() if at is not None}
+
+
+def _note_attempts(db: Session, catalogs: Sequence[str], at: datetime) -> None:
+    """Record that a sweep is about to read these catalogs, so one killed mid-read is reported unread."""
+    _set_state(db, CATALOG_ATTEMPT_KEY, {
+        **(_get_state(db, CATALOG_ATTEMPT_KEY) or {}), **{c: at.isoformat() for c in catalogs},
+    })
+
+
+def _interrupted(db: Session, now: Optional[datetime] = None) -> List[str]:
+    """Catalogs whose latest read attempt began a while ago and never finished, as when a deploy kills the check."""
+    before = (now or _utcnow()) - _INTERRUPTED_AFTER
+    reads = _catalog_reads(db)
+    return sorted(
+        c for c, at in _timestamps(db, CATALOG_ATTEMPT_KEY).items()
+        if at < before and (c not in reads or reads[c] < at)
+    )
+
+
+def vanished_catalogs(db: Session, found: Sequence[str]) -> List[str]:
+    """Catalogs read before and still in METADATA_RECONCILE_CATALOGS that the scope no longer finds.
+
+    A pattern-matched catalog that disappears (dropped, renamed, or no longer visible
+    to the app) would otherwise drop out of the sweep silently. Listed until its last
+    successful read is older than METADATA_ORPHAN_RETENTION_DAYS.
+    """
+    if not scope.is_explicit():
+        return []
+    since = _utcnow() - timedelta(days=max(_int_setting("METADATA_ORPHAN_RETENTION_DAYS", 30), 1))
+    names = set(found)
+    return sorted(c for c, at in _catalog_reads(db).items() if c not in names and at >= since and scope.manages(c))
+
+
+def confirmed_reads(db: Session) -> Dict[str, datetime]:
+    """Catalog -> when its last successful whole read began, for catalogs not currently unread."""
+    unread = set(unread_catalogs(db))
+    return {c: at for c, at in _catalog_reads(db).items() if c not in unread}
 
 
 def _mark_keys_missing(db: Session, fqn_keys: Iterable[str], at: datetime) -> None:
@@ -654,7 +914,7 @@ class _CatalogRead:
 def _read_catalog(provider, catalog: str) -> _CatalogRead:
     observed_at = _utcnow()
     logger.info("Observed read: %s started.", catalog)
-    rows = _read(provider, "system.information_schema", catalog, _Targets(), observed_at)
+    rows = _read(provider, "system.information_schema", catalog, _Targets(), observed_at, sweep=True)
     if catalog not in rows:
         raise RuntimeError(
             f"information_schema returned no row for catalog '{catalog}'; it doesn't exist or the "
@@ -664,7 +924,11 @@ def _read_catalog(provider, catalog: str) -> _CatalogRead:
 
 
 def _read_ahead(provider, catalogs: Sequence[str]) -> Iterator[Tuple[str, Optional[_CatalogRead], Optional[Exception]]]:
-    """(catalog, read, error) in catalog order, reading a few catalogs ahead in parallel."""
+    """(catalog, read, error) in catalog order, reading a few catalogs ahead in parallel.
+
+    No more catalogs are read ahead than are read at once, so a finished read only waits
+    while the one before it is written; the reads held in memory stay bounded.
+    """
     with ThreadPoolExecutor(max_workers=max(1, min(_READ_WORKERS, len(catalogs))), thread_name_prefix="observed") as pool:
         queue: deque = deque()
         remaining = iter(catalogs)
@@ -674,7 +938,7 @@ def _read_ahead(provider, catalogs: Sequence[str]) -> Iterator[Tuple[str, Option
 
         for catalog in remaining:
             queue.append((catalog, submit(catalog)))
-            if len(queue) >= _READ_WORKERS * 2:
+            if len(queue) >= _READ_WORKERS:
                 break
         while queue:
             catalog, future = queue.popleft()
@@ -687,22 +951,31 @@ def _read_ahead(provider, catalogs: Sequence[str]) -> Iterator[Tuple[str, Option
                 yield catalog, None, e
 
 
-def sweep(db: Session, *, provider=None, catalogs: Optional[List[str]] = None) -> SweepResult:
+def sweep(
+    db: Session, *, provider=None, catalogs: Optional[List[str]] = None, vanished: Sequence[str] = (),
+) -> SweepResult:
     """Refresh the snapshot for whole catalogs; objects no longer seen get ``present=False``.
 
-    ``catalogs`` defaults to ``scope_catalogs()``. Commits after each catalog, so a
-    failure later in the sweep keeps what was already written.
+    ``catalogs=None`` means ``scope_catalogs()``, and then ``vanished`` defaults to
+    ``vanished_catalogs()``; vanished catalogs are reported as failed. Commits after
+    each catalog, so a failure later in the sweep keeps what was already written.
     """
     started = time.monotonic()
     provider = _provider(provider)
     targets = list(dict.fromkeys(c.strip().lower() for c in (catalogs or []) if c and c.strip()))
-    if not catalogs:
+    if catalogs is None:
         targets = scope_catalogs(provider)
+        vanished = vanished_catalogs(db, targets)
     result = SweepResult()
     sweep_started_at = _utcnow()
     read_s = write_s = 0.0
+    for catalog in vanished:
+        result.failed_catalogs[catalog] = _VANISHED
+        logger.warning("Observed sweep: catalog %s is %s.", catalog, _VANISHED)
 
     if targets:
+        _note_attempts(db, targets, sweep_started_at)
+        db.commit()
         waited = time.monotonic()
         for catalog, read, error in _read_ahead(provider, targets):
             read_s += time.monotonic() - waited
@@ -716,6 +989,9 @@ def sweep(db: Session, *, provider=None, catalogs: Optional[List[str]] = None) -
                 written, missing = _write_catalog(db, catalog, read.rows, read.observed_at)
                 _note_catalog_read(db, catalog, read.observed_at)
                 db.commit()
+            except TooManyMissing as e:
+                result.failed_catalogs[catalog] = str(e)[:1000]
+                logger.warning("Observed sweep: catalog %s wasn't saved, %s.", catalog, e)
             except Exception as e:  # noqa: BLE001 - reported per catalog
                 db.rollback()
                 result.failed_catalogs[catalog] = f"snapshot write failed: {e}"[:1000]
@@ -733,12 +1009,16 @@ def sweep(db: Session, *, provider=None, catalogs: Optional[List[str]] = None) -
 
     began = time.monotonic()
     _refresh_governed_tags(db, provider)
+    governed_ms = int((time.monotonic() - began) * 1000)
+    began = time.monotonic()
     result.took_ms = int((time.monotonic() - started) * 1000)
     result.read_ms = int(read_s * 1000)
     result.write_ms = int(write_s * 1000)
     previous = _get_state(db, LAST_SWEEP_KEY) or {}
     # Every catalog whose latest sweep failed, including ones this sweep didn't try.
-    unread = [c for c in previous.get("unread_catalogs") or [] if c not in targets] + sorted(result.failed_catalogs)
+    unread = list(dict.fromkeys(
+        [c for c in previous.get("unread_catalogs") or [] if c not in targets] + sorted(result.failed_catalogs)
+    ))
     previous_reasons = previous.get("unread_reasons") or {}
     unread_reasons = {c: previous_reasons[c] for c in unread if c in previous_reasons and c not in result.failed_catalogs}
     unread_reasons.update({c: str(err) for c, err in result.failed_catalogs.items()})
@@ -759,9 +1039,9 @@ def sweep(db: Session, *, provider=None, catalogs: Optional[List[str]] = None) -
     write_s += time.monotonic() - began
     result.write_ms = int(write_s * 1000)
     logger.info(
-        "Observed sweep finished in %d ms (%d ms waiting on Unity Catalog, %d ms saving): %d catalog(s), "
-        "%d object(s), %d newly missing, %d failed.",
-        result.took_ms, result.read_ms, result.write_ms, len(result.catalogs), result.objects_seen,
+        "Observed sweep finished in %d ms (%d ms waiting on Unity Catalog, %d ms saving, %d ms listing governed "
+        "tags): %d catalog(s), %d object(s), %d newly missing, %d failed.",
+        result.took_ms, result.read_ms, result.write_ms, governed_ms, len(result.catalogs), result.objects_seen,
         result.objects_missing, len(result.failed_catalogs),
     )
     return result
@@ -774,15 +1054,34 @@ def _guess_type(key: ObjectKey) -> str:
     return {"catalog": "catalog", "schema": "schema", "column": "column"}.get(key.level, "table")
 
 
+def _schema_key(key: ObjectKey) -> str:
+    return ObjectKey(catalog=key.catalog, schema_name=key.schema_name).fqn_key
+
+
+def _seen_before(db: Session, fqn_keys: Sequence[str]) -> Set[str]:
+    """Those of ``fqn_keys`` whose stored row says the object was there at the last read."""
+    seen: Set[str] = set()
+    for chunk in _chunks(sorted(set(fqn_keys)), _KEY_CHUNK):
+        seen.update(db.execute(
+            select(_T.c.fqn_key).where(_T.c.fqn_key.in_(list(chunk)), _T.c.present.is_(True))
+        ).scalars())
+    return seen
+
+
 def refresh(db: Session, keys: Iterable[ObjectKey], *, provider=None) -> Dict[str, ObservedState]:
     """    Targeted re-read of specific objects (and a relation's columns) right before applying.
 
     A column key re-reads its whole relation. Returns the state of every requested
     key plus the re-read relations and columns (including columns this read found
-    dropped, now ``present=False``); a key that wasn't found comes back
-    with ``present=False`` (its row, if any, is marked missing; no row is created
-    for an object never seen). Keys in a catalog whose read failed are left out of
-    the result and their rows are untouched. Flushes; the caller commits.
+    dropped, now ``present=False``), and the catalog and schema rows read alongside;
+    a key that wasn't found comes back with ``present=False`` (its row, if any, is
+    marked missing; no row is created for an object never seen).
+
+    Left out of the result, with their rows untouched: keys in a catalog whose read
+    failed or whose own row didn't come back although it was seen before (dropped, or
+    the app lost BROWSE), and keys in a schema seen before that didn't come back. The
+    full sweep, with its own guard, is what confirms those were dropped. Flushes; the
+    caller commits.
     """
     keys = list(keys)
     if not keys:
@@ -791,15 +1090,15 @@ def refresh(db: Session, keys: Iterable[ObjectKey], *, provider=None) -> Dict[st
     by_catalog: Dict[str, Tuple[_Targets, Dict[str, ObjectKey]]] = {}
     for key in keys:
         catalog = key.catalog.lower()
-        targets, requested = by_catalog.setdefault(catalog, (_Targets(catalog=False, schemas=set(), relations=set()), {}))
+        targets, requested = by_catalog.setdefault(catalog, (_Targets(catalog=True, schemas=set(), relations=set()), {}))
         if key.level == "catalog":
-            targets.catalog = True
             requested[key.fqn_key] = key
         elif key.level == "schema":
             targets.schemas.add(key.schema_name.lower())  # type: ignore[union-attr]
             requested[key.fqn_key] = key
         else:
             relation = key.relation_key()
+            targets.schemas.add(relation.schema_name.lower())  # type: ignore[union-attr]
             targets.relations.add((relation.schema_name.lower(), relation.object_name.lower()))  # type: ignore[union-attr]
             requested[key.fqn_key] = key
             requested.setdefault(relation.fqn_key, relation)
@@ -822,7 +1121,22 @@ def refresh(db: Session, keys: Iterable[ObjectKey], *, provider=None) -> Dict[st
         except Exception as e:  # noqa: BLE001 - the caller skips what it couldn't observe
             logger.warning("Observed refresh: could not read %d object(s) in catalog %s: %s", len(requested), catalog, e)
             continue
-        reads.append((requested, found, now))
+        expected = {catalog} | {_schema_key(key) for key in requested.values() if key.level != "catalog"}
+        gone = _seen_before(db, [k for k in expected if k not in found])
+        if catalog in gone:
+            logger.warning(
+                "Observed refresh: catalog %s didn't come back from Unity Catalog although it was read before (dropped, "
+                "or the app lost BROWSE on it); its %d object(s) are left as they were.", catalog, len(requested),
+            )
+            continue
+        withheld = {k for k, key in requested.items() if key.level != "catalog" and _schema_key(key) in gone}
+        if withheld:
+            logger.warning(
+                "Observed refresh: %d object(s) in catalog %s are in schemas that didn't come back from Unity Catalog "
+                "(%s); they're left as they were until a full check confirms the schemas were dropped.",
+                len(withheld), catalog, ", ".join(sorted(gone)),
+            )
+        reads.append(({k: v for k, v in requested.items() if k not in withheld}, found, now))
 
     result_keys: Dict[str, ObjectKey] = {}
     for requested, found, now in reads:
@@ -972,14 +1286,29 @@ def last_sweep_at(db: Session) -> Optional[datetime]:
 
 
 def unread_catalogs(db: Session) -> List[str]:
-    """Managed catalogs whose latest sweep couldn't read them, so their snapshot may be incomplete."""
-    return [c for c in (_get_state(db, LAST_SWEEP_KEY) or {}).get("unread_catalogs") or [] if scope.manages(c)]
+    """Managed catalogs whose latest sweep couldn't read them, or was killed reading them, so their snapshot may be incomplete."""
+    found = list((_get_state(db, LAST_SWEEP_KEY) or {}).get("unread_catalogs") or []) + _interrupted(db)
+    return [c for c in dict.fromkeys(found) if scope.manages(c)]
 
 
 def explain_read_error(error: Optional[str]) -> str:
     """A short reason for the browse banner; the raw warehouse text is kept in Sync history."""
     text = str(error or "").strip()
     lower = text.lower()
+    if lower.startswith("interrupted:"):
+        return "The last check stopped while reading this catalog (for example, the app restarted). The next check reads it again."
+    if "max share missing per check" in lower:
+        return (
+            "The last check found far fewer objects than before, so it wasn’t trusted and nothing was saved. If they "
+            "really were dropped, raise Max share missing per check in Admin → Settings and run Check now."
+        )
+    if lower.startswith("no longer listed"):
+        return "This catalog no longer shows up in Unity Catalog: it was dropped or renamed, or the app lost access to it."
+    if "one read may hold" in lower:
+        return (
+            "This catalog has more tables, columns or tags than one check may hold in memory, so it wasn’t read. "
+            "Raise Largest catalog read (rows) in Admin → Settings only if the app has memory to spare."
+        )
     if "browse" in lower:
         return "The app doesn’t have permission to see this catalog (it needs BROWSE)."
     if "inline byte limit" in lower:
@@ -999,4 +1328,7 @@ def unread_reasons(db: Session) -> Dict[str, str]:
     """Managed unread catalogs -> a short reason the browse page can show."""
     state = _get_state(db, LAST_SWEEP_KEY) or {}
     stored = state.get("unread_reasons") or {}
-    return {c: explain_read_error(stored.get(c)) for c in unread_catalogs(db)}
+    interrupted = set(_interrupted(db))
+    return {
+        c: explain_read_error(stored.get(c) or (_INTERRUPTED if c in interrupted else None)) for c in unread_catalogs(db)
+    }

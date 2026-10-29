@@ -5,13 +5,16 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.config import settings
+from app.db.app_setting import AppSettingModel
 from app.db.base import Base
 from app.db.metadata import (
+    MetadataChangeSetModel,
+    MetadataEventModel,
     MetadataObjectModel,
     MetadataObservedModel,
     MetadataReconcileItemModel,
@@ -32,6 +35,9 @@ TABLES = [
     MetadataReconcileRunModel.__table__,
     MetadataReconcileItemModel.__table__,
     MetadataSyncStateModel.__table__,
+    MetadataChangeSetModel.__table__,
+    MetadataEventModel.__table__,
+    AppSettingModel.__table__,
 ]
 LEVEL_TYPES = {"catalog": "catalog", "schema": "schema", "relation": "table", "column": "column"}
 
@@ -52,7 +58,7 @@ def _settings(monkeypatch):
     for name, value in {
         "METADATA_RECONCILE_MODE": "enforce",
         "METADATA_RECONCILE_CATALOGS": ["*"],
-        "METADATA_ENFORCE_SCHEMAS": [],
+        "METADATA_ENFORCE_SCHEMAS": ["*"],
         "METADATA_EXEMPT_KEYS": ["system.certified"],
         "METADATA_MAX_REMOVALS_PER_RUN": 200,
         "METADATA_NEW_OBJECT_POLICY": "adopt",
@@ -65,6 +71,7 @@ def _settings(monkeypatch):
     monkeypatch.setattr(reconciler, "_DEFAULT_APPLY_WORKERS", 1)
     for name in ("_next_sweep_time", "_last_poll_at", "_breaker_noted", "_pass_error_noted"):
         monkeypatch.setattr(reconciler, name, None)
+    monkeypatch.setattr(reconciler, "_shutdown", __import__("threading").Event())
 
 
 @pytest.fixture
@@ -85,6 +92,8 @@ class FakeUC:
         self.polled = []
         self.scope = ["c"]
         self.fail_refresh = None
+        # Keys a refresh leaves out though their catalog was read (their schema stopped coming back).
+        self.withheld = set()
 
     def add(self, fqn_key, tags=None, comment=None, *, securable_type=None, created=None):
         level = ObjectKey.from_fqn_key(fqn_key).level
@@ -124,6 +133,11 @@ class FakeUC:
         for key in keys:
             if key.catalog.lower() in self.unreadable:
                 continue
+            if key.catalog.lower() in self.objects:
+                self._write(db, key.catalog.lower())
+                written.append(key.catalog.lower())
+            if key.fqn_key in self.withheld:
+                continue
             targets = [key.fqn_key]
             if key.level == "relation":
                 prefix = key.fqn_key + "::"
@@ -136,15 +150,15 @@ class FakeUC:
         db.flush()
         states = observed.get_observed(db, written)
         for key in keys:
-            if key.catalog.lower() not in self.unreadable and key.fqn_key not in states:
+            if key.catalog.lower() not in self.unreadable and key.fqn_key not in states and key.fqn_key not in self.withheld:
                 states[key.fqn_key] = ObservedState(
                     fqn_key=key.fqn_key, key=key, securable_type=LEVEL_TYPES[key.level], present=False,
                 )
         return states
 
-    def sweep(self, db, provider=None, catalogs=None):
+    def sweep(self, db, provider=None, catalogs=None, vanished=()):
         self.swept.append(list(catalogs))
-        result = SweepResult()
+        result = SweepResult(failed_catalogs={c: "gone" for c in vanished})
         for catalog in catalogs:
             if catalog in self.unreadable:
                 result.failed_catalogs[catalog] = "PERMISSION_DENIED"
@@ -305,8 +319,8 @@ def test_a_failed_statement_records_the_error_and_drift(db, uc, provider):
 
     result = reconciler.run(db, trigger="manual", fqn_keys=["c.s.t"], provider=provider)
 
-    assert result.status == "failed"
-    assert [(o.operation, o.status) for o in result.items] == [("unset", "failed"), ("set", "skipped")]
+    assert result.status == "partial"
+    assert [(o.operation, o.status) for o in result.items] == [("unset", "failed"), ("set", "applied")]
     row = obj(db, "c.s.t")
     assert row.last_apply_status == "failed" and "PERMISSION_DENIED" in row.last_apply_error
     assert row.drift_detected_at is not None and row.last_applied_at is None
@@ -359,6 +373,229 @@ def test_too_many_removals_trip_the_breaker_before_anything_runs(db, uc, provide
     assert reconciler.circuit_breaker_tripped(db) is False
     assert reconciler._get_state(db, reconciler.CIRCUIT_BREAKER_KEY)["cleared_by"] == "admin@x.com"
     assert len(alerts) == 1
+
+
+def test_removals_add_up_across_runs_within_an_hour(db, uc, provider, monkeypatch, alerts):
+    monkeypatch.setattr(settings, "METADATA_MAX_REMOVALS_PER_RUN", 2)
+    uc.add("c.s.a", {"x": "1", "y": "2"})
+    uc.add("c.s.b", {"z": "1"})
+    desired(db, "c.s.a")
+    desired(db, "c.s.b")
+
+    first = reconciler.run(db, trigger="queue", fqn_keys=["c.s.a"], provider=provider)
+    second = reconciler.run(db, trigger="queue", fqn_keys=["c.s.b"], provider=provider)
+
+    assert first.status == "completed" and second.status == "paused"
+    assert "2 were already removed in the last hour" in second.paused_reason
+    assert reconciler.circuit_breaker_state(db)["recent_removals"] == 2 and len(alerts) == 1
+
+
+def test_removals_from_over_an_hour_ago_or_before_a_clear_dont_count(db, uc, provider, monkeypatch):
+    monkeypatch.setattr(settings, "METADATA_MAX_REMOVALS_PER_RUN", 2)
+    for name in ("a", "b", "c"):
+        uc.add(f"c.s.{name}", {"x": "1", "y": "2"})
+        desired(db, f"c.s.{name}")
+
+    first = reconciler.run(db, trigger="queue", fqn_keys=["c.s.a"], provider=provider)
+    db.query(MetadataReconcileRunModel).filter_by(id=first.run_id).update({
+        "started_at": datetime.utcnow() - timedelta(hours=2), "finished_at": datetime.utcnow() - timedelta(hours=2),
+    })
+    db.commit()
+    assert reconciler.run(db, trigger="queue", fqn_keys=["c.s.b"], provider=provider).status == "completed"
+
+    reconciler.trip_circuit_breaker(db, run_id="r", removals=9, limit=2)
+    reconciler.clear_circuit_breaker(db, cleared_by="admin@x.com")
+    db.commit()
+    assert reconciler.recent_removals(db) == 0
+    assert reconciler.run(db, trigger="queue", fqn_keys=["c.s.c"], provider=provider).status == "completed"
+
+
+def test_removals_an_admin_approved_dont_count_against_later_runs(db, uc, provider, monkeypatch):
+    monkeypatch.setattr(settings, "METADATA_MAX_REMOVALS_PER_RUN", 1)
+    uc.add("c.s.a", {"x": "1", "y": "2"})
+    uc.add("c.s.b", {"z": "1"})
+    desired(db, "c.s.a")
+    desired(db, "c.s.b")
+
+    reconciler.run(db, trigger="manual", fqn_keys=["c.s.a"], provider=provider, override_circuit_breaker=True)
+
+    assert reconciler.recent_removals(db) == 0
+    assert reconciler.run(db, trigger="queue", fqn_keys=["c.s.b"], provider=provider).status == "completed"
+
+
+@pytest.fixture
+def paused(db, uc, provider, monkeypatch, alerts):
+    """c.s.a is paused with 2 removals (limit 1); resume runs on its own session like the API's."""
+    monkeypatch.setattr(settings, "METADATA_MAX_REMOVALS_PER_RUN", 1)
+    monkeypatch.setattr(reconciler, "_governance_provider", lambda: provider)
+    uc.add("c.s.a", {"x": "1", "y": "2"})
+    desired(db, "c.s.a")
+    result = reconciler.run(db, trigger="queue", fqn_keys=["c.s.a"], provider=provider)
+    assert result.status == "paused"
+    factory = sessionmaker(bind=db.get_bind())
+
+    def resume(run_id=result.run_id):
+        out = reconciler.resume_paused(db, run_id=run_id, actor="admin@x.com", session_factory=factory, wait_seconds=10)
+        db.expire_all()
+        return out
+
+    return SimpleNamespace(run_id=result.run_id, resume=resume)
+
+
+def test_resume_applies_only_the_paused_runs_objects(db, uc, provider, paused):
+    uc.add("c.s.b", {"z": "1"})
+    desired(db, "c.s.b")
+
+    result = paused.resume()
+
+    assert result.status == "completed" and result.removals_planned == 2
+    assert provider.statements.executed == ["ALTER TABLE `c`.`s`.`a` UNSET TAGS ('x', 'y');"]
+    assert reconciler.circuit_breaker_tripped(db) is False
+
+
+def test_resume_applies_nothing_if_it_would_now_remove_more_than_was_reviewed(db, uc, provider, paused):
+    uc.objects["c.s.a"]["tags"]["w"] = "added since"
+
+    result = paused.resume()
+
+    assert result.status == "paused" and "more than the 2 reviewed" in result.paused_reason
+    assert provider.statements.executed == []
+    assert reconciler.circuit_breaker_state(db)["run_id"] == result.run_id
+
+
+def test_resume_or_clear_of_a_pause_that_changed_is_refused(db, paused):
+    with pytest.raises(reconciler.PauseChanged):
+        paused.resume(run_id="another-run")
+    with pytest.raises(reconciler.PauseChanged):
+        reconciler.clear_paused(db, run_id="another-run", actor="admin@x.com")
+    assert reconciler.circuit_breaker_tripped(db) is True
+
+
+def test_resume_needs_enforce(db, paused, monkeypatch):
+    monkeypatch.setattr(settings, "METADATA_RECONCILE_MODE", "plan")
+
+    with pytest.raises(reconciler.errors.MetadataError, match="Clear the pause instead"):
+        paused.resume()
+
+
+def test_clearing_a_pause_writes_nothing(db, provider, paused):
+    reconciler.clear_paused(db, run_id=paused.run_id, actor="admin@x.com")
+
+    assert reconciler.circuit_breaker_tripped(db) is False and provider.statements.executed == []
+    assert reconciler._get_state(db, reconciler.CIRCUIT_BREAKER_KEY)["cleared_by"] == "admin@x.com"
+
+
+def test_blanking_a_tag_value_or_a_description_counts_as_a_removal(db, uc, provider, monkeypatch, alerts):
+    monkeypatch.setattr(settings, "METADATA_MAX_REMOVALS_PER_RUN", 1)
+    uc.add("c.s.t", {"class": "restricted", "keep": "1"}, comment="Orders")
+    desired(db, "c.s.t", {"class": "", "keep": "2"}, comment=" ")
+
+    result = reconciler.run(db, trigger="queue", fqn_keys=["c.s.t"], provider=provider)
+
+    assert result.status == "paused" and result.removals_planned == 2
+    assert provider.statements.executed == []
+
+
+def test_blanking_a_view_column_tag_counts_as_a_removal(db, uc, provider, monkeypatch, alerts):
+    monkeypatch.setattr(settings, "METADATA_MAX_REMOVALS_PER_RUN", 0)
+    uc.add("c.s.v", securable_type="view")
+    uc.add("c.s.v::email", {"pii": "yes"})
+    desired(db, "c.s.v", securable_type="view")
+    desired(db, "c.s.v::email", {"pii": ""})
+
+    result = reconciler.run(db, trigger="queue", fqn_keys=["c.s.v"], provider=provider)
+
+    assert result.status == "paused" and result.removals_planned == 1
+
+
+# --- run: stopping while it writes ---------------------------------------------------------------
+
+
+@pytest.fixture
+def two_tables(db, uc, monkeypatch):
+    monkeypatch.setattr(reconciler, "_STOP_CHECK_SECONDS", 0)
+    monkeypatch.setattr(settings, "METADATA_APPLY_CONCURRENCY", 1)
+    for name in ("a", "b"):
+        uc.add(f"c.s.{name}")
+        desired(db, f"c.s.{name}", {"k": "1"})
+
+
+def test_syncing_turned_off_mid_apply_stops_the_run(db, provider, two_tables):
+    def turn_off(_sql):
+        if db.get(AppSettingModel, "METADATA_RECONCILE_MODE") is None:
+            db.add(AppSettingModel(key="METADATA_RECONCILE_MODE", value="plan"))
+            db.commit()
+
+    provider.statements.on_execute = turn_off
+    result = reconciler.run(db, trigger="queue", fqn_keys=["c.s.a", "c.s.b"], provider=provider)
+
+    assert len(provider.statements.executed) == 1
+    assert [o.status for o in result.items] == ["applied", "skipped"]
+    assert "settings changed" in result.items[1].detail
+    assert result.status == "partial" and result.error.startswith("Stopped before writing everything")
+
+
+def test_a_run_that_lost_its_lock_writes_nothing(db, provider, two_tables):
+    token = reconciler._lock_check.set(lambda: False)
+    try:
+        result = reconciler.run(db, trigger="queue", fqn_keys=["c.s.a", "c.s.b"], provider=provider)
+    finally:
+        reconciler._lock_check.reset(token)
+
+    assert provider.statements.executed == [] and result.status == "failed"
+    assert {o.status for o in result.items} == {"skipped"} and "lost its database lock" in result.items[0].detail
+
+
+def test_shutdown_stops_a_run_between_relations(db, provider, two_tables):
+    provider.statements.on_execute = lambda _sql: reconciler._shutdown.set()
+
+    result = reconciler.run(db, trigger="queue", fqn_keys=["c.s.a", "c.s.b"], provider=provider)
+
+    assert [o.status for o in result.items] == ["applied", "skipped"]
+    assert "shutting down" in result.items[1].detail
+
+
+def test_a_stopped_queue_run_leaves_its_rows_for_the_next_drain(db, provider, two_tables):
+    reconciler.enqueue(db, ["c.s.a", "c.s.b"])
+    db.commit()
+    token = reconciler._lock_check.set(lambda: False)
+    try:
+        reconciler.drain_queue(db, provider=provider)
+    finally:
+        reconciler._lock_check.reset(token)
+
+    assert {k: r.attempts for k, r in queue(db).items()} == {"c.s.a": 0, "c.s.b": 0}
+
+
+def test_finishing_a_run_someone_else_closed_keeps_it_closed_but_records_what_it_did(db):
+    run_id = reconciler.start_run(db, trigger="queue", mode="enforce")
+    db.query(MetadataReconcileRunModel).filter_by(id=run_id).update({"status": "failed"})
+    db.commit()
+    done = reconciler.PlanOutcome(fqn_key="c.s.t", name="c.s.t", securable_type="table", operation="set",
+                                  tags={"a": "1"}, sql="SET", status="applied")
+
+    result = reconciler.finish_run(db, run_id, status="completed", outcomes=[done])
+
+    assert result.status == "failed" and result.error.startswith(reconciler._LOST_LOCK_ERROR)
+    assert result.statements_applied == 1 and len(reconciler.get_run(db, run_id).items) == 1
+
+
+def test_an_old_run_still_holding_the_lock_isnt_closed(db, monkeypatch):
+    run_id = reconciler.start_run(db, trigger="sweep", mode="enforce")
+    db.query(MetadataReconcileRunModel).filter_by(id=run_id).update({"started_at": datetime.utcnow() - timedelta(hours=7)})
+    db.commit()
+    monkeypatch.setattr(reconciler, "_run_lock_held", lambda db_: True)
+
+    assert reconciler._close_abandoned_runs(db) == 0
+    monkeypatch.setattr(reconciler, "_run_lock_held", lambda db_: None)
+    assert reconciler._close_abandoned_runs(db) == 1
+
+
+def test_the_lock_key_splits_into_unsigned_halves():
+    hi, lo = reconciler._LOCK_PARAMS["hi"], reconciler._LOCK_PARAMS["lo"]
+
+    assert 0 <= hi < 2 ** 32 and 0 <= lo < 2 ** 32
+    assert (hi << 32) | lo == reconciler._ADVISORY_LOCK_KEY
 
 
 # --- run: enforce only in some schemas ----------------------------------------------------------
@@ -464,6 +701,76 @@ def test_a_pending_object_that_now_exists_becomes_exists_and_is_applied(db, uc, 
     row = obj(db, "c.s.v")
     assert (row.object_state, row.securable_type, row.last_apply_status) == ("exists", "view", "applied")
     assert provider.statements.executed == ["ALTER VIEW `c`.`s`.`v` SET TAGS ('a' = '1');"]
+
+
+def test_a_new_object_is_adopted_only_once_it_has_gone_quiet(db, uc, provider):
+    created = reconciler._utcnow() - timedelta(minutes=2)
+    uc.add("c.s.fresh", {"a": "1"}, created=created)
+    reconciler.enqueue(db, ["c.s.fresh"], reason="new_object")
+    db.commit()
+
+    reconciler.drain_queue(db, provider=provider)
+
+    assert store.get_objects(db, ["c.s.fresh"]) == {}
+    row = queue(db)["c.s.fresh"]
+    assert (row.attempts, row.last_error) == (0, None)
+    assert abs(row.not_before - (created + timedelta(minutes=10))) < timedelta(seconds=1)
+
+    uc.objects["c.s.fresh"]["created"] = created - timedelta(minutes=10)
+    make_due(db)
+    reconciler.drain_queue(db, provider=provider)
+
+    assert store.get_objects(db, ["c.s.fresh"])["c.s.fresh"].tags == {"a": "1"}
+
+
+def test_a_table_created_under_a_prepared_row_keeps_the_tags_it_was_created_with(db, uc, provider):
+    uc.add("c.s.t", {"owner": "pipeline", "team": "x", "system.certified": "yes"}, "from create",
+           created=reconciler._utcnow() - timedelta(hours=1))
+    desired(db, "c.s.t", {"owner": "steward", "pii": "true"}, state="pending")
+
+    reconciler.run(db, trigger="manual", fqn_keys=["c.s.t"], provider=provider)
+
+    assert store.get_objects(db, ["c.s.t"])["c.s.t"].tags == {"owner": "steward", "pii": "true", "team": "x"}
+    [statement] = provider.statements.executed
+    assert statement.startswith("ALTER TABLE `c`.`s`.`t` SET TAGS") and "'owner' = 'steward'" in statement
+    row = obj(db, "c.s.t")
+    assert (row.object_state, row.comment) == ("exists", "from create") and row.observed_created is not None
+
+
+def test_a_recreated_table_keeps_its_create_time_tags_but_an_edit_in_uc_is_still_reverted(db, uc, provider):
+    first = reconciler._utcnow() - timedelta(days=3)
+    uc.add("c.s.t", {"a": "1"}, created=first)
+    desired(db, "c.s.t", {"a": "1"})
+    reconciler.run(db, trigger="manual", fqn_keys=["c.s.t"], provider=provider)
+    assert abs(obj(db, "c.s.t").observed_created - first) < timedelta(seconds=1)
+
+    uc.objects["c.s.t"]["tags"]["stray"] = "x"
+    reconciler.run(db, trigger="manual", fqn_keys=["c.s.t"], provider=provider)
+    assert provider.statements.executed == ["ALTER TABLE `c`.`s`.`t` UNSET TAGS ('stray');"]
+
+    uc.add("c.s.t", {"b": "new"}, created=first + timedelta(days=2))
+    reconciler.run(db, trigger="manual", fqn_keys=["c.s.t"], provider=provider)
+
+    assert store.get_objects(db, ["c.s.t"])["c.s.t"].tags == {"a": "1", "b": "new"}
+    assert provider.statements.executed[1:] == ["ALTER TABLE `c`.`s`.`t` SET TAGS ('a' = '1');"]
+
+
+def test_a_recreated_table_still_being_changed_is_left_alone_with_its_columns(db, uc, provider):
+    first = reconciler._utcnow() - timedelta(days=3)
+    uc.add("c.s.t", {"a": "1"}, created=first)
+    uc.add("c.s.t::col", {"p": "1"})
+    desired(db, "c.s.t", {"a": "1"})
+    desired(db, "c.s.t::col", {"p": "1"})
+    reconciler.run(db, trigger="manual", fqn_keys=["c.s.t"], provider=provider)
+
+    again = reconciler._utcnow() - timedelta(minutes=1)
+    uc.add("c.s.t", {}, created=again)
+    uc.add("c.s.t::col", {})
+    result = reconciler.run(db, trigger="manual", fqn_keys=["c.s.t"], provider=provider)
+
+    assert provider.statements.executed == [] and result.items == []
+    assert abs(obj(db, "c.s.t").observed_created - first) < timedelta(seconds=1)
+    assert abs(queue(db)["c.s.t"].not_before - (again + timedelta(minutes=10))) < timedelta(seconds=1)
 
 
 def test_a_vanished_object_is_orphaned_and_keeps_its_desired_state(db, uc, provider):
@@ -611,7 +918,7 @@ def test_a_failed_adopt_is_retried(db, uc, provider, monkeypatch):
 
 def test_a_sweep_reconciles_every_managed_object_and_purges_orphans(db, uc, provider, monkeypatch):
     purged = []
-    monkeypatch.setattr(store, "purge_orphans", lambda db_, *, older_than_days: purged.append(older_than_days) or 0)
+    monkeypatch.setattr(store, "purge_orphans", lambda db_, *, older_than_days, read_after: purged.append(older_than_days) or 0)
     uc.scope = ["c", "d"]
     uc.unreadable = {"d"}
     uc.add("c")
@@ -635,10 +942,27 @@ def test_a_sweep_reconciles_every_managed_object_and_purges_orphans(db, uc, prov
     reconciler.run(db, trigger="manual", catalogs=["C"], provider=provider)
     assert uc.swept[-1] == ["c"] and purged == [30]
 
+    monkeypatch.setattr(settings, "METADATA_RECONCILE_MODE", "plan")
+    reconciler.run(db, trigger="sweep", provider=provider)
+    assert purged == [30]
+
+
+def test_a_sweep_reports_a_managed_catalog_that_disappeared(db, uc, provider, monkeypatch):
+    monkeypatch.setattr(settings, "METADATA_RECONCILE_CATALOGS", ["c", "old_*"])
+    observed._note_catalog_read(db, "old_sales", datetime.utcnow() - timedelta(days=1))
+    observed._note_catalog_read(db, "old_hr", datetime.utcnow() - timedelta(days=90))
+    observed._note_catalog_read(db, "unmanaged", datetime.utcnow())
+    db.commit()
+
+    result = reconciler.run(db, trigger="sweep", provider=provider)
+
+    assert uc.swept == [["c"]]
+    assert result.skipped_catalogs == ["old_sales"] and result.unread_catalogs == ["old_sales"]
+
 
 def test_a_read_that_fails_or_misses_things_never_removes_a_tag(db, uc, provider, monkeypatch, alerts):
     """Removals only come from tags a read just saw in UC: seeing less can never remove more."""
-    monkeypatch.setattr(store, "purge_orphans", lambda db_, *, older_than_days: 0)
+    monkeypatch.setattr(store, "purge_orphans", lambda db_, *, older_than_days, read_after: 0)
     uc.scope = ["c", "d"]
     uc.add("c")
     uc.add("c.s.untagged")
@@ -804,6 +1128,53 @@ def test_an_unreadable_catalog_is_retried(db, uc, provider):
     assert obj(db, "c.s.t").last_apply_status == "applied"
 
 
+def _keep_reverting(db, provider, reason, times):
+    for _ in range(times):
+        reconciler.enqueue(db, ["c.s.t"], reason=reason)
+        db.commit()
+        make_due(db)
+        reconciler.drain_queue(db, provider=provider)
+
+
+def test_an_object_something_keeps_changing_back_is_backed_off_and_alerts(db, uc, provider, alerts):
+    uc.add("c.s.t", {"a": "theirs"})
+    desired(db, "c.s.t", {"a": "1"})
+
+    _keep_reverting(db, provider, "new_object", 3)
+    row = queue(db)["c.s.t"]
+    assert row.attempts == 1 and row.last_error.startswith("Written 3 times in the last hour")
+
+    _keep_reverting(db, provider, "new_object", 4)
+    assert queue(db)["c.s.t"].attempts == 5
+    assert len(alerts) == 1 and "c.s.t: Written 7 times" in "\n".join(alerts[0][1])
+
+
+def test_repeated_edits_are_never_taken_for_something_changing_it_back(db, uc, provider, alerts):
+    uc.add("c.s.t", {"a": "theirs"})
+    desired(db, "c.s.t", {"a": "1"})
+
+    _keep_reverting(db, provider, "change", 4)
+
+    assert queue(db) == {} and alerts == []
+
+
+def test_an_object_whose_schema_stopped_coming_back_is_retried_not_orphaned(db, uc, provider):
+    uc.add("c.s.t")
+    uc.add("c.hidden.u", {"a": "1"})
+    desired(db, "c.s.t", {"a": "1"})
+    desired(db, "c.hidden.u", {"a": "1"})
+    uc.withheld = {"c.hidden.u"}
+    reconciler.enqueue(db, ["c.s.t", "c.hidden.u"])
+    db.commit()
+
+    result = reconciler.drain_queue(db, provider=provider)
+
+    assert result.skipped_catalogs == []
+    assert list(queue(db)) == ["c.hidden.u"] and "schema" in queue(db)["c.hidden.u"].last_error
+    assert obj(db, "c.hidden.u").object_state == "exists"
+    assert obj(db, "c.s.t").last_apply_status == "applied"
+
+
 def test_a_paused_run_leaves_the_queue_alone(db, uc, provider):
     reconciler.trip_circuit_breaker(db, run_id="r0", removals=500, limit=200)
     reconciler.enqueue(db, ["c.s.t"])
@@ -825,6 +1196,74 @@ def test_a_broken_run_backs_off_every_row(db, uc, provider):
     assert {k: r.attempts for k, r in queue(db).items()} == {"c.s.a": 1, "c.s.b": 1}
 
 
+# --- Sync history retention and database waits ----------------------------------------------
+
+
+def _history_run(db, run_id, *, days_ago, trigger="sweep", status="completed", items=2):
+    db.add(MetadataReconcileRunModel(
+        id=run_id, trigger=trigger, mode="plan", status=status,
+        started_at=reconciler._utcnow() - timedelta(days=days_ago),
+    ))
+    for n in range(items):
+        db.add(MetadataReconcileItemModel(run_id=run_id, fqn_key=f"c.s.t{n}", operation="set", status="planned"))
+    db.commit()
+
+
+def test_old_sync_history_is_pruned_but_paused_and_newest_runs_are_kept(db):
+    _history_run(db, "old-sweep", days_ago=40)
+    _history_run(db, "old-queue", days_ago=40, trigger="queue")
+    _history_run(db, "old-paused", days_ago=40, status="paused")
+    _history_run(db, "newest-manual", days_ago=50, trigger="manual")
+    _history_run(db, "recent-sweep", days_ago=1)
+    _history_run(db, "newest-queue", days_ago=35, trigger="queue")
+
+    assert reconciler._prune_history(db) == 2
+
+    db.expire_all()
+    assert {r.id for r in db.query(MetadataReconcileRunModel)} == {
+        "old-paused", "newest-manual", "recent-sweep", "newest-queue",
+    }
+    assert {i.run_id for i in db.query(MetadataReconcileItemModel)} == {
+        "old-paused", "newest-manual", "recent-sweep", "newest-queue",
+    }
+
+
+def test_pruning_stops_at_its_time_budget_and_can_be_turned_off(db, monkeypatch):
+    _history_run(db, "old", days_ago=40)
+    _history_run(db, "new", days_ago=1)
+
+    assert reconciler._prune_history(db, budget_seconds=0) == 0
+    monkeypatch.setattr(settings, "METADATA_RUN_HISTORY_DAYS", 0)
+    assert reconciler._prune_history(db) == 0
+    assert db.query(MetadataReconcileRunModel).count() == 2
+
+
+def test_each_transaction_of_a_run_gets_statement_and_lock_timeouts_on_postgres(db, monkeypatch):
+    engine = db.get_bind()
+    sent = []
+
+    def capture(conn, cursor, statement, parameters, context, executemany):
+        if statement.startswith("SET LOCAL"):
+            sent.append(statement)
+            return "SELECT 1", ()
+        return statement, parameters
+
+    event.listen(engine, "before_cursor_execute", capture, retval=True)
+    monkeypatch.setattr(engine.dialect, "name", "postgresql")
+    db.execute(text("SELECT 1"))
+
+    with reconciler._bounded_waits(db):
+        db.commit()
+        db.execute(text("SELECT 1"))
+    db.commit()
+    db.execute(text("SELECT 1"))
+
+    assert sent == [
+        f"SET LOCAL statement_timeout = {reconciler._STATEMENT_TIMEOUT_MS}",
+        f"SET LOCAL lock_timeout = {reconciler._LOCK_TIMEOUT_MS}",
+    ] * 2
+
+
 # --- reconcile_task / the poller pass ---------------------------------------------------------
 
 
@@ -836,11 +1275,24 @@ def pass_env(db, uc, provider, monkeypatch):
     return SimpleNamespace(db=db, uc=uc, provider=provider)
 
 
-def test_reconcile_task_does_nothing_when_mode_is_off(monkeypatch):
+def test_reconcile_task_does_nothing_when_mode_is_off(pass_env, monkeypatch):
     monkeypatch.setattr(settings, "METADATA_RECONCILE_MODE", "off")
-    monkeypatch.setattr(reconciler, "_session", lambda: pytest.fail("mode off must not open a session"))
+    monkeypatch.setattr(reconciler, "_governance_provider", lambda: pytest.fail("mode off must not connect"))
+    reconciler.enqueue(pass_env.db, ["c.s.t"])
+    pass_env.db.commit()
 
     asyncio.run(reconciler.reconcile_task())
+
+
+def test_a_pass_picks_up_syncing_turned_off_on_another_replica(pass_env, monkeypatch):
+    monkeypatch.setattr(reconciler, "_governance_provider", lambda: pytest.fail("turned off elsewhere, no connection"))
+    pass_env.db.add(AppSettingModel(key="METADATA_RECONCILE_MODE", value="off"))
+    reconciler.enqueue(pass_env.db, ["c.s.t"])
+    pass_env.db.commit()
+
+    reconciler._reconcile_pass()
+
+    assert settings.METADATA_RECONCILE_MODE == "off"
 
 
 def test_reconcile_task_never_raises(monkeypatch, caplog):

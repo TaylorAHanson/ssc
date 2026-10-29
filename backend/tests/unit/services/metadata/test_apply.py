@@ -6,6 +6,7 @@ import pytest
 
 from app.core.config import settings
 from app.services.metadata import apply
+from app.services.metadata.sql import build_tag_statement
 from app.services.metadata.types import PlanItem
 
 
@@ -49,10 +50,10 @@ class FakeProvider:
         self.client = SimpleNamespace(statement_execution=statements)
 
 
-def item(fqn_key, operation, sql, *, securable_type="table", name=None, column=None, tags=None, keys=None):
+def item(fqn_key, operation, sql, *, securable_type="table", name=None, column=None, tags=None, keys=None, **extra):
     return PlanItem(
         fqn_key=fqn_key, name=name or fqn_key.split("::")[0], column=column, securable_type=securable_type,
-        operation=operation, sql=sql, tags=tags or {}, keys=keys or [],
+        operation=operation, sql=sql, tags=tags or {}, keys=keys or [], **extra,
     )
 
 
@@ -188,9 +189,8 @@ def test_a_missing_tag_error_on_set_is_a_failure():
     assert outcome.status == "failed"
 
 
-def test_a_failure_skips_the_rest_of_that_object_but_not_other_objects(caplog):
-    statements = FakeStatements({"ALTER TABLE `c`.`s`.`a` UNSET": "[PERMISSION_DENIED] no APPLY TAG"})
-    items = [
+def _object_items():
+    return [
         item("c.s.a", "unset", "ALTER TABLE `c`.`s`.`a` UNSET TAGS ('x');", keys=["x"]),
         item("c.s.a", "set", "ALTER TABLE `c`.`s`.`a` SET TAGS ('y' = '1');", tags={"y": "1"}),
         item("c.s.a::col", "set", "ALTER TABLE `c`.`s`.`a` ALTER COLUMN `col` SET TAGS ('p' = '');",
@@ -199,16 +199,97 @@ def test_a_failure_skips_the_rest_of_that_object_but_not_other_objects(caplog):
         item("c.s.a", "comment", "COMMENT ON TABLE `c`.`s`.`a` IS 'x';"),
     ]
 
+
+def test_a_refused_statement_doesnt_hold_back_the_objects_other_statements(caplog):
+    statements = FakeStatements({"ALTER TABLE `c`.`s`.`a` UNSET": "[PERMISSION_DENIED] no APPLY TAG"})
+    items = _object_items()
+
     with caplog.at_level(logging.WARNING, logger="app.services.metadata.apply"):
         outcomes = apply.execute(FakeProvider(statements), items)
+
+    assert [(o.fqn_key, o.status) for o in outcomes] == [
+        ("c.s.a", "failed"), ("c.s.a", "applied"), ("c.s.a::col", "applied"), ("c.s.b", "applied"),
+        ("c.s.a", "applied"),
+    ]
+    assert outcomes[0].detail == "[PERMISSION_DENIED] no APPLY TAG"
+    assert sorted(statements.executed) == sorted(i.sql for i in items)
+    assert any("c.s.a" in r.getMessage() for r in caplog.records)
+
+
+def test_a_missing_object_skips_the_rest_of_that_object_but_not_other_objects():
+    statements = FakeStatements({"ALTER TABLE `c`.`s`.`a` UNSET": "[TABLE_OR_VIEW_NOT_FOUND] `c`.`s`.`a` cannot be found."})
+    items = _object_items()
+
+    outcomes = apply.execute(FakeProvider(statements), items)
 
     assert [(o.fqn_key, o.status) for o in outcomes] == [
         ("c.s.a", "failed"), ("c.s.a", "skipped"), ("c.s.a::col", "applied"), ("c.s.b", "applied"),
         ("c.s.a", "skipped"),
     ]
-    assert outcomes[0].detail == "[PERMISSION_DENIED] no APPLY TAG"
     assert statements.executed == [items[0].sql, items[2].sql, items[3].sql]
-    assert any("c.s.a" in r.getMessage() for r in caplog.records)
+
+
+def test_a_refused_multi_tag_set_is_retried_one_tag_at_a_time():
+    statements = FakeStatements({
+        "ALTER TABLE `c`.`s`.`t` SET TAGS ('a' = '', ": "[INVALID_PARAMETER_VALUE] 'bad' isn't allowed for governed tag b",
+        "ALTER TABLE `c`.`s`.`t` SET TAGS ('b'": "[INVALID_PARAMETER_VALUE] 'bad' isn't allowed for governed tag b",
+    })
+    tags = {"a": None, "b": "bad", "c": "1"}
+    items = [
+        item("c.s.t", "set", "ALTER TABLE `c`.`s`.`t` SET TAGS ('a' = '', 'b' = 'bad', 'c' = '1');", tags=tags,
+             statement_type="table", blanks=["a"], removals=1),
+        item("c.s.t", "comment", "COMMENT ON TABLE `c`.`s`.`t` IS 'x';"),
+    ]
+
+    outcomes = apply.execute(FakeProvider(statements), items)
+
+    assert [(o.operation, o.tags, o.status, o.removals) for o in outcomes] == [
+        ("set", {"a": None}, "applied", 1), ("set", {"b": "bad"}, "failed", 0), ("set", {"c": "1"}, "applied", 0),
+        ("comment", {}, "applied", 0),
+    ]
+    assert statements.executed[1:] == [
+        "ALTER TABLE `c`.`s`.`t` SET TAGS ('a' = '');", "ALTER TABLE `c`.`s`.`t` SET TAGS ('b' = 'bad');",
+        "ALTER TABLE `c`.`s`.`t` SET TAGS ('c' = '1');", "COMMENT ON TABLE `c`.`s`.`t` IS 'x';",
+    ]
+
+
+def _view_column_change():
+    def sql(operation, **kwargs):
+        return build_tag_statement("view", "c.s.v", operation, column="x", **kwargs)[0]
+
+    common = {"securable_type": "column", "name": "c.s.v", "column": "x", "statement_type": "view"}
+    return [
+        item("c.s.v::x", "unset", sql("unset", keys=["k"]), keys=["k"], **common),
+        item("c.s.v::x", "set", sql("set", tags={"k": "new"}), tags={"k": "new"}, restore={"k": "old"}, **common),
+    ]
+
+
+def test_a_view_column_value_that_is_refused_gets_its_old_value_back():
+    statements = FakeStatements({"SET TAG ON COLUMN `c`.`s`.`v`.`x` `k` = `new`": "[INVALID_PARAMETER_VALUE] refused"})
+
+    outcomes = apply.execute(FakeProvider(statements), _view_column_change())
+
+    assert [(o.operation, o.tags, o.status) for o in outcomes] == [
+        ("unset", {}, "applied"), ("set", {"k": "new"}, "failed"), ("set", {"k": "old"}, "applied"),
+    ]
+    assert statements.executed[-1] == "SET TAG ON COLUMN `c`.`s`.`v`.`x` `k` = `old`;"
+    assert "previous value back" in outcomes[2].detail
+
+
+@pytest.mark.parametrize("unset_error,expected", [
+    ("[PERMISSION_DENIED] no APPLY TAG", ["failed", "skipped"]),
+    ("[TAG_NOT_FOUND] Tag 'k' not found.", ["noop", "failed"]),
+])
+def test_a_view_column_value_change_never_restores_what_it_didnt_remove(unset_error, expected):
+    statements = FakeStatements({
+        "UNSET TAG ON COLUMN": unset_error,
+        "SET TAG ON COLUMN `c`.`s`.`v`.`x` `k` = `new`": "[INVALID_PARAMETER_VALUE] refused",
+    })
+
+    outcomes = apply.execute(FakeProvider(statements), _view_column_change())
+
+    assert [o.status for o in outcomes] == expected
+    assert not any("`old`" in s for s in statements.executed)
 
 
 def test_an_empty_statement_is_a_noop():
@@ -249,7 +330,7 @@ def test_a_broken_provider_fails_items_without_raising():
 
 
 def test_parallel_workers_keep_each_relation_in_order():
-    statements = FakeStatements({"ALTER TABLE `c`.`s`.`t3`": "[PERMISSION_DENIED] no"})
+    statements = FakeStatements({"ALTER TABLE `c`.`s`.`t3` UNSET": "[PERMISSION_DENIED] no"})
     items = []
     for n in range(8):
         name = f"c.s.t{n}"
@@ -264,8 +345,8 @@ def test_parallel_workers_keep_each_relation_in_order():
     for n in range(8):
         if n != 3:
             assert statements.executed.index(items[2 * n].sql) < statements.executed.index(items[2 * n + 1].sql)
-    assert [o.status for o in outcomes if o.fqn_key == "c.s.t3"] == ["failed", "skipped"]
-    assert sum(o.status == "applied" for o in outcomes) == 14
+    assert [o.status for o in outcomes if o.fqn_key == "c.s.t3"] == ["failed", "applied"]
+    assert sum(o.status == "applied" for o in outcomes) == 15
 
 
 def test_only_the_first_failures_are_logged_one_by_one(caplog):

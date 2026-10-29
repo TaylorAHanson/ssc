@@ -3,7 +3,7 @@ import { ExternalLink } from 'lucide-react';
 import type { ChangeResult, VersionConflictItem } from '../../../types/metadata';
 import { Notice } from '../../rbac/ui';
 import { useMetadata } from './context';
-import { objectLabel, reportOnlyNote, syncsObject } from './format';
+import { limitedSchemas, objectLabel, reportOnlyNote, syncsObject } from './format';
 
 /** The outcome of a submit in plain language, with links to the change and the request. */
 export function ResultView({ result, onLeave }: { result: ChangeResult; onLeave?: () => void }) {
@@ -31,7 +31,7 @@ export function ResultView({ result, onLeave }: { result: ChangeResult; onLeave?
     synced > 0 && synced === result.preview.items.length
       ? 'They’ll reach Unity Catalog in the background, usually within a minute.'
       : synced > 0
-        ? `Changes in ${(config.enforce_schemas ?? []).join(', ')} reach Unity Catalog in the background, usually within a minute; the rest are recorded here only. ${reportOnlyNote(config)}`
+        ? `Changes in ${limitedSchemas(config).join(', ')} reach Unity Catalog in the background, usually within a minute; the rest are recorded here only. ${reportOnlyNote(config)}`
         : `They’re recorded here but won’t reach Unity Catalog yet. ${reportOnlyNote(config)}`;
 
   return (

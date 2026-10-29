@@ -21,6 +21,7 @@ def _settings(monkeypatch):
     monkeypatch.setattr(reconciler, "_next_sweep_time", None)
     monkeypatch.setattr(reconciler, "_bad_cron", None)
     monkeypatch.setattr(reconciler, "_bad_mode", None)
+    monkeypatch.setattr(settings, "METADATA_ENFORCE_SCHEMAS", ["*"])
 
 
 def outcome(fqn_key, operation, status, *, name=None, column=None, securable_type="table", removals=0, **kw):
@@ -78,6 +79,37 @@ def test_re_enqueue_makes_a_backing_off_row_due_with_a_fresh_attempt_count(db_se
     db_session.refresh(row)
     assert (row.attempts, row.last_error, row.reason) == (0, None, "notify")
     assert row.not_before < datetime(2099, 1, 1)
+
+
+def test_a_change_seen_in_uc_keeps_a_failing_rows_attempts_and_backoff(db_session):
+    reconciler.enqueue(db_session, ["c.s.t"])
+    row = db_session.query(MetadataReconcileQueueModel).one()
+    row.attempts, row.last_error, row.not_before = 3, "boom", datetime(2099, 1, 1)
+    db_session.flush()
+
+    reconciler.enqueue(db_session, ["c.s.t"], reason="new_object")
+    db_session.flush()
+
+    db_session.refresh(row)
+    assert (row.attempts, row.last_error, row.not_before) == (3, "boom", datetime(2099, 1, 1))
+
+
+def test_a_queued_row_can_be_due_later_but_a_change_seen_in_uc_never_makes_it_due_sooner(db_session):
+    later, sooner = datetime(2099, 1, 1), datetime(2098, 1, 1)
+    reconciler.enqueue(db_session, ["c.s.t"], reason="new_object", not_before=later)
+    db_session.flush()
+    row = db_session.query(MetadataReconcileQueueModel).one()
+    assert row.not_before == later and row.enqueued_at < later
+
+    reconciler.enqueue(db_session, ["c.s.t"], reason="new_object", not_before=sooner)
+    db_session.flush()
+    db_session.refresh(row)
+    assert row.not_before == later
+
+    reconciler.enqueue(db_session, ["c.s.t"], reason="change")
+    db_session.flush()
+    db_session.refresh(row)
+    assert row.not_before < sooner
 
 
 # --- Circuit breaker ----------------------------------------------------------------------
@@ -203,7 +235,7 @@ def test_start_and_finish_run_record_counters_and_items(db_session):
         (["a", "b"], {}, None, 2), ([], {"x": "1"}, None, 0), ([], {}, "hi", 0),
     ]
     assert stored.statements_applied == 1 and stored.actor == "admin@x.com"
-    assert db_session.get(MetadataReconcileRunModel, run_id).summary == {"scope": "manual"}
+    assert db_session.get(MetadataReconcileRunModel, run_id).summary == {"scope": "manual", "removals_applied": 2}
 
 
 def test_a_run_whose_process_is_gone_or_that_is_very_old_is_closed_when_the_next_starts(db_session, monkeypatch):

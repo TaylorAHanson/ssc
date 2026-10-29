@@ -24,7 +24,7 @@ from app.services.metadata.types import (
 HIDDEN_REASON = "You can't browse this object, so its current values aren't shown."
 HIDDEN_SENSITIVE = "A sensitive change: it needs approval."
 # Findings that describe an object's current state rather than the requested change.
-_STATE_FINDINGS = frozenset({"unmanaged_object"})
+_STATE_FINDINGS = frozenset({"changed_since"})
 _KEPT_NOTE = " Unity Catalog already has this value, so it's kept as is."
 
 
@@ -48,20 +48,26 @@ def redact_preview(preview: Optional[ChangePreview], browse: BrowseScope, *, rea
     if preview is None or browse.full:
         return preview
     sees = browse.predicate()
-    hidden_items = [not sees(d.item.fqn_key) for d in preview.items]
+    # A kept item's value is what the object has in UC now; it's left out rather than hidden.
+    shown = [d for d in preview.items if not (d.item.kept and not sees(d.item.fqn_key))]
+    hidden_items = [not sees(d.item.fqn_key) for d in shown]
     hidden_findings = [f.code in _STATE_FINDINGS and bool(f.fqn_key) and not sees(f.fqn_key)
                        for f in preview.findings]
-    if not any(hidden_items) and not any(hidden_findings):
+    if len(shown) == len(preview.items) and not any(hidden_items) and not any(hidden_findings):
         return preview
     from app.services.metadata.changes import items_digest
 
-    items = [_hide_item(d) if hidden else d for d, hidden in zip(preview.items, hidden_items)]
+    items = [_hide_item(d) if hidden else d for d, hidden in zip(shown, hidden_items)]
+    buckets = [report.bucket(d) for d in items]
     out = preview.model_copy(update={
         "items": items,
         # The original hashes the hidden values, which a short value list could be checked against.
         "digest": items_digest([d.item for d in items]),
         "findings": [f for f, hidden in zip(preview.findings, hidden_findings) if not hidden],
-        "kept_count": sum(1 for d in items if d.item.unchanged_in_uc and report.bucket(d) == report.DIRECT),
+        "direct_count": buckets.count(report.DIRECT),
+        "approval_count": buckets.count(report.APPROVAL),
+        "denied_count": buckets.count(report.DENIED),
+        "kept_count": sum(1 for d, b in zip(items, buckets) if d.item.kept and b == report.DIRECT),
     })
     out.report_markdown = report.build_report(out, reason=reason, title=title)
     return out

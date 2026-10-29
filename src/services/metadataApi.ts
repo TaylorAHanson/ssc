@@ -242,6 +242,16 @@ export async function startRun(request: RunRequest): Promise<ReconcileResult> {
   return post('/runs', request);
 }
 
+/** Apply the reviewed paused sync: only its objects, and only if that removes no more than it planned. */
+export async function resumePausedRun(runId: string): Promise<ReconcileResult> {
+  return post('/runs/paused/resume', { run_id: runId });
+}
+
+/** Lift the pause without applying the paused sync's removals. */
+export async function clearPausedRun(runId: string): Promise<MetadataConfig> {
+  return post('/runs/paused/clear', { run_id: runId });
+}
+
 // --- System principals (admin) -------------------------------------------------------
 
 /** GET /principals */
@@ -300,6 +310,8 @@ export const metadataApi = {
   listRuns,
   getRun,
   startRun,
+  resumePausedRun,
+  clearPausedRun,
   listPrincipals,
   createPrincipal,
   updatePrincipal,

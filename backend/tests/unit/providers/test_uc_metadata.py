@@ -4,11 +4,18 @@ Column names and result shapes here were validated against a live metastore, so
 the fake below mirrors the real ``information_schema`` layout rather than a
 guess at it.
 """
+import json
+import threading
+import time
+import traceback
 from types import SimpleNamespace
 
 import pytest
+import requests
 
-from app.providers.databricks.uc_metadata import fetch_uc_metadata
+from app.providers.databricks.uc_metadata import (
+    ExternalLinksUnavailable, ResultTooLarge, _run_statement, fetch_uc_metadata, statement_result,
+)
 
 WAREHOUSE = "wh-1"
 
@@ -25,7 +32,7 @@ class FakeStatementExecution:
         self.fail_with = fail_with
         self.statements = []
 
-    def execute_statement(self, statement, warehouse_id, wait_timeout=None):
+    def execute_statement(self, statement, warehouse_id, wait_timeout=None, disposition=None, format=None):
         self.statements.append(statement)
         if self.fail_with:
             raise self.fail_with
@@ -183,7 +190,7 @@ class SlowStatementExecution(FakeStatementExecution):
         self.chunks = {}
         self.cancelled = []
 
-    def execute_statement(self, statement, warehouse_id, wait_timeout=None):
+    def execute_statement(self, statement, warehouse_id, wait_timeout=None, disposition=None, format=None):
         finished = super().execute_statement(statement, warehouse_id, wait_timeout)
         statement_id = f"stmt-{len(self.statements)}"
         self.pending[statement_id] = [0, finished.result.data_array]
@@ -263,3 +270,160 @@ def test_statement_that_never_finishes_fails_the_catalog(no_sleep, monkeypatch):
     assert "still RUNNING" in batch.failed_catalogs["main"]
     assert batch.not_visible == ["main.sales.orders"]
     assert client.statement_execution.cancelled == ["stmt-1"]
+
+
+# --- complete results, and EXTERNAL_LINKS ------------------------------------------------
+
+SQL = "SELECT 1 FROM system.information_schema.columns "
+
+
+def _succeeded(result, total=None, truncated=None):
+    return SimpleNamespace(
+        statement_id="stmt-1", status=_status("SUCCEEDED"), result=result,
+        manifest=SimpleNamespace(total_row_count=total, truncated=truncated),
+    )
+
+
+def _answering(response):
+    return SimpleNamespace(statement_execution=SimpleNamespace(execute_statement=lambda **kwargs: response))
+
+
+def test_a_result_shorter_than_its_manifest_raises():
+    rows = SimpleNamespace(data_array=[["a"], ["b"]], next_chunk_index=None)
+
+    assert _run_statement(_answering(_succeeded(rows, total=2)), SQL, WAREHOUSE) == [["a"], ["b"]]
+    with pytest.raises(RuntimeError, match=r"has 3 row\(s\) but only 2 were read"):
+        _run_statement(_answering(_succeeded(rows, total=3)), SQL, WAREHOUSE)
+    with pytest.raises(RuntimeError, match="truncated"):
+        _run_statement(_answering(_succeeded(rows, total=2, truncated=True)), SQL, WAREHOUSE)
+
+
+class LinkStatements:
+    """EXTERNAL_LINKS answers: each chunk is a presigned link, and the next chunk's index rides on the link."""
+
+    def __init__(self, chunks, total=None, headers=None):
+        self.chunks = chunks
+        self.total = sum(len(c) for c in chunks) if total is None else total
+        self.headers = headers or {}
+        self.calls = []
+
+    def _chunk(self, index):
+        more = index + 1 < len(self.chunks)
+        return SimpleNamespace(data_array=None, next_chunk_index=None, external_links=[SimpleNamespace(
+            chunk_index=index, external_link=f"https://bucket.s3.amazonaws.com/results/{index}?X-Amz-Signature=secret",
+            http_headers=dict(self.headers), next_chunk_index=index + 1 if more else None,
+        )])
+
+    def execute_statement(self, **kwargs):
+        self.calls.append(kwargs)
+        return _succeeded(self._chunk(0), total=self.total, truncated=False)
+
+    def get_statement_result_chunk_n(self, statement_id, index):
+        return self._chunk(index)
+
+
+class FakeStorage:
+    """``requests.get`` for the links: the first chunk answers last, and every request is recorded."""
+
+    def __init__(self, chunks):
+        self.chunks = chunks
+        self.failure = None
+        self.requests = []
+        self.in_flight = self.max_in_flight = 0
+        self._lock = threading.Lock()
+
+    def get(self, url, headers=None, timeout=None, **kwargs):
+        index = int(url.split("/results/")[1].split("?")[0])
+        with self._lock:
+            self.requests.append({"headers": dict(headers or {}), "timeout": timeout, **kwargs})
+            self.in_flight += 1
+            self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        try:
+            time.sleep(0.02 * (len(self.chunks) - index))
+        finally:
+            with self._lock:
+                self.in_flight -= 1
+        if self.failure == "connection":
+            raise requests.ConnectionError(f"HTTPSConnectionPool: Max retries exceeded with url: {url}")
+        if self.failure == "forbidden":
+            return SimpleNamespace(ok=False, status_code=403, json=lambda: {"Code": "AccessDenied"})
+        if self.failure == "not_json":
+            return SimpleNamespace(ok=True, status_code=200, json=lambda: json.loads("<Error/>"))
+        body = json.dumps(self.chunks[index])
+        return SimpleNamespace(ok=True, status_code=200, json=lambda: json.loads(body))
+
+
+CHUNKS = [[["s", "t0", "a"]], [["s", "t1", "b"], ["s", "t1", "c"]], [["s", "t2", None]]]
+SSE_HEADERS = {"x-amz-server-side-encryption-customer-key": "k"}
+
+
+@pytest.fixture
+def storage(monkeypatch):
+    fake = FakeStorage(CHUNKS)
+    monkeypatch.setattr("app.providers.databricks.uc_metadata.requests.get", fake.get)
+    return fake
+
+
+def test_external_links_are_read_in_chunk_order_without_the_workspace_credentials(storage):
+    from databricks.sdk.service.sql import Disposition, Format
+
+    statements = LinkStatements(CHUNKS, headers=SSE_HEADERS)
+
+    result = statement_result(SimpleNamespace(statement_execution=statements), SQL, WAREHOUSE, external_links=True)
+
+    assert result.rows == [row for chunk in CHUNKS for row in chunk]
+    assert (result.chunks, result.external_links) == (3, True)
+    call = statements.calls[0]
+    assert (call["disposition"], call["format"]) == (Disposition.EXTERNAL_LINKS, Format.JSON_ARRAY)
+    assert len(storage.requests) == 3 and storage.max_in_flight > 1
+    for sent in storage.requests:
+        assert sent["headers"] == SSE_HEADERS
+        assert "auth" not in sent and sent["timeout"]
+
+
+def test_a_result_over_the_row_limit_raises_before_any_chunk_is_downloaded(storage):
+    statements = LinkStatements(CHUNKS)
+    client = SimpleNamespace(statement_execution=statements)
+
+    with pytest.raises(ResultTooLarge, match="4 rows, more than the 3 one read may hold"):
+        statement_result(client, SQL, WAREHOUSE, external_links=True, max_rows=3)
+    assert storage.requests == []
+    assert len(statement_result(client, SQL, WAREHOUSE, external_links=True, max_rows=4).rows) == 4
+
+
+@pytest.mark.parametrize("failure, problem", [
+    ("connection", "ConnectionError"), ("forbidden", "HTTP 403"), ("not_json", "isn't a JSON array"),
+])
+def test_a_failed_download_raises_external_links_unavailable_without_the_link(storage, failure, problem):
+    storage.failure = failure
+    client = SimpleNamespace(statement_execution=LinkStatements(CHUNKS))
+
+    with pytest.raises(ExternalLinksUnavailable) as raised:
+        statement_result(client, SQL, WAREHOUSE, external_links=True)
+
+    message = str(raised.value)
+    assert problem in message and "bucket.s3.amazonaws.com" in message
+    assert "secret" not in "".join(traceback.format_exception(raised.value))
+
+
+def test_a_short_external_links_read_raises_instead_of_falling_back(storage):
+    client = SimpleNamespace(statement_execution=LinkStatements(CHUNKS, total=5))
+
+    with pytest.raises(RuntimeError, match=r"has 5 row\(s\) but only 4 were read") as raised:
+        statement_result(client, SQL, WAREHOUSE, external_links=True)
+
+    assert not isinstance(raised.value, ExternalLinksUnavailable)
+
+
+def test_a_refused_external_links_request_raises_external_links_unavailable():
+    from databricks.sdk.errors import BadRequest
+
+    def refuse(**kwargs):
+        raise BadRequest("EXTERNAL_LINKS disposition is not enabled for this workspace")
+
+    client = SimpleNamespace(statement_execution=SimpleNamespace(execute_statement=refuse))
+
+    with pytest.raises(ExternalLinksUnavailable, match="not enabled"):
+        statement_result(client, SQL, WAREHOUSE, external_links=True)
+    with pytest.raises(BadRequest):
+        statement_result(client, SQL, WAREHOUSE)

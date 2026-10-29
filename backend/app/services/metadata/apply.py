@@ -1,9 +1,11 @@
 """Executing planned statements against UC through the governance SP.
 
-A TABLE/VIEW mix-up is retried with the
-other keyword, an UNSET of a tag that's already gone is a no-op, and a failure on
-one object doesn't stop other objects (statements for the same object after a
-failure are skipped).
+A TABLE/VIEW mix-up is retried with the other keyword, and an UNSET of a tag that's
+already gone is a no-op. A refused SET of several tags is retried one tag at a time,
+so one rejected key doesn't hold back the rest; a refused statement doesn't hold
+back the object's other statements either, unless the object itself is missing or
+the warehouse timed out. A view column changes a value with an unset then a set; if
+the set is refused, the old value is put back.
 
 Statements run synchronously through ``provider.client.statement_execution`` (the
 Databricks SDK), so call ``execute`` from a worker thread, not the event loop. With
@@ -17,7 +19,7 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, List, Optional, Sequence, Set
+from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from app.core.config import settings
 from app.services.metadata.sql import alter_keyword, build_tag_statement
@@ -50,6 +52,8 @@ _MISSING_OBJECT_CODES = (
     "table_or_view_not_found", "schema_not_found", "catalog_not_found", "no_such_catalog",
     "unresolved_column", "column_not_found", "field_not_found",
 )
+# Errors that mean nothing else will work on this object right now: its later statements are skipped.
+_OBJECT_ERRORS = _MISSING_OBJECT_CODES + ("timed out", "sql warehouse")
 
 
 class StatementFailed(Exception):
@@ -210,34 +214,103 @@ def _run_item(provider, item: PlanItem, failures: _FailureLog) -> PlanOutcome:
         return _outcome(item, "failed", _message(exc))
 
 
-def execute(provider, items: Sequence[PlanItem], *, workers: int = 1) -> List[PlanOutcome]:
+def not_run(item: PlanItem, reason: Optional[str]) -> PlanOutcome:
+    return _outcome(item, "skipped", f"Not applied: {reason}")
+
+
+def _blocks_object(error: Optional[str]) -> bool:
+    core = _core(error or "")
+    return any(code in core for code in _OBJECT_ERRORS)
+
+
+def _tag_item(item: PlanItem, tags: Dict[str, Optional[str]]) -> Optional[PlanItem]:
+    """``item`` narrowed to setting ``tags``; None when its statement can't be rebuilt."""
+    if not item.statement_type:
+        return None
+    try:
+        sql = build_tag_statement(item.statement_type, item.name, "set", tags=tags, column=item.column)[0]
+    except (ValueError, IndexError):
+        return None
+    blanks = [k for k in item.blanks if k in tags]
+    return item.model_copy(update={"tags": dict(tags), "sql": sql, "blanks": blanks, "removals": len(blanks),
+                                   "restore": None})
+
+
+def _one_key_at_a_time(provider, item: PlanItem, refused: PlanOutcome, failures: _FailureLog) -> List[PlanOutcome]:
+    """A refused SET of several tags, retried per tag so the accepted ones still land."""
+    parts = [_tag_item(item, {key: value}) for key, value in item.tags.items()]
+    if any(part is None for part in parts):
+        return [refused]
+    logger.info("Metadata reconcile: SET TAGS on %s was refused; retrying its %d tags one at a time.",
+                item.fqn_key, len(parts))
+    return [_run_item(provider, part, failures) for part in parts]  # type: ignore[arg-type]
+
+
+def _put_back(provider, item: PlanItem, refused: PlanOutcome, failures: _FailureLog) -> List[PlanOutcome]:
+    """A view column's new value was refused after its old one was removed: set the old one again."""
+    undo = _tag_item(item, item.restore or {})
+    if undo is None:
+        return [refused]
+    put = _run_item(provider, undo, failures)
+    if put.status == "applied":
+        return [refused, put.model_copy(update={"detail": "Put the previous value back after the new one was refused."})]
+    detail = f"{refused.detail} Putting the previous value back also failed, so the tag is missing until the next run: {put.detail}"
+    return [refused.model_copy(update={"detail": detail})]
+
+
+def execute(
+    provider, items: Sequence[PlanItem], *, workers: int = 1, stop: Optional[Callable[[], Optional[str]]] = None,
+) -> List[PlanOutcome]:
     """Run the items' statements and return one outcome per item, in the order given.
 
     ``applied`` / ``noop`` (UNSET of a tag already gone) / ``failed`` (UC's error in
-    ``detail``) / ``skipped`` (an earlier statement for the same ``fqn_key`` failed).
-    Never raises for a statement failure.
+    ``detail``) / ``skipped`` (the object is missing or the warehouse timed out on an
+    earlier statement, a view column's old value couldn't be removed, or ``stop`` gave a
+    reason to stop before the relation started). Never raises for a statement failure.
+    A refused multi-tag SET comes back as one outcome per tag, and a put-back value as
+    an extra ``set`` outcome after the refused one.
 
     Each relation's statements (its own and its columns', in the order given) run one
     after another, with up to ``workers`` relations in parallel.
     """
     items = list(items)
-    outcomes: List[Optional[PlanOutcome]] = [None] * len(items)
+    outcomes: List[List[PlanOutcome]] = [[] for _ in items]
     failures = _FailureLog()
     groups: Dict[str, List[int]] = {}
     for index, item in enumerate(items):
         groups.setdefault(item.fqn_key.partition(COLUMN_SEPARATOR)[0], []).append(index)
 
     def run_group(indices: List[int]) -> None:
-        failed_keys: Set[str] = set()
+        reason = stop() if stop is not None else None
+        if reason:
+            for index in indices:
+                outcomes[index] = [not_run(items[index], reason)]
+            return
+        blocked: Set[str] = set()
+        # (fqn_key, tag key) unset by this run, and the subset it actually removed (not already gone).
+        cleared: Set[Tuple[str, str]] = set()
+        removed: Set[Tuple[str, str]] = set()
         for index in indices:
             item = items[index]
-            if item.fqn_key in failed_keys:
-                outcome = _outcome(item, "skipped", "Skipped: an earlier statement for this object failed.")
-            else:
-                outcome = _run_item(provider, item, failures)
-            outcomes[index] = outcome
-            if outcome.status == "failed":
-                failed_keys.add(item.fqn_key)
+            if item.fqn_key in blocked:
+                outcomes[index] = [_outcome(item, "skipped", "Skipped: an earlier statement for this object failed.")]
+                continue
+            if item.restore and not all((item.fqn_key, k) in cleared for k in item.restore):
+                outcomes[index] = [_outcome(item, "skipped", "Skipped: the old value couldn't be removed first.")]
+                continue
+            outcome = _run_item(provider, item, failures)
+            done = [outcome]
+            if outcome.status == "failed" and _blocks_object(outcome.detail):
+                blocked.add(item.fqn_key)
+            elif outcome.status == "failed" and item.operation == "set" and len(item.tags) > 1:
+                done = _one_key_at_a_time(provider, item, outcome, failures)
+            elif outcome.status == "failed" and item.restore and all((item.fqn_key, k) in removed for k in item.restore):
+                done = _put_back(provider, item, outcome, failures)
+            if item.operation == "unset" and outcome.status in ("applied", "noop"):
+                cleared.update((item.fqn_key, k) for k in item.keys)
+                if outcome.status == "applied":
+                    removed.update((item.fqn_key, k) for k in item.keys)
+            outcomes[index] = done
 
     batches = list(groups.values())
     workers = max(1, min(int(workers or 1), len(batches) or 1))
@@ -248,4 +321,4 @@ def execute(provider, items: Sequence[PlanItem], *, workers: int = 1) -> List[Pl
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="metadata-apply") as pool:
             list(pool.map(run_group, batches))
     failures.summarize()
-    return [o for o in outcomes if o is not None]
+    return [o for done in outcomes for o in done]

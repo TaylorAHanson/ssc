@@ -200,10 +200,12 @@ class MetadataChangeInput(BaseModel):
     changes: List[ChangeOp] = Field(
         ..., min_length=1,
         description=(
-            "One entry per object: op ('set_tags' merges tags, 'unset_tags' removes keys, 'replace_tags' makes tags "
-            "the full set, 'set_comment' / 'clear_comment' for the description), name (catalog[.schema[.table]]), "
-            "optional column, tags as {key: value} (null value = key-only tag), keys for unset_tags, comment. "
-            "The object doesn't have to exist yet: its tags are applied when it is created."
+            "One entry per object: op ('set_tags' adds or changes these tags and keeps the others, 'unset_tags' "
+            "removes keys, 'replace_tags' makes tags the full set and removes every other tag, 'set_comment' / "
+            "'clear_comment' for the description), name (catalog[.schema[.table]]), optional column, tags as "
+            "{key: value} (null value = key-only tag), keys for unset_tags, comment. An object that isn't managed "
+            "yet starts from the tags and description it has in Unity Catalog, so the others are kept and a removal "
+            "shows in the preview. The object doesn't have to exist yet: its tags are applied when it is created."
         ),
     )
     reason: str = Field(
@@ -220,7 +222,8 @@ class SubmitMetadataChangeInput(MetadataChangeInput):
         default="request",
         description=(
             "When some items need approval: 'request' files the whole change for approval, 'split' writes what "
-            "the caller may change directly and files the rest, 'reject' refuses."
+            "the caller may change directly and files the rest (an object that isn't managed yet goes to "
+            "approval whole when any of its items needs it), 'reject' refuses."
         ),
     )
     idempotency_key: Optional[str] = Field(

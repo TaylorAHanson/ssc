@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Play, ShieldAlert } from 'lucide-react';
-import { listRuns, startRun } from '../../../services/metadataApi';
+import { clearPausedRun, listRuns, resumePausedRun, startRun } from '../../../services/metadataApi';
 import type { MetadataConfig, ReconcileResult, RunRequest } from '../../../types/metadata';
 import { Button } from '../../ui/button';
 import { EmptyState, ErrorBanner, Modal, Notice, Pager, Skeleton } from '../../rbac/ui';
 import { RunStatusBadge } from './badges';
 import { useMetadata } from './context';
-import { errorMessage, formatTime, plural, relativeTime } from './format';
+import { errorMessage, formatTime, limitedSchemas, plural, relativeTime } from './format';
 import { CircuitBreakerBanner } from './ModeBanner';
 import { useAsync } from './useAsync';
 
@@ -24,11 +24,12 @@ const TRIGGER_LABELS: Record<string, string> = {
 export function RunsTab() {
   const { config, isAdmin, refreshToken, bumpRefresh, notify, openRun } = useMetadata();
   const [page, setPage] = useState(1);
-  const [busy, setBusy] = useState<RunRequest['kind'] | 'resume' | null>(null);
+  const [busy, setBusy] = useState<RunRequest['kind'] | 'resume' | 'clear' | null>(null);
   const [confirmResume, setConfirmResume] = useState(false);
   const load = useMemo(() => () => listRuns({ page, page_size: PAGE_SIZE }), [page]);
   const { data, error, loading, reload } = useAsync(load, { keepPrevious: true, token: refreshToken });
-  const paused = data?.items.find((r) => r.status === 'paused');
+  const pausedId = config.circuit_breaker_run_id ?? null;
+  const paused = pausedId ? data?.items.find((r) => r.run_id === pausedId) : undefined;
   const running = data?.items.find((r) => r.status === 'running');
   const runningId = running?.run_id;
   const inFlight = !!busy || !!running;
@@ -42,10 +43,10 @@ export function RunsTab() {
     return () => window.clearInterval(id);
   }, [runningId, reload]);
 
-  const run = async (request: RunRequest, label: typeof busy) => {
+  const run = async (request: RunRequest | 'resume', label: typeof busy) => {
     setBusy(label);
     try {
-      const result = await startRun(request);
+      const result = request === 'resume' ? await resumePausedRun(pausedId ?? '') : await startRun(request);
       bumpRefresh();
       if (result.status === 'running') {
         watching.current = result.run_id;
@@ -56,6 +57,20 @@ export function RunsTab() {
       }
     } catch (e) {
       notify(errorMessage(e, 'Couldn’t start the sync'), { kind: 'error' });
+    } finally {
+      setBusy(null);
+      setConfirmResume(false);
+    }
+  };
+
+  const clearPause = async () => {
+    setBusy('clear');
+    try {
+      await clearPausedRun(pausedId ?? '');
+      bumpRefresh();
+      notify('Syncing resumed without applying the paused removals. If what caused them is still saved here, the next check pauses again.');
+    } catch (e) {
+      notify(errorMessage(e, 'Couldn’t clear the pause'), { kind: 'error' });
     } finally {
       setBusy(null);
       setConfirmResume(false);
@@ -76,9 +91,10 @@ export function RunsTab() {
     <div className="space-y-3">
       <CircuitBreakerBanner
         action={
-          isAdmin && (
+          isAdmin &&
+          pausedId && (
             <Button size="sm" variant="outline" className="gap-1.5 bg-white" onClick={() => setConfirmResume(true)}>
-              <ShieldAlert className="h-3.5 w-3.5" /> Review and resume
+              <ShieldAlert className="h-3.5 w-3.5" /> {config.can_resume_sync ? 'Review and resume' : 'Review the paused sync'}
             </Button>
           )
         }
@@ -164,18 +180,25 @@ export function RunsTab() {
       ) : null}
       {data && <Pager offset={(page - 1) * PAGE_SIZE} limit={PAGE_SIZE} total={data.total} onChange={(o) => setPage(Math.floor(o / PAGE_SIZE) + 1)} />}
 
-      {confirmResume && (
+      {confirmResume && pausedId && (
         <Modal
-          title="Resume syncing?"
+          title="Syncing is paused"
           onClose={() => setConfirmResume(false)}
           footer={
             <>
               <Button variant="outline" onClick={() => setConfirmResume(false)}>
                 Cancel
               </Button>
-              <Button onClick={() => run({ kind: 'sweep', override_circuit_breaker: true }, 'resume')} disabled={busy === 'resume'}>
-                {busy === 'resume' ? 'Resuming…' : 'Apply anyway and resume'}
-              </Button>
+              {config.can_resume_sync && (
+                <>
+                  <Button variant="outline" onClick={clearPause} disabled={!!busy}>
+                    {busy === 'clear' ? 'Clearing…' : 'Clear without applying'}
+                  </Button>
+                  <Button onClick={() => run('resume', 'resume')} disabled={!!busy || config.reconcile_mode !== 'enforce'}>
+                    {busy === 'resume' ? 'Resuming…' : 'Apply these removals'}
+                  </Button>
+                </>
+              )}
             </>
           }
         >
@@ -186,25 +209,28 @@ export function RunsTab() {
                 {paused.paused_reason && <span className="mt-1 block">{paused.paused_reason}</span>}
               </>
             ) : (
-              'The last sync planned more removals than the safety limit allows.'
+              'A sync planned more removals than the safety limit allows.'
             )}
           </Notice>
           <p className="text-sm text-gray-700">
-            Resuming runs a check that ignores the limit once, so every planned removal is written to Unity Catalog. Look at the paused sync’s statements
-            first; if the removals are wrong, fix the tags saved here instead (for example with “Keep Unity Catalog’s values” under Out of sync).
+            <strong>Apply these removals</strong> re-checks only the objects in the paused sync and writes their changes, as long as that removes no more
+            than the sync planned. If it would remove more, nothing is written and the new sync pauses for review instead.
           </p>
-          {paused && (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => {
-                setConfirmResume(false);
-                openRun(paused.run_id);
-              }}
-            >
-              Open the paused sync
-            </Button>
-          )}
+          <p className="text-sm text-gray-700">
+            <strong>Clear without applying</strong> lifts the pause and writes nothing. Fix what caused the removals first (for example, undo the change
+            set, or use “Keep Unity Catalog’s values” under Out of sync), or the next check pauses again.
+          </p>
+          {!config.can_resume_sync && <p className="text-sm text-gray-700">Only a Platform Admin can apply or clear a paused sync.</p>}
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              setConfirmResume(false);
+              openRun(pausedId);
+            }}
+          >
+            Open the paused sync
+          </Button>
         </Modal>
       )}
     </div>
@@ -224,7 +250,7 @@ function runMessage(r: ReconcileResult): string {
 function checkNowNote(config: MetadataConfig): string {
   if (config.reconcile_mode === 'off') return 'Syncing is off, so Unity Catalog isn’t checked. Turn it on under Admin → Settings (Metadata Manager).';
   if (config.reconcile_mode === 'enforce') {
-    const schemas = config.enforce_schemas ?? [];
+    const schemas = limitedSchemas(config);
     return `Checks Unity Catalog and writes the differences${schemas.length ? ` in ${schemas.join(', ')}` : ''}.`;
   }
   return 'Checks Unity Catalog and lists what syncing would write. Nothing is written while syncing is report only.';

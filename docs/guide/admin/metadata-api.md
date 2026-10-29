@@ -88,6 +88,11 @@ Idempotency-Key: nightly-load-2026-10-20
 - **Operations:** `set_tags` adds or updates tags, `unset_tags` removes `keys`,
   `replace_tags` makes `tags` the complete set, and `set_comment` / `clear_comment` set
   or clear the description. A `null` value is a key-only tag.
+- **Objects not managed yet** start from the tags and description they have in Unity
+  Catalog, so only what an operation names changes; `replace_tags` removes the rest, and
+  the preview lists each removal. Send only your edits, not the full set. A value that
+  Unity Catalog already has needs no approval, but the caller must still be allowed to
+  change or request a change to that object and key.
 - **The object doesn't have to exist.** Its desired state is kept as *pending* and
   applied when the table is created.
 - **Many objects at once:** give an operation `match` instead of `name`, a pattern
@@ -123,7 +128,9 @@ a classification downgrade or removing a PII flag), and anything on an object th
 doesn't own. `on_approval_needed` decides what happens:
 
 - `request` (default): the whole change is filed as one approval request.
-- `split`: what the caller may change directly is written now; the rest is filed.
+- `split`: what the caller may change directly is written now; the rest is filed. An
+  object that isn't managed yet is filed whole when any of its changes needs approval,
+  so syncing can't remove a tag of it that's still waiting.
 - `reject`: nothing is written, and the response explains why.
 
 The response's `status` is `committed`, `pending_approval`, `partial`, `noop` or

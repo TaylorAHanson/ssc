@@ -20,6 +20,14 @@ _SCHEMA_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _DEFAULT_DB_SCHEMA = "selfservice"
 
 
+class LakebaseUnavailable(RuntimeError):
+    """Lakebase is configured but unreachable right now.
+
+    Raised instead of falling back to SQLite: a deployed app on a local file would lose
+    every write at the next restart, and its advisory locks and leader election would be no-ops.
+    """
+
+
 def get_db_schema() -> str:
     """Resolve the configured Postgres schema, guarding against injection.
 
@@ -262,9 +270,15 @@ def get_database_url() -> str:
             safe_url = f"postgresql://{safe_user}:***@{host}:{settings.DATABASE_PORT}/{db_name_to_use}?sslmode=require"
             _log_conn_summary(f"Lakebase connection: {safe_url}")
             return url
-        else:
+        elif not pg_host:
             logger.warning("No valid password/token found for Lakebase. Falling back to SQLite.")
-            
+
+    if pg_host:
+        raise LakebaseUnavailable(
+            "Lakebase is configured (PGHOST) but no connection could be built (no OAuth token, or PGUSER/PGDATABASE "
+            "missing). Not falling back to SQLite; the next connection attempt retries."
+        )
+
     # Fallback to SQLite
     base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     

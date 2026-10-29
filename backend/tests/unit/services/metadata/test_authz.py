@@ -389,17 +389,55 @@ def test_policy_denials_block_the_item_outright(tree):
     assert "must match" in d.reasons[0]
 
 
+def _kept(item):
+    item.unchanged_in_uc = True
+    return item
+
+
+def _seeded(*items):
+    return [(i.fqn_key, i.field, i.key) for i in items]
+
+
 def test_a_value_uc_already_has_is_kept_without_approval_and_its_policy_problem_only_warns(tree):
-    sensitive = tag("hr_dev.gold.staff", key="approver_group", after="users")
-    invalid = tag("hr_dev.gold.staff", key="dataset", after="Not Valid!")
-    for item in (sensitive, invalid):
-        item.unchanged_in_uc = True
+    sensitive = _kept(tag("hr_dev.gold.payroll", key="approver_group", after="users", exists=False))
+    invalid = _kept(tag("hr_dev.gold.payroll", key="dataset", after="Not Valid!", exists=False))
 
     kept = authz.decide(tree, user("nobody"), [sensitive, invalid])
 
     assert [report.bucket(d) for d in kept] == ["direct", "direct"]
     assert [f.severity for f in kept[1].findings] == ["warn"]
     assert kept[1].findings[0].message.endswith("so it's kept as is.")
+
+
+def test_a_kept_value_a_principal_may_not_change_is_denied(tree):
+    pipeline = principal(allowed_keys=["dataset"])
+    stated = _kept(tag("hr_dev.gold.payroll", key="pii", after="email", exists=False))
+
+    [d] = authz.decide(tree, pipeline, [stated])
+
+    assert report.bucket(d) == "denied"
+    assert "allowed keys" in d.decision.reasons[0]
+
+
+def test_a_seeded_kept_value_is_only_checked_against_the_object(tree):
+    pipeline = principal(allowed_keys=["dataset"])
+    edit = tag("hr_dev.gold.payroll", key="dataset", after="payroll", exists=False)
+    carried = _kept(tag("hr_dev.gold.payroll", key="pii", after="email", exists=False))
+    outside = _kept(tag("hr_dev.silver.payroll", key="pii", after="email", exists=False))
+
+    decisions = authz.decide(tree, pipeline, [edit, carried, outside], seeded=_seeded(carried, outside))
+
+    assert [report.bucket(d) for d in decisions] == ["direct", "direct", "denied"]
+    assert "outside" in decisions[2].decision.reasons[0]
+
+
+def test_stopping_managing_a_value_is_decided_as_usual_but_policy_problems_only_warn(tree):
+    item = tag("sales_dev.bronze.orders", key="dataset", action="unset", before="orders")
+    item.unchanged_in_uc = True
+    [d] = authz.decide(tree, user("nobody"), [item])
+
+    assert report.bucket(d) == "approval"
+    assert all(f.severity != "deny" for f in d.findings)
 
 
 def test_findings_are_attached_to_each_decision(tree):

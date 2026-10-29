@@ -79,6 +79,8 @@ def _before(item: ChangeItem) -> str:
 
 
 def _after(item: ChangeItem) -> str:
+    if item.stops_managing:
+        return "no longer managed (Unity Catalog keeps it)"
     if item.action == "unset":
         return "removed"
     if item.action == "comment_clear":

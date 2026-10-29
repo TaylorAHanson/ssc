@@ -27,8 +27,12 @@ from __future__ import annotations
 import logging
 import time
 from collections import defaultdict
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
+from urllib.parse import urlsplit
+
+import requests
 
 from app.tools.sql_safety import quote_literal
 
@@ -42,6 +46,11 @@ _TERMINAL_STATES = ("SUCCEEDED", "FAILED", "CANCELED", "CLOSED")
 _POLL_BUDGET_SECONDS = 300
 _POLL_INTERVAL_SECONDS = 2
 _PROGRESS_EVERY_SECONDS = 60
+# Result chunks of one EXTERNAL_LINKS statement downloaded at once.
+_DOWNLOAD_WORKERS = 4
+# (connect, read) seconds for one result chunk's download from cloud storage.
+_DOWNLOAD_TIMEOUT = (10, 120)
+_DOWNLOAD_ATTEMPTS = 2
 
 
 @dataclass
@@ -123,7 +132,37 @@ def cancel_statement(client, statement_id: Optional[str]) -> None:
         logger.warning("Could not cancel abandoned statement %s: %s", statement_id, e)
 
 
-def _run_statement(client, sql: str, warehouse_id: str, label: Optional[str] = None) -> List[list]:
+class ExternalLinksUnavailable(RuntimeError):
+    """An EXTERNAL_LINKS result couldn't be fetched (cloud storage unreachable, say); INLINE may still work."""
+
+
+class ResultTooLarge(RuntimeError):
+    """A result has more rows than the caller can hold; reading it some other way won't help."""
+
+    def __init__(self, rows: int, limit: int):
+        super().__init__(f"the result has {rows:,} rows, more than the {limit:,} one read may hold")
+        self.rows = rows
+        self.limit = limit
+
+
+@dataclass
+class StatementResult:
+    rows: List[list]
+    chunks: int = 0
+    external_links: bool = False
+
+
+def _run_statement(
+    client, sql: str, warehouse_id: str, label: Optional[str] = None, *, external_links: bool = False,
+) -> List[list]:
+    """Every result row of ``sql``; see ``statement_result``."""
+    return statement_result(client, sql, warehouse_id, label, external_links=external_links).rows
+
+
+def statement_result(
+    client, sql: str, warehouse_id: str, label: Optional[str] = None, *, external_links: bool = False,
+    max_rows: Optional[int] = None,
+) -> StatementResult:
     """Execute ``sql``, poll it to a terminal state, and return every result row.
 
     ``execute_statement`` blocks for at most 50s and may return the statement
@@ -131,11 +170,30 @@ def _run_statement(client, sql: str, warehouse_id: str, label: Optional[str] = N
     catalog the ``information_schema.columns`` read can take longer than that.
     Results can also span several chunks. With ``label``, a statement still
     running logs a line every minute, so a slow read can be told from a stuck one.
+
+    INLINE results are capped at 25 MiB. ``external_links`` fetches the result from
+    cloud storage instead (no cap), still as JSON_ARRAY so values match the INLINE
+    ones; a refused request or failed download raises ``ExternalLinksUnavailable``.
+    A result shorter than its manifest says raises rather than returning part of it.
+    One with more than ``max_rows`` rows raises ``ResultTooLarge`` before any of it is
+    fetched beyond the first chunk.
     """
+    from databricks.sdk.errors import DatabricksError
+
     began = time.monotonic()
-    response = client.statement_execution.execute_statement(
-        statement=sql, warehouse_id=warehouse_id, wait_timeout="50s"
-    )
+    options: Dict[str, Any] = {}
+    if external_links:
+        from databricks.sdk.service.sql import Disposition, Format
+
+        options = {"disposition": Disposition.EXTERNAL_LINKS, "format": Format.JSON_ARRAY}
+    try:
+        response = client.statement_execution.execute_statement(
+            statement=sql, warehouse_id=warehouse_id, wait_timeout="50s", **options
+        )
+    except DatabricksError as e:
+        if external_links:
+            raise ExternalLinksUnavailable(f"the warehouse refused an EXTERNAL_LINKS statement: {e}") from e
+        raise
     statement_id = getattr(response, "statement_id", None)
 
     deadline = time.monotonic() + _POLL_BUDGET_SECONDS
@@ -161,15 +219,81 @@ def _run_statement(client, sql: str, warehouse_id: str, label: Optional[str] = N
     if state != "SUCCEEDED":
         raise RuntimeError(getattr(response.status, "error", None) or f"statement {state}")
 
-    rows: List[list] = []
-    result = getattr(response, "result", None)
-    while result is not None:
-        rows.extend(getattr(result, "data_array", None) or [])
-        next_idx = getattr(result, "next_chunk_index", None)
-        if next_idx is None or next_idx < 0 or not statement_id:
-            break
-        result = client.statement_execution.get_statement_result_chunk_n(statement_id, next_idx)
-    return rows
+    manifest = getattr(response, "manifest", None)
+    total = getattr(manifest, "total_row_count", None)
+    if max_rows is not None and isinstance(total, int) and total > max_rows:
+        raise ResultTooLarge(total, max_rows)
+    out = _result_rows(client, statement_id, getattr(response, "result", None))
+    if getattr(manifest, "truncated", None):
+        raise RuntimeError(f"statement {statement_id} returned a truncated result")
+    if total is not None and total != len(out.rows):
+        raise RuntimeError(f"statement {statement_id} has {total} row(s) but only {len(out.rows)} were read")
+    return out
+
+
+def _next_chunk_index(result) -> Optional[int]:
+    index = getattr(result, "next_chunk_index", None)
+    links = getattr(result, "external_links", None) or []
+    if index is None and links:
+        index = getattr(links[-1], "next_chunk_index", None)
+    return index
+
+
+def _result_rows(client, statement_id: Optional[str], result) -> StatementResult:
+    """Rows of every chunk from ``result`` on, in chunk order; external links download a few at a time."""
+    parts: List[Any] = []
+    chunks = 0
+    pool: Optional[ThreadPoolExecutor] = None
+    try:
+        while result is not None:
+            chunks += 1
+            parts.append(getattr(result, "data_array", None) or [])
+            for link in getattr(result, "external_links", None) or []:
+                if pool is None:
+                    pool = ThreadPoolExecutor(max_workers=_DOWNLOAD_WORKERS, thread_name_prefix="statement-chunk")
+                parts.append(pool.submit(_download_chunk, link))
+            next_idx = _next_chunk_index(result)
+            if next_idx is None or next_idx < 0 or not statement_id:
+                break
+            result = client.statement_execution.get_statement_result_chunk_n(statement_id, next_idx)
+        rows: List[list] = []
+        for part in parts:
+            rows.extend(part.result() if isinstance(part, Future) else part)
+        return StatementResult(rows=rows, chunks=chunks, external_links=pool is not None)
+    finally:
+        if pool is not None:
+            pool.shutdown(wait=False, cancel_futures=True)
+
+
+def _download_chunk(link) -> List[list]:
+    """One EXTERNAL_LINKS chunk's JSON_ARRAY rows, fetched without the workspace's credentials.
+
+    The URL is presigned and must not carry an Authorization header. It also holds a
+    temporary credential, so neither it nor a requests error that quotes it is kept.
+    """
+    url = getattr(link, "external_link", None) or ""
+    where = f"result chunk {getattr(link, 'chunk_index', '?')} from {urlsplit(url).hostname or 'cloud storage'}"
+    if not url:
+        raise ExternalLinksUnavailable(f"{where} came back without a download link")
+    headers = dict(getattr(link, "http_headers", None) or {})
+    problem = ""
+    for _ in range(_DOWNLOAD_ATTEMPTS):
+        try:
+            response = requests.get(url, headers=headers, timeout=_DOWNLOAD_TIMEOUT)
+        except requests.RequestException as e:
+            problem = type(e).__name__
+            continue
+        if not response.ok:
+            problem = f"HTTP {response.status_code}"
+            continue
+        try:
+            rows = response.json()
+        except ValueError:
+            rows = None
+        if isinstance(rows, list):
+            return rows
+        problem = "the chunk isn't a JSON array"
+    raise ExternalLinksUnavailable(f"could not download {where}: {problem}")
 
 
 def fetch_uc_metadata(client, full_names: Iterable[str], warehouse_id: str) -> UcMetadataBatch:

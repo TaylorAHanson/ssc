@@ -43,18 +43,22 @@ deployments either stay in `plan` mode or enforce only their own catalogs (step 
 | **Governance approver group** | The Databricks group that approves sensitive changes and objects with no owner. Left blank, only Platform Admins can approve them. |
 | **Key policies** | One row per governed key: where it applies, allowed values or pattern, editor groups, and whether it's sensitive. These replace `tag_policy.yml` in the governance repository. |
 | **Environments** | One row per environment with a catalog pattern such as `{base}_dev`, and whether every change or only sensitive ones need approval. |
-| **Max removals per run** | Keep the default (200) until enforcement has run cleanly for a while. Removed tags and cleared descriptions both count. |
+| **Enforce only in these schemas** | What enforce writes to, as `catalog.schema` names or patterns, or `*` for every schema and the catalogs' own tags. Blank writes nothing. Start with one schema people aren't relying on. |
+| **Max removals per hour** | Keep the default (50) until enforcement has run cleanly for a while. Removed tags, blanked values and cleared descriptions all count, across every run in the last hour. |
 
 `features.metadata_v2` must be on (it is by default).
 
 ## 3. Read Unity Catalog and adopt its current state
 
-1. Run a sweep without writing anything. On the Metadata Manager's **Admin** page, under **Sync history**, choose **Preview a
-   sync**, or call `POST /api/v1/metadata/runs` with `{"kind": "plan"}`. The sweep fills
-   the snapshot (`metadata_observed`) from `information_schema`.
+1. Run a sweep without writing anything. With **Reconcile mode** on `plan`, choose
+   **Check now** under **Sync history** on the Metadata Manager's **Sync & admin** page, or
+   call `POST /api/v1/metadata/runs` with `{"kind": "plan"}`. The sweep fills the snapshot
+   (`metadata_observed`) from `information_schema`.
 2. Adopt what Unity Catalog holds today as the desired state, with **Start managing
-   catalogs** on the **Admin** page or the API. A catalog or schema name adopts everything
-   under it.
+   catalogs** on the **Sync & admin** page or the API. A catalog or schema name adopts
+   everything under it. Adopt is refused unless the catalog was read in full within
+   **Freshest copy to start managing from** (30 minutes by default), so run it right after
+   the sweep finishes.
 
    ```http
    POST /api/v1/metadata/adopt
@@ -100,11 +104,20 @@ Let the scheduled sweeps run for a few days.
 2. Under **Sync history**, choose **Check now** and watch the run. It should
    apply only the statements you reviewed. Changes saved while the mode was `plan` were
    only planned, so this run is what applies them.
-3. If a run is **paused** by the circuit breaker, it wanted to remove more tags or
-   descriptions than **Max removals per run**. Saved changes are applied in batches of up to 200
-   objects and the limit counts per batch, while a full check counts the whole run. Open
-   the run, check the removals, then either fix the desired state or choose **Apply
-   anyway and resume** (`"override_circuit_breaker": true`).
+3. If a run is **paused** by the circuit breaker, it would have taken removals in the last
+   hour over **Max removals per hour**. Open the run and check the removals. Then, as a
+   Platform Admin, choose **Review and resume** and either:
+   - **Apply these removals** (`POST /api/v1/metadata/runs/paused/resume` with
+     `{"run_id": "..."}`): re-plans only the paused run's objects and writes them, as long
+     as that removes no more than the run planned. If it would remove more, nothing is
+     written and the new run pauses instead. Needs `enforce`.
+   - **Clear without applying** (`POST /api/v1/metadata/runs/paused/clear` with the same
+     body): lifts the pause and writes nothing. Fix the desired state first (undo the change
+     set, or keep Unity Catalog's values under **Out of sync**), or the next check pauses
+     again.
+
+   `POST /api/v1/metadata/runs` with `"override_circuit_breaker": true` is refused, so
+   only reviewed removals are ever applied.
 
 ## 7. Retire the old configuration
 

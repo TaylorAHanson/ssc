@@ -20,10 +20,11 @@ OWNER = BrowseScope(level="owned", owned=["sales_dev.crm"])
 FULL = BrowseScope(level="full")
 
 
-def _decision(fqn_key, *, before="people_secret", kept=False, sensitive=False) -> ItemDecision:
-    item = ChangeItem(fqn_key=fqn_key, name=fqn_key, securable_type="table", field="tag", key="domain",
+def _decision(fqn_key, *, before="people_secret", kept=False, sensitive=False, exists=True,
+              key="domain") -> ItemDecision:
+    item = ChangeItem(fqn_key=fqn_key, name=fqn_key, securable_type="table", field="tag", key=key,
                       action="set", before=before, before_exists=True, before_version=4, after="hr",
-                      object_exists=True, unchanged_in_uc=kept)
+                      object_exists=exists, unchanged_in_uc=kept)
     reasons = ["Unity Catalog already has domain=people_secret."] if kept else ["No owner."]
     decision = AuthzDecision(allowed=not sensitive, needs_approval=sensitive, can_request=True, reasons=reasons,
                              sensitive_reasons=["Changing domain from people_secret."] if sensitive else [])
@@ -38,8 +39,8 @@ def _preview(*decisions, findings=()) -> ChangePreview:
 
 def test_hidden_items_lose_their_current_values():
     preview = _preview(_decision(MINE, before="crm"), _decision(HIDDEN, kept=True, sensitive=True),
-                       findings=[Finding(code="unmanaged_object", severity="warn", fqn_key=HIDDEN,
-                                         message="Its tags people_secret will be removed.")])
+                       findings=[Finding(code="changed_since", severity="warn", fqn_key=HIDDEN,
+                                         message="people_secret was changed again after this change.")])
 
     out = visibility.redact_preview(preview, OWNER, reason="Rename")
 
@@ -51,6 +52,18 @@ def test_hidden_items_lose_their_current_values():
     assert "people_secret" not in out.model_dump_json()
     assert out.digest != preview.digest
     assert preview.items[1].item.before == "people_secret"
+
+
+def test_kept_values_of_hidden_objects_are_left_out_and_the_counts_follow():
+    preview = _preview(_decision(HIDDEN, exists=False), _decision(HIDDEN, kept=True, exists=False, key="secret"),
+                       _decision(MINE, before="crm", kept=True, exists=False, key="tier"))
+    preview.direct_count, preview.kept_count = 3, 2
+
+    out = visibility.redact_preview(preview, OWNER)
+
+    assert [(d.item.fqn_key, d.item.key) for d in out.items] == [(HIDDEN, "domain"), (MINE, "tier")]
+    assert (out.direct_count, out.kept_count, out.approval_count, out.denied_count) == (2, 1, 0, 0)
+    assert '"key":"secret"' not in out.model_dump_json()
 
 
 def test_nothing_is_copied_when_nothing_is_hidden():

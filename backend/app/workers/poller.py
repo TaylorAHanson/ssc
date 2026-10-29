@@ -387,7 +387,9 @@ async def start_poller():
 
                 _spawn_background(safe_context_catalog_git_sync(), "context_catalog_git_sync")
 
-            if _metadata_reconcile_enabled():
+            # Mode isn't checked here: the pass re-reads it from the database, so a change saved on another
+            # replica (turning syncing on or off) takes effect on the leader.
+            if (_yaml_config.get("features", {}) or {}).get("metadata_v2", False):
                 _spawn_background(_safe_metadata_reconcile(metadata_reconcile_semaphore), "metadata_reconcile")
 
             # Pre-warm user profiles + prune retained user data. Self-throttled

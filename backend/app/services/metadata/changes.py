@@ -5,9 +5,11 @@ Workstream A.
 ``preview`` resolves ops into items against current desired state (merge, unset,
 replace and comment semantics, exempt keys set aside, cross-environment copies via
 ``environments.counterpart``), runs ``authz.decide`` and the risk report, and
-returns a ``ChangePreview``. ``submit`` previews again, then routes per
-``on_approval_needed``: direct items go to ``store.write_items``; items that need
-approval go to ``requests.file_change_request``. Idempotency is checked first.
+returns a ``ChangePreview``. An object UC already has but that has no desired row
+starts from its observed tags and description, so a first edit keeps them unless
+it removes them. ``submit`` re-reads such objects from UC, previews again, then
+routes per ``on_approval_needed``: direct items go to ``store.write_items``; items
+that need approval go to ``requests.file_change_request``. Idempotency is checked first.
 """
 from __future__ import annotations
 
@@ -18,7 +20,8 @@ import json
 import logging
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from datetime import datetime, timedelta, timezone
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from pydantic import ValidationError
 from sqlalchemy import func, or_
@@ -27,7 +30,20 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.metadata import SOURCE_ADOPT, SOURCE_IMPORT, SOURCE_REVERT, SOURCES, MetadataObservedModel
-from app.services.metadata import abac, authz, environments, errors, lint, observed, policy, report, requests, scope, store
+from app.services.metadata import (
+    abac,
+    authz,
+    environments,
+    errors,
+    lint,
+    observed,
+    policy,
+    reconciler,
+    report,
+    requests,
+    scope,
+    store,
+)
 from app.services.metadata.report import APPROVAL, DENIED, DIRECT
 from app.services.metadata.types import (
     Actor,
@@ -55,6 +71,8 @@ logger = logging.getLogger(__name__)
 
 # Objects per change set when adopting, so a cutover adopt of a whole metastore commits in batches.
 ADOPT_BATCH_SIZE = 500
+# Relations a submit re-reads from UC before its first edits of them; more need a recent whole read.
+FRESH_READ_LIMIT = 200
 
 _LEVEL_TYPES = {"catalog": "catalog", "schema": "schema", "relation": "table", "column": "column"}
 _IMPORT_COLUMNS = ("name", "column", "comment", "tags")
@@ -141,6 +159,26 @@ def _reason_findings(reason: str) -> List[Finding]:
     return []
 
 
+def _change_findings(items: Sequence[ChangeItem], actor: Actor, reason: str) -> List[Finding]:
+    """Checks on a change as a whole: the managed catalogs, the object limit and the reason."""
+    if not items:
+        return []
+    found: List[Finding] = []
+    outside = scope.outside(scope.catalog_of(i.fqn_key) for i in items)
+    if outside:
+        found.append(_deny("outside_managed_catalogs", scope.outside_message(outside)))
+    object_count = len({i.fqn_key for i in items})
+    limit = _object_limit(actor)
+    if limit > 0 and object_count > limit:
+        found.append(_deny(
+            "too_many_objects",
+            f"A change can touch at most {limit} objects and this one touches {object_count}. "
+            "Split it into smaller changes.",
+        ))
+    found.extend(_reason_findings(reason))
+    return found
+
+
 def _unique_findings(findings: Iterable[Finding]) -> List[Finding]:
     seen = OrderedDict()
     for f in findings:
@@ -161,6 +199,9 @@ class _Target:
     # The object a copy is made from; its type is the fallback for a counterpart with no row yet.
     source_fqn: Optional[str] = None
     type_hint: Optional[str] = None
+    # An "also make these changes in" copy repeats what the op changed on the source; a promote
+    # copy (False) makes the counterpart match the source.
+    repeats_source: bool = False
 
 
 @dataclass
@@ -170,11 +211,25 @@ class _Work:
     target: _Target
     desired: Optional[DesiredState]
     obs: Optional[ObservedState]
-    tags: Dict[str, Optional[str]]
-    comment: Optional[str]
+    tags: Dict[str, Optional[str]] = field(default_factory=dict)
+    comment: Optional[str] = None
     expected: Dict[str, int] = field(default_factory=dict)
     expected_comment: Optional[int] = None
     op_type: Optional[str] = None
+    # For an object UC has but with no desired row: its observed tags and description, the work's start.
+    seed: Optional[Dict[str, Optional[str]]] = None
+    seed_comment: Optional[str] = None
+    # Tag keys the ops named, and whether one named the description.
+    named: Set[str] = field(default_factory=set)
+    named_comment: bool = False
+
+
+# (fqn_key, field, key) of an item.
+ItemRef = Tuple[str, str, Optional[str]]
+
+
+def _ref(item: ChangeItem) -> ItemRef:
+    return item.fqn_key, item.field, item.key if item.field == "tag" else None
 
 
 @dataclass
@@ -183,6 +238,8 @@ class _Resolved:
     findings: List[Finding]
     noop_count: int = 0
     observed: Dict[str, ObservedState] = field(default_factory=dict)
+    # Kept values of a first edit that no op named: the seed carried them in.
+    seeded: Set[ItemRef] = field(default_factory=set)
 
 
 def _request_targets(request: ChangeRequest) -> Tuple[List[_Target], List[Finding]]:
@@ -203,7 +260,8 @@ def _request_targets(request: ChangeRequest) -> Tuple[List[_Target], List[Findin
             if counterpart is None:
                 uncopied.setdefault((key.catalog.lower(), env), {})[key.fqn_key] = key
                 continue
-            targets.append(_Target(op=op, key=counterpart, copied_from=own, source_fqn=key.fqn_key))
+            targets.append(_Target(op=op, key=counterpart, copied_from=own, source_fqn=key.fqn_key,
+                                   repeats_source=True))
     for (catalog, env), keys in uncopied.items():
         only = next(iter(keys.values())) if len(keys) == 1 else None
         what = only.display if only else f"{len(keys)} objects in {catalog}"
@@ -221,13 +279,17 @@ def _exempt_finding(fqn_key: str, key: str) -> Finding:
                  fqn_key=fqn_key, key=key)
 
 
-def _apply(op: ChangeOp, work: _Work, fqn_key: str, findings: List[Finding]) -> None:
+def _apply(op: ChangeOp, work: _Work, fqn_key: str, findings: List[Finding], *,
+           removed_on_source: Optional[Sequence[str]] = None) -> None:
+    """``removed_on_source``: for a copy of a replace, the keys it removed on the source object; the copy
+    sets the op's tags and removes only those, not the counterpart's other tags."""
     if op.op == "set_tags":
         for key, value in op.tags.items():
             if policy.is_exempt(key):
                 findings.append(_exempt_finding(fqn_key, key))
             else:
                 work.tags[key] = value
+                work.named.add(key)
     elif op.op == "unset_tags":
         for raw in op.keys:
             key = str(raw or "").strip()
@@ -237,16 +299,21 @@ def _apply(op: ChangeOp, work: _Work, fqn_key: str, findings: List[Finding]) -> 
                 findings.append(_exempt_finding(fqn_key, key))
             else:
                 work.tags.pop(key, None)
+                work.named.add(key)
     elif op.op == "replace_tags":
         wanted = {k: v for k, v in op.tags.items() if not policy.is_exempt(k)}
-        for key in list(work.tags):
-            if key not in wanted and not policy.is_exempt(key):
-                del work.tags[key]
+        dropped = [k for k in work.tags if k not in wanted and not policy.is_exempt(k)] \
+            if removed_on_source is None else list(removed_on_source)
+        for key in dropped:
+            work.tags.pop(key, None)
         work.tags.update(wanted)
+        work.named.update(wanted, dropped)
     elif op.op == "set_comment":
         work.comment = op.comment or None
+        work.named_comment = True
     else:
         work.comment = None
+        work.named_comment = True
 
 
 def _diff_items(
@@ -300,24 +367,38 @@ def _securable_type(work: _Work, desired: Dict[str, DesiredState], seen: Dict[st
     return _LEVEL_TYPES[work.target.key.level]
 
 
-def _unmanaged_finding(work: _Work, display: str, fqn_key: str) -> Optional[Finding]:
-    """An existing object with no row: the change becomes its whole desired state."""
-    dropped = sorted(k for k in (work.obs.tags or {}) if k not in work.tags and not policy.is_exempt(k))
-    losing_comment = bool(work.obs.comment) and work.comment is None
-    if not dropped and not losing_comment:
-        return None
-    parts = []
-    if dropped:
-        parts.append(f"its {'tag' if len(dropped) == 1 else 'tags'} {', '.join(dropped)}")
-    if losing_comment:
-        parts.append("its description")
-    return Finding(
-        code="unmanaged_object",
-        severity="warn",
-        message=(f"{display} isn't managed yet, so this change becomes its complete desired state and "
-                 f"{' and '.join(parts)} will be removed from Unity Catalog. Adopt it first to keep them."),
-        fqn_key=fqn_key,
-    )
+def _seed(work: _Work) -> None:
+    """Start an object UC has but with no desired row from its observed tags and description."""
+    work.seed = {k: normalize_value(v) for k, v in (work.obs.tags or {}).items() if not policy.is_exempt(k)}
+    work.seed_comment = work.obs.comment or None
+    work.tags, work.comment = dict(work.seed), work.seed_comment
+
+
+def _first_row_items(base: Dict[str, Any], work: _Work) -> List[ChangeItem]:
+    """Items creating a seeded object's first desired row, judged against what UC has.
+
+    Every value the row ends up with is an item (the ones UC already holds flagged
+    ``unchanged_in_uc``), and so is every UC value it drops. None when nothing would
+    change in UC: restating its values doesn't start managing it.
+    """
+    seed = work.seed or {}
+    items: List[ChangeItem] = []
+    for key in sorted(set(seed) | set(work.tags)):
+        version = work.expected.get(key, 0)
+        if key in work.tags:
+            items.append(ChangeItem(**base, field="tag", key=key, action="set", before=seed.get(key),
+                                    before_exists=key in seed, before_version=version, after=work.tags[key]))
+        else:
+            items.append(ChangeItem(**base, field="tag", key=key, action="unset", before=seed[key],
+                                    before_exists=True, before_version=version, after=None))
+    if work.comment is not None or work.seed_comment is not None:
+        items.append(ChangeItem(
+            **base, field="comment", action="comment_set" if work.comment is not None else "comment_clear",
+            before=work.seed_comment, before_exists=work.seed_comment is not None,
+            before_version=work.expected_comment or 0, after=work.comment,
+        ))
+    _mark_unchanged_in_uc(items, work.obs)
+    return items if any(not i.unchanged_in_uc for i in items) else []
 
 
 def _mark_unchanged_in_uc(items: Sequence[ChangeItem], obs: ObservedState) -> None:
@@ -344,14 +425,19 @@ def _resolve_targets(
     seen = observed.get_observed(db, keys) if keys else {}
 
     work: Dict[str, _Work] = {}
+    # id(op) -> the keys a replace removed on its source object, for its "also make these changes in" copies.
+    replaced: Dict[int, List[str]] = {}
     noop = 0
     for target in targets:
         fqn = target.key.fqn_key
         w = work.get(fqn)
         if w is None:
             d = desired.get(fqn)
-            w = _Work(target=target, desired=d, obs=seen.get(fqn), tags=dict(d.tags) if d else {},
-                      comment=d.comment.value if d else None)
+            w = _Work(target=target, desired=d, obs=seen.get(fqn))
+            if d is not None:
+                w.tags, w.comment = dict(d.tags), d.comment.value
+            elif w.obs is not None and w.obs.present:
+                _seed(w)
             work[fqn] = w
         op = target.op
         if w.op_type is None and op.securable_type:
@@ -364,11 +450,14 @@ def _resolve_targets(
                 w.expected_comment = int(op.expected_comment_version)
         before = (dict(w.tags), w.comment)
         finding_count = len(findings)
-        _apply(op, w, fqn, findings)
+        _apply(op, w, fqn, findings, removed_on_source=replaced.get(id(op), []) if target.repeats_source else None)
+        if op.op == "replace_tags" and not target.copied_from:
+            replaced[id(op)] = [k for k in before[0] if k not in w.tags]
         if (w.tags, w.comment) == before and len(findings) == finding_count:
             noop += 1
 
     items: List[ChangeItem] = []
+    seeded: Set[ItemRef] = set()
     for fqn, w in work.items():
         key = w.desired.key if w.desired else (w.obs.key if w.obs else w.target.key)
         if w.desired is not None:
@@ -385,29 +474,18 @@ def _resolve_targets(
             object_state=state,
             copied_from=w.target.copied_from,
         )
-        changed = _diff_items(base, w.desired, w.tags, w.comment, expected=w.expected,
-                              expected_comment=w.expected_comment)
-        if changed and w.desired is None and w.obs is not None and w.obs.present:
-            warning = _unmanaged_finding(w, key.display, fqn)
-            if warning is not None:
-                findings.append(warning)
-            _mark_unchanged_in_uc(changed, w.obs)
+        if w.seed is None:
+            changed = _diff_items(base, w.desired, w.tags, w.comment, expected=w.expected,
+                                  expected_comment=w.expected_comment)
+        else:
+            changed = _first_row_items(base, w)
+            seeded.update(_ref(i) for i in changed if i.unchanged_in_uc
+                          and not (w.named_comment if i.field == "comment" else i.key in w.named))
         items.extend(changed)
 
-    if items:
-        outside = scope.outside(scope.catalog_of(i.fqn_key) for i in items)
-        if outside:
-            findings.append(_deny("outside_managed_catalogs", scope.outside_message(outside)))
-        object_count = len({i.fqn_key for i in items})
-        limit = _object_limit(actor)
-        if limit > 0 and object_count > limit:
-            findings.append(_deny(
-                "too_many_objects",
-                f"A change can touch at most {limit} objects and this one touches {object_count}. "
-                "Split it into smaller changes.",
-            ))
-        findings.extend(_reason_findings(reason))
-    return _Resolved(items=items, findings=_unique_findings(findings), noop_count=noop, observed=seen)
+    findings.extend(_change_findings(items, actor, reason))
+    return _Resolved(items=items, findings=_unique_findings(findings), noop_count=noop, observed=seen,
+                     seeded=seeded)
 
 
 def resolve(db: Session, request: ChangeRequest, actor: Actor) -> Tuple[List[ChangeItem], List[Finding], int]:
@@ -473,15 +551,17 @@ def _risk(items: Sequence[ChangeItem], plan, abac_impacts: Sequence[str] = ()) -
 
 
 def _preview(db: Session, actor: Actor, resolved: _Resolved, *, reason: str, title: str) -> ChangePreview:
-    decisions = authz.decide(db, actor, resolved.items, observed=resolved.observed) if resolved.items else []
+    decisions = authz.decide(db, actor, resolved.items, observed=resolved.observed,
+                             seeded=resolved.seeded) if resolved.items else []
     buckets = [report.bucket(d) for d in decisions]
     groups = [g for d, b in zip(decisions, buckets) if b == APPROVAL for g in d.decision.approver_groups]
     items = [d.item for d in decisions]
     blocked = (any(f.severity == "deny" for f in resolved.findings)
                or any(f.severity == "deny" for d in decisions for f in d.findings))
-    plan = _tag_plan(items)
-    policy_findings, impacts = abac.check(items, plan) if not blocked else ([], [])
-    typo_findings = lint.check(items, lint.known_keys(db)) if not blocked else []
+    in_uc = [i for i in items if not i.stops_managing]
+    plan = _tag_plan(in_uc)
+    policy_findings, impacts = abac.check(in_uc, plan) if not blocked else ([], [])
+    typo_findings = lint.check([i for i in items if not i.unchanged_in_uc], lint.known_keys(db)) if not blocked else []
     pv = ChangePreview(
         items=decisions,
         findings=[*resolved.findings, *policy_findings, *typo_findings],
@@ -490,7 +570,7 @@ def _preview(db: Session, actor: Actor, resolved: _Resolved, *, reason: str, tit
         approval_count=buckets.count(APPROVAL),
         denied_count=buckets.count(DENIED),
         noop_count=resolved.noop_count,
-        kept_count=sum(1 for d, b in zip(decisions, buckets) if b == DIRECT and d.item.unchanged_in_uc),
+        kept_count=sum(1 for d, b in zip(decisions, buckets) if b == DIRECT and d.item.kept),
         needs_approval=APPROVAL in buckets,
         approver_groups=_dedupe(groups),
         environments=sorted({i.environment for i in items if i.environment}),
@@ -506,6 +586,76 @@ def preview(db: Session, request: ChangeRequest, actor: Actor) -> ChangePreview:
     targets, findings = _request_targets(request)
     resolved = _resolve_targets(db, targets, actor, reason=request.reason, findings=findings)
     return _preview(db, actor, resolved, reason=request.reason, title="Metadata change")
+
+
+# --- Copying from Unity Catalog ----------------------------------------------------
+#
+# Starting to manage an object copies what UC has into its first desired row, and syncing then
+# removes whatever that copy lacks, so the copy must be recent.
+
+
+def _max_read_age() -> int:
+    """METADATA_ADOPT_MAX_READ_AGE_MINUTES; 0 when off, as when syncing is off (UC isn't read then)."""
+    minutes = int(settings.METADATA_ADOPT_MAX_READ_AGE_MINUTES or 0)
+    return minutes if minutes > 0 and reconciler.current_mode() != "off" else 0
+
+
+def _stale_catalogs(db: Session, catalogs: Iterable[str]) -> List[str]:
+    """Of ``catalogs``, those whose last whole read from UC is older than the limit, never happened, or
+    is listed as unread since (a later check failed or was cut off)."""
+    minutes = _max_read_age()
+    if not minutes:
+        return []
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=minutes)
+    reads = {c.lower(): at for c, at in observed.confirmed_reads(db).items()}
+    return sorted(c for c in {(c or "").lower() for c in catalogs} if c and (reads.get(c) is None or reads[c] < cutoff))
+
+
+def _stale_message(stale: Sequence[str], lead: str) -> str:
+    return (
+        f"{lead}, but the last full read of {', '.join(stale)} is more than {_max_read_age()} minutes old or "
+        "hasn't happened. Tags added in Unity Catalog since would be missing, and syncing would then remove them. "
+        "Run Check now under Sync history, then try again."
+    )
+
+
+def _first_rows_lead(what: str) -> str:
+    return f"{what} starts managing objects from the tags and descriptions they had at the last check of Unity Catalog"
+
+
+def _read_unmanaged(db: Session, targets: Sequence[_Target], what: str) -> None:
+    """Re-read from UC the objects these targets would start managing, so their seed is current.
+
+    Up to FRESH_READ_LIMIT relations are re-read; more need a recent whole read of their
+    catalogs instead. Raises ``errors.MetadataError`` when that can't be had. Commits the
+    refreshed snapshot.
+    """
+    if not _max_read_age() or not targets:
+        return
+    keys = {t.key.fqn_key: t.key for t in targets}
+    unmanaged = [key for fqn, key in keys.items() if fqn not in store.get_objects(db, keys)]
+    if not unmanaged:
+        return
+    if len({k.relation_key().fqn_key for k in unmanaged}) > FRESH_READ_LIMIT:
+        stale = _stale_catalogs(db, (k.catalog for k in unmanaged))
+        if stale:
+            raise errors.MetadataError(_stale_message(stale, _first_rows_lead(what)))
+        return
+    try:
+        found = observed.refresh(db, unmanaged)
+    except Exception as exc:  # noqa: BLE001 - any failure leaves the seed unverified
+        db.rollback()
+        logger.warning("Metadata: couldn't re-read %d object(s) before a first edit: %s", len(unmanaged), exc)
+        found = {}
+    missing = [k for k in unmanaged if k.fqn_key not in found]
+    if missing:
+        subject = missing[0].display if len(missing) == 1 else f"{len(missing)} of these objects"
+        raise errors.MetadataError(
+            f"{what} was not saved: couldn't read {subject} from Unity Catalog just now, and saving without "
+            "a current copy of its tags could remove tags added there since the last check. Try again in a "
+            "moment; if it keeps failing, see Sync history."
+        )
+    db.commit()
 
 
 # --- Submit and routing ----------------------------------------------------------
@@ -574,10 +724,16 @@ def _route(
     if groups[DENIED]:
         raise errors.Forbidden(_forbidden_message(groups[DENIED]))
     direct, approval = groups[DIRECT], groups[APPROVAL]
-    # A kept value waits with its object's edits that need approval, so the object starts being managed only once they're approved.
+    # The first desired row of an object UC has is its whole desired state (what it leaves out, syncing removes),
+    # so it waits whole with its edits that need approval: the object starts being managed once they're approved.
     waiting = {d.item.fqn_key for d in approval}
-    approval += [d for d in direct if d.item.unchanged_in_uc and d.item.fqn_key in waiting]
-    direct = [d for d in direct if not (d.item.unchanged_in_uc and d.item.fqn_key in waiting)]
+
+    def waits(d: ItemDecision) -> bool:
+        first_row = not d.item.object_exists and d.item.object_state == "exists"
+        return d.item.fqn_key in waiting and (d.item.unchanged_in_uc or first_row)
+
+    approval += [d for d in direct if waits(d)]
+    direct = [d for d in direct if not waits(d)]
     types = {d.item.fqn_key: d.item.securable_type for d in pv.items}
 
     def write(decisions: List[ItemDecision], result: ChangeResult) -> ChangeSet:
@@ -641,6 +797,7 @@ def submit(db: Session, request: ChangeRequest, actor: Actor, *, source: ChangeS
     replayed = _replay(db, actor, key)
     if replayed is not None:
         return replayed
+    _read_unmanaged(db, _request_targets(request)[0], "This change")
     pv = preview(db, request, actor)
     try:
         result = _route(db, pv, actor=actor, source=source, reason=request.reason,
@@ -726,6 +883,7 @@ def promote(db: Session, request: PromoteRequest, actor: Actor, *, source: Chang
     replayed = _replay(db, actor, key)
     if replayed is not None:
         return replayed
+    _read_unmanaged(db, _promote_targets(db, request, sees)[0], "This promote")
     pv, targets = _promote_preview(db, request, actor, sees)
     return _route(
         db, pv, actor=actor, source=source, reason=request.reason, routing=request.on_approval_needed,
@@ -757,11 +915,40 @@ def _ops_from_items(items: Sequence[ChangeItem]) -> List[ChangeOp]:
     return ops
 
 
+def _names_list(names: Sequence[str], limit: int = 5) -> str:
+    shown = ", ".join(names[:limit])
+    return f"{shown} and {len(names) - limit} more" if len(names) > limit else shown
+
+
+def _revert_findings(plan: store.RevertPlan) -> List[Finding]:
+    found: List[Finding] = []
+    if plan.unmanaged:
+        names = {i.fqn_key: _display(i) for i in plan.items}
+        one = len(plan.unmanaged) == 1
+        found.append(Finding(code="stops_managing", severity="info", message=(
+            f"This change started managing {_count(len(plan.unmanaged), 'object')}, so undoing it stops managing "
+            f"{'it' if one else 'them'}: {_names_list([names[f] for f in plan.unmanaged])}. Unity Catalog keeps the "
+            f"tags and description {'it has' if one else 'they have'} now, including anything syncing already "
+            "applied; nothing is removed there."
+        )))
+    dropped = set(plan.unmanaged)
+    for fqn, display, key in plan.changed_since:
+        what = f"the tag {key}" if key is not None else "the description"
+        outcome = ("stopping managing it drops that later change here too (Unity Catalog keeps the value)"
+                   if fqn in dropped else "undoing this change restores it to its value from before this change anyway")
+        found.append(Finding(
+            code="changed_since", severity="warn", fqn_key=fqn, key=key,
+            message=f"{display}: {what} was changed again after this change; {outcome}.",
+        ))
+    return found
+
+
 def _revert_preview(
     db: Session, change_set_id: str, request: RevertRequest, actor: Actor,
 ) -> Tuple[ChangePreview, List[ChangeItem]]:
-    items = store.revert_items(db, change_set_id)
-    findings = _reason_findings(request.reason) if items else []
+    plan = store.revert_plan(db, change_set_id)
+    items = plan.items
+    findings = [*_revert_findings(plan), *_change_findings(items, actor, request.reason)] if items else []
     seen = observed.get_observed(db, _dedupe(i.fqn_key for i in items)) if items else {}
     resolved = _Resolved(items=items, findings=findings, observed=seen)
     pv = _preview(db, actor, resolved, reason=request.reason, title=f"Revert of change set {change_set_id}")
@@ -805,12 +992,18 @@ def _adoptable(obs: ObservedState) -> bool:
     return True
 
 
-def _adopt(db: Session, fqn_keys: Sequence[str], *, overwrite: bool, reason: str) -> Tuple[List[ChangeSet], int]:
-    """(change sets written, objects skipped because they already have desired state)."""
+def _adopt(
+    db: Session, fqn_keys: Sequence[str], *, overwrite: bool, reason: str, merge: bool = False,
+) -> Tuple[List[ChangeSet], int]:
+    """(change sets written, objects skipped because they already have desired state).
+
+    ``merge`` keeps existing desired state and only adds the observed tags (and the
+    description, when it has none) that it doesn't set.
+    """
     seen = observed.get_observed(db, fqn_keys) if fqn_keys else {}
     present = [seen[k] for k in fqn_keys if k in seen and seen[k].present and _adoptable(seen[k])]
     desired = store.get_objects(db, [o.fqn_key for o in present]) if present else {}
-    candidates = [o for o in present if overwrite or o.fqn_key not in desired]
+    candidates = [o for o in present if overwrite or merge or o.fqn_key not in desired]
     skipped = len(present) - len(candidates)
     system = authz.system_actor()
     change_sets: List[ChangeSet] = []
@@ -821,7 +1014,11 @@ def _adopt(db: Session, fqn_keys: Sequence[str], *, overwrite: bool, reason: str
         for obs in candidates[start:start + ADOPT_BATCH_SIZE]:
             current = desired.get(obs.fqn_key)
             tags = {k: normalize_value(v) for k, v in (obs.tags or {}).items() if not policy.is_exempt(k)}
-            if current is not None:
+            comment = obs.comment or None
+            if current is not None and merge:
+                tags.update(current.tags)
+                comment = current.comment.value if current.comment.value is not None else comment
+            elif current is not None:
                 tags.update({k: v for k, v in current.tags.items() if policy.is_exempt(k)})
             base = dict(
                 fqn_key=obs.fqn_key,
@@ -832,7 +1029,7 @@ def _adopt(db: Session, fqn_keys: Sequence[str], *, overwrite: bool, reason: str
                 object_exists=current is not None,
                 object_state=current.object_state if current is not None else "exists",
             )
-            items.extend(_diff_items(base, current, tags, obs.comment or None))
+            items.extend(_diff_items(base, current, tags, comment))
             types[obs.fqn_key] = obs.securable_type
             if current is None:
                 seeds.append(store.ObjectSeed(key=obs.key, securable_type=obs.securable_type, object_state="exists"))
@@ -914,8 +1111,15 @@ def adopt(db: Session, request: AdoptRequest, actor: Actor) -> ChangeResult:
         keys.append(key.fqn_key)
         if request.include_columns:
             keys.extend(_relation_columns(db, key.fqn_key))
+    keys = _dedupe(keys)
+    copied = keys if request.overwrite else [k for k in keys if k not in store.get_objects(db, keys)]
+    stale = _stale_catalogs(db, (scope.catalog_of(k) for k in copied))
+    if stale:
+        raise errors.MetadataError(_stale_message(
+            stale, "Start managing copies each object's tags and description from the last check of Unity Catalog",
+        ))
     reason = f"{(request.reason or '').strip() or 'Adopt current Unity Catalog state'} (requested by {actor.id})"
-    change_sets, skipped = _adopt(db, _dedupe(keys), overwrite=request.overwrite, reason=reason)
+    change_sets, skipped = _adopt(db, keys, overwrite=request.overwrite, reason=reason)
     logger.info("Metadata: %s adopted %d change set(s) for %d catalog(s) and %d name(s)",
                 actor.id, len(change_sets), len(catalogs), len(names))
     return _adopt_result(change_sets, skipped)
@@ -935,6 +1139,17 @@ def adopt_observed(db: Session, fqn_keys: Sequence[str], *, reason: str) -> Opti
         keys.append(fqn)
         keys.extend(_relation_columns(db, fqn))
     change_sets, _ = _adopt(db, _dedupe(keys), overwrite=False, reason=reason)
+    return change_sets[0] if change_sets else None
+
+
+def merge_observed(db: Session, fqn_keys: Sequence[str], *, reason: str) -> Optional[ChangeSet]:
+    """The reconciler, for objects created or recreated under existing desired state: keep that
+    state, and add the tags (and description, when it has none) they were created with.
+
+    Without this the first sync would remove whatever the creator set. Returns the
+    first change set, or None when nothing needed adding.
+    """
+    change_sets, _ = _adopt(db, _dedupe([k for k in fqn_keys if k]), overwrite=False, reason=reason, merge=True)
     return change_sets[0] if change_sets else None
 
 
@@ -1023,6 +1238,10 @@ def _import_targets(request: ImportRequest) -> List[_Target]:
 def _import_preview(db: Session, request: ImportRequest, actor: Actor) -> Tuple[ChangePreview, List[_Target]]:
     targets = _import_targets(request)
     resolved = _resolve_targets(db, targets, actor, reason=request.reason, findings=[])
+    stale = _stale_catalogs(db, (scope.catalog_of(i.fqn_key) for i in resolved.items
+                                 if not i.object_exists and i.object_state == "exists"))
+    if stale:
+        resolved.findings.append(_deny("stale_snapshot", _stale_message(stale, _first_rows_lead("This import"))))
     return _preview(db, actor, resolved, reason=request.reason, title="Import metadata"), targets
 
 
@@ -1074,6 +1293,9 @@ def record_prepared(
         ) from None
     if not items:
         raise errors.MetadataError(f"Request {request_id} has no prepared changes to record.")
+    if any(i.stops_managing for i in items) and not prepared.get("reverts_change_set_id"):
+        raise errors.MetadataError(f"Request {request_id}'s prepared change stops managing objects but isn't a "
+                                   "revert, so it can't be recorded.")
     source = prepared.get("source") if prepared.get("source") in SOURCES else "agent"
     note = f"approved by {approver}" if approver else "approved"
     reason = (prepared.get("reason") or "").strip()

@@ -671,8 +671,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         # and plan every governed catalog, write none (enforce needs a list).
         "reconcile_catalogs": [],
         # catalog.schema names or patterns (sales_dev.bronze, sales_dev.*_raw) that
-        # enforce writes to. Blank = every schema of the catalogs above. Everything
-        # else in them is still read, planned and editable, but only reported.
+        # enforce writes to, or * for everything. Blank = nothing, so a cleared list
+        # or a saved value that fails to load can't widen writes. Everything else in
+        # the catalogs is still read, planned and editable, but only reported.
         "enforce_schemas": [],
         # How often new or altered tables are looked for. 0 = only the sweep and
         # explicit reconcile calls pick them up.
@@ -680,16 +681,39 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         # A new object with no desired row: adopt its create-time tags and comment
         # (so CREATE ... TAGS isn't stripped), or ignore it (left unmanaged).
         "new_object_policy": "adopt",
+        # A new or recreated object changed within this many minutes is left alone
+        # and retried: a pipeline often creates a table and tags it a moment later,
+        # and adopting in between would make the tags look like drift. 0 = no wait.
+        "new_object_quiet_minutes": 10,
         # Keys the reconciler never sets or removes, and edits can't touch.
         # OmniGuard owns certification, so enforcement must leave it alone.
         "exempt_keys": ["system.certification_status"],
-        # More removals (tags or descriptions) than this in one run pauses
-        # enforcement and alerts governance. 0 = every removal waits for review.
-        "max_removals_per_run": 200,
+        # More removals (tags or descriptions removed or blanked) than this within
+        # an hour, across runs, pauses enforcement and alerts governance. Kept well
+        # under a queue batch (200 relations). 0 = every removal waits for review.
+        "max_removals_per_run": 50,
         # Statements run in parallel across relations (one relation's stay in order).
         "apply_concurrency": 8,
-        # Rows whose object was dropped are purged after this many days.
+        # Rows whose object was dropped are purged after this many days, and only
+        # once a later full read of the catalog confirms it's still gone.
         "orphan_retention_days": 30,
+        # Sync history (runs and their statements) older than this is deleted
+        # after each full check; report-only runs re-list the same statements
+        # every hour. Paused runs and the newest run of each kind are kept. 0 = keep.
+        "run_history_days": 30,
+        # A full read that would mark more than this percent of a catalog's
+        # objects missing (and more than 500) isn't trusted: losing access to part
+        # of a catalog reads exactly like a mass drop. 100 = never refuse.
+        "max_missing_percent": 5,
+        # A full check holds each catalog's read in memory; a catalog whose
+        # tables, columns or tags come to more rows than this in one statement
+        # is reported unread instead of risking the app's memory. 0 = no limit.
+        "max_rows_per_read": 2_000_000,
+        # Starting to manage an object copies its UC tags from the snapshot, and
+        # syncing then removes what the copy lacks. Start managing and imports
+        # need a whole read of the catalog this recent; a first edit re-reads up
+        # to 200 tables itself. 0 = no check.
+        "adopt_max_read_age_minutes": 30,
         # Members of the group(s) named by this tag (on the object, else its
         # table, schema or catalog) may edit the object.
         "owner_tag_key": "data_owner",

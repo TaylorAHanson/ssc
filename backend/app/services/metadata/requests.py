@@ -28,6 +28,7 @@ from app.services.metadata.types import (
     ChangeRequest,
     ItemDecision,
     ObjectKey,
+    RevertRequest,
 )
 
 logger = logging.getLogger(__name__)
@@ -240,8 +241,12 @@ def prepare(db: Session, request_id: str) -> Dict[str, Any]:
     except ValidationError as exc:
         raise PermanentError(f"This request's metadata change isn't valid: {exc.errors()[0].get('msg')}") from None
     requester = _requester(db, request)
+    reverts = (filed.event_data or {}).get("reverts_change_set_id")
     try:
-        preview = changes.preview(db, ask, requester)
+        # A revert is planned again rather than re-resolved from its ops: undoing a change set that started
+        # managing an object drops the object's row, which no op can express.
+        preview = (changes.preview_revert(db, reverts, RevertRequest(reason=ask.reason), requester) if reverts
+                   else changes.preview(db, ask, requester))
     except MetadataError as exc:
         raise PermanentError(exc.message) from None
     if preview.blocked:
@@ -260,7 +265,6 @@ def prepare(db: Session, request_id: str) -> Dict[str, Any]:
         "actor_type": requester.actor_type,
         "digest": preview.digest,
     }
-    reverts = (filed.event_data or {}).get("reverts_change_set_id")
     if reverts:
         prepared["reverts_change_set_id"] = reverts
     _store_prepared(db, request, prepared, title=_title(items))

@@ -111,6 +111,8 @@ class MetadataObjectModel(Base):
     last_apply_status: Mapped[Optional[str]] = Column(String, nullable=True)
     last_apply_error: Mapped[Optional[str]] = Column(Text, nullable=True)
     last_observed_at: Mapped[Optional[datetime]] = Column(DateTime, nullable=True)
+    # UC's created time for the object this row was last reconciled against; a later one means it was recreated.
+    observed_created: Mapped[Optional[datetime]] = Column(DateTime, nullable=True)
     # Set while desired and observed differ (in plan mode, or after a failed apply); NULL when in sync.
     drift_detected_at: Mapped[Optional[datetime]] = Column(DateTime, nullable=True)
     # sha256 of the canonical desired tags + comment; the reconciler compares it with applied_hash.

@@ -17,10 +17,12 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.api import deps, identity
+from app.core import settings_store
 from app.core.config import settings
 from app.core.feature_flags import is_feature_enabled
 from app.db.session import get_db
 from app.models.user import User
+from app.services.approval_scope import is_platform_admin
 from app.services.metadata import (
     authz,
     changes,
@@ -52,6 +54,7 @@ from app.services.metadata.types import (
     MetadataConfig,
     ObjectDetail,
     ObjectKey,
+    PausedRunAction,
     PrincipalIn,
     PrincipalOut,
     PromoteRequest,
@@ -127,6 +130,16 @@ def _admin(db: Session, user: User, action: str) -> Actor:
     return actor
 
 
+def _is_platform_admin(user: User) -> bool:
+    return user.actor_type != "service_principal" and is_platform_admin(list(user.roles or []))
+
+
+def _platform_admin(db: Session, user: User, action: str) -> Actor:
+    if not _is_platform_admin(user):
+        raise Forbidden(f"Only Platform Admins can {action}.")
+    return _actor(db, user)
+
+
 def _source(request: Request, actor: Actor) -> ChangeSource:
     if actor.actor_type == "service_principal":
         return "api"
@@ -175,6 +188,8 @@ async def whoami(request: Request, db: Session = Depends(get_db)) -> WhoAmI:
 
 def _config(db: Session, user: User) -> MetadataConfig:
     _, browse = _browse(db, user)
+    settings_store.refresh_overrides(db, "METADATA_")
+    breaker = reconciler.circuit_breaker_state(db)
     return MetadataConfig(
         reconcile_mode=reconciler.current_mode(),
         owner_tag_key=settings.METADATA_OWNER_TAG_KEY,
@@ -189,7 +204,9 @@ def _config(db: Session, user: User) -> MetadataConfig:
         last_sweep_at=observed.last_sweep_at(db),
         unread_catalogs=observed.unread_catalogs(db) if browse.full else [],
         unread_reasons=observed.unread_reasons(db) if browse.full else {},
-        circuit_breaker_tripped=reconciler.circuit_breaker_tripped(db),
+        circuit_breaker_tripped=breaker is not None,
+        circuit_breaker_run_id=(breaker or {}).get("run_id") if browse.full else None,
+        can_resume_sync=_is_platform_admin(user),
         managed_catalogs=scope.patterns(),
         enforce_schemas=scope.enforce_patterns(),
         enforce_blocked_reason=scope.enforce_blocked_reason(),
@@ -539,8 +556,10 @@ async def start_run(
     with _http_errors():
         def run() -> ReconcileResult:
             actor = _admin(db, user, "run the reconciler")
-            logger.info("Metadata: %s started a %s run (catalogs %s, override %s)", actor.id, body.kind,
-                        body.catalogs or "all", body.override_circuit_breaker)
+            if body.override_circuit_breaker:
+                raise MetadataError("Resume a paused sync from Sync history (POST /runs/paused/resume with its "
+                                    "run_id), so only the removals that were reviewed are applied.")
+            logger.info("Metadata: %s started a %s run (catalogs %s)", actor.id, body.kind, body.catalogs or "all")
             if body.kind == "queue":
                 drained = reconciler.drain_queue(db)
                 if drained is not None:
@@ -551,8 +570,35 @@ async def start_run(
             # return a still-running row instead of sitting until the proxy times out.
             return reconciler.run_detached(
                 trigger="manual", catalogs=body.catalogs or None, mode="plan" if body.kind == "plan" else None,
-                actor=actor.id, override_circuit_breaker=body.override_circuit_breaker,
+                actor=actor.id,
             )
+
+        return await asyncio.to_thread(run)
+
+
+@router.post("/runs/paused/resume", response_model=ReconcileResult)
+async def resume_paused_run(
+    body: PausedRunAction, db: Session = Depends(get_db), user: User = Depends(deps.get_current_user_or_principal),
+) -> ReconcileResult:
+    """Apply the reviewed paused run: only its objects, and only if that removes no more than it planned."""
+    with _http_errors():
+        def run() -> ReconcileResult:
+            actor = _platform_admin(db, user, "resume a paused sync")
+            return reconciler.resume_paused(db, run_id=body.run_id, actor=actor.id)
+
+        return await asyncio.to_thread(run)
+
+
+@router.post("/runs/paused/clear", response_model=MetadataConfig)
+async def clear_paused_run(
+    body: PausedRunAction, db: Session = Depends(get_db), user: User = Depends(deps.get_current_user_or_principal),
+) -> MetadataConfig:
+    """Lift the pause without applying the paused run's removals."""
+    with _http_errors():
+        def run() -> MetadataConfig:
+            actor = _platform_admin(db, user, "clear a paused sync")
+            reconciler.clear_paused(db, run_id=body.run_id, actor=actor.id)
+            return _config(db, user)
 
         return await asyncio.to_thread(run)
 

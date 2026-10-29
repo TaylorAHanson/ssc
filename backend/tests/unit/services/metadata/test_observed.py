@@ -2,18 +2,25 @@
 
 UC is a fake ``statement_execution`` client answering from an in-memory metastore.
 It applies the ``=``, ``IN``, ``NOT IN`` and ``TIMESTAMP`` filters the module
-emits, and records every statement.
+emits, and records every statement. EXTERNAL_LINKS results are served as JSON
+chunks by a fake ``requests.get``.
 """
+import itertools
+import json
 import re
 import threading
+import time
+from concurrent.futures import Future
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Dict, List, Optional
 
 import pytest
+import requests
 
 from app.core.config import settings
+from app.core.logging_formatter import current_request_id
 from app.db.metadata import MetadataObservedModel, MetadataSyncStateModel
 from app.services.metadata import observed
 from app.services.metadata.types import ObjectKey
@@ -68,15 +75,31 @@ def _literals(text: str) -> List[str]:
     return re.findall(r"'([^']*)'", text)
 
 
+# External link URL -> (the FakeUC serving it, the chunk's rows).
+_STORAGE: Dict[str, tuple] = {}
+
+
 class FakeUC:
     def __init__(self):
         self.catalogs: Dict[str, FakeCatalog] = {}
         self.failing: set = set()
         self.sql: List[str] = []
+        # The statements run with INLINE disposition, a subset of ``sql``.
+        self.inline: List[str] = []
         self.governed: Dict[str, List[str]] = {}
         self.governed_error: Optional[Exception] = None
-        # Results with more rows fail the way a warehouse's inline byte limit does.
+        # Inline results with more rows fail the way a warehouse's inline byte limit does.
         self.max_rows: Optional[int] = None
+        # Rows per EXTERNAL_LINKS chunk, and whether their downloads get through.
+        self.link_rows = 2
+        self.storage_reachable = True
+        # Seconds each statement takes, to make concurrent statements overlap.
+        self.delay = 0.0
+        self.in_flight = 0
+        self.max_in_flight = 0
+        self.request_ids: List[Optional[str]] = []
+        self._links: Dict[str, List[list]] = {}
+        self._ids = itertools.count(1)
         self._lock = threading.Lock()
 
     # -- provider surface --
@@ -86,7 +109,7 @@ class FakeUC:
             statement_execution=SimpleNamespace(
                 execute_statement=self._execute,
                 get_statement=None,
-                get_statement_result_chunk_n=None,
+                get_statement_result_chunk_n=self._link_chunk,
             ),
             catalogs=SimpleNamespace(list=self._list_catalogs),
             tag_policies=SimpleNamespace(list_tag_policies=self._list_tag_policies),
@@ -106,12 +129,34 @@ class FakeUC:
             for k, vals in self.governed.items()
         ]
 
-    def _execute(self, statement, warehouse_id, wait_timeout=None):
+    def _execute(self, statement, warehouse_id, wait_timeout=None, disposition=None, format=None):
+        external = getattr(disposition, "value", None) == "EXTERNAL_LINKS"
         with self._lock:
+            statement_id = f"stmt-{next(self._ids)}"
             self.sql.append(statement)
-        rows: List[list] = []
-        for part in statement.split(" UNION ALL "):
-            rows.extend(self._answer(part))
+            if not external:
+                self.inline.append(statement)
+            self.request_ids.append(current_request_id.get())
+            self.in_flight += 1
+            self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        try:
+            time.sleep(self.delay)
+            rows: List[list] = []
+            for part in statement.split(" UNION ALL "):
+                rows.extend(self._answer(part))
+        finally:
+            with self._lock:
+                self.in_flight -= 1
+        if external:
+            assert getattr(format, "value", None) == "JSON_ARRAY"
+            with self._lock:
+                self._links[statement_id] = [rows[i:i + self.link_rows] for i in range(0, len(rows), self.link_rows)]
+            return SimpleNamespace(
+                statement_id=statement_id,
+                status=SimpleNamespace(state=SimpleNamespace(value="SUCCEEDED"), error=None),
+                manifest=SimpleNamespace(total_row_count=len(rows), truncated=False),
+                result=self._link_chunk(statement_id, 0) if rows else None,
+            )
         if self.max_rows is not None and len(rows) > self.max_rows:
             error = (
                 "ServiceError(error_code=<ServiceErrorCode.BAD_REQUEST: 'BAD_REQUEST'>, message='Inline byte limit "
@@ -120,14 +165,28 @@ class FakeUC:
                 "full result.')"
             )
             return SimpleNamespace(
-                statement_id=f"stmt-{len(self.sql)}",
+                statement_id=statement_id,
                 status=SimpleNamespace(state=SimpleNamespace(value="FAILED"), error=error),
                 result=None,
             )
         return SimpleNamespace(
-            statement_id=f"stmt-{len(self.sql)}",
+            statement_id=statement_id,
             status=SimpleNamespace(state=SimpleNamespace(value="SUCCEEDED"), error=None),
+            manifest=SimpleNamespace(total_row_count=len(rows), truncated=False),
             result=SimpleNamespace(data_array=rows, next_chunk_index=None),
+        )
+
+    def _link_chunk(self, statement_id, index):
+        """One chunk as the API gives it under EXTERNAL_LINKS: the next index rides on the link."""
+        chunks = self._links[statement_id]
+        url = f"https://storage.example/{statement_id}/{index}?X-Amz-Signature=secret"
+        _STORAGE[url] = (self, chunks[index])
+        more = index + 1 < len(chunks)
+        return SimpleNamespace(
+            data_array=None, next_chunk_index=None,
+            external_links=[SimpleNamespace(
+                chunk_index=index, external_link=url, http_headers={}, next_chunk_index=index + 1 if more else None,
+            )],
         )
 
     # -- a tiny information_schema --
@@ -230,6 +289,23 @@ def _settings(monkeypatch):
     monkeypatch.setattr(settings, "METADATA_RECONCILE_CATALOGS", [], raising=False)
     monkeypatch.setattr(settings, "SCAN_CATALOGS", "", raising=False)
     monkeypatch.setattr(tag_governed, "_keys_cache", {"at": 0.0, "keys": None})
+
+
+@pytest.fixture(autouse=True)
+def _storage(monkeypatch):
+    """Cloud storage for EXTERNAL_LINKS chunks, and a fresh external-links fallback state."""
+    def get(url, headers=None, timeout=None):
+        uc, rows = _STORAGE[url]
+        if not uc.storage_reachable:
+            raise requests.ConnectionError(f"HTTPSConnectionPool: Max retries exceeded with url: {url}")
+        body = json.dumps(rows)
+        return SimpleNamespace(ok=True, status_code=200, json=lambda: json.loads(body))
+
+    monkeypatch.setattr("app.providers.databricks.uc_metadata.requests.get", get)
+    monkeypatch.setattr(observed, "_external_links_retry_at", 0.0)
+    monkeypatch.setattr(observed, "_external_links_warned", False)
+    yield
+    _STORAGE.clear()
 
 
 def _rows(db) -> Dict[str, MetadataObservedModel]:
@@ -343,34 +419,229 @@ def _wide_catalog() -> FakeUC:
     return uc
 
 
+def _snapshot(db) -> Dict[str, tuple]:
+    return {k: (r.present, r.data_type, r.comment, dict(r.tags or {})) for k, r in _rows(db).items()}
+
+
+def test_a_sweep_reads_relations_columns_and_their_tags_by_external_link(db_session, caplog):
+    """No inline limit applies to them: only the small catalog/schema statements go inline."""
+    uc = _wide_catalog()
+    uc.max_rows = 5
+    uc.link_rows = 5  # 12 relations, 24 columns and 36 tags in 3, 5 and 8 chunks
+
+    with caplog.at_level("INFO", logger=observed.__name__):
+        result = observed.sweep(db_session, provider=uc)
+
+    assert result.failed_catalogs == {}
+    rows = _rows(db_session)
+    assert len(rows) == 1 + 4 + 12 + 24
+    assert rows["big.s3.t2::b"].tags == {"pii": None} and rows["big.s3.t2"].tags == {"layer": "gold"}
+    assert len(uc.sql) == 5
+    assert len(uc.inline) == 2 and all(".tables " not in s and ".columns " not in s for s in uc.inline)
+    timing = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("Observed read: big —"))
+    assert "schemas 5 rows" in timing and "(inline)" in timing
+    assert "relations 12 rows" in timing and "columns 24 rows" in timing
+    assert "(external links, 5 chunks)" in timing and "relation tags 36 rows" in timing
+    finished = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("Observed sweep finished"))
+    assert "ms listing governed tags" in finished
+
+
+def test_every_statement_of_a_catalog_read_carries_the_callers_log_context(db_session):
+    uc = _wide_catalog()
+    uc.storage_reachable = False
+    uc.max_rows = 5  # so the column and tag reads also run in parts
+    token = current_request_id.set("metadata_reconcile:run-2")
+    try:
+        observed.sweep(db_session, provider=uc)
+    finally:
+        current_request_id.reset(token)
+
+    assert len(uc.request_ids) > 10 and set(uc.request_ids) == {"metadata_reconcile:run-2"}
+
+
 def test_a_result_over_the_inline_limit_is_read_in_parts(db_session):
-    """A big catalog's tables/columns/tags overflow one inline result; halving by schema, then table, reads it all."""
+    """Where external links can't be downloaded, an inline result too big is halved by schema, then table."""
     uc = _wide_catalog()
     observed.sweep(db_session, provider=uc)
-    expected = {k: (r.present, dict(r.tags or {})) for k, r in _rows(db_session).items()}
+    expected = _snapshot(db_session)
     assert len(expected) == 1 + 4 + 12 + 24
 
     db_session.query(MetadataObservedModel).delete()
     db_session.commit()
     uc.sql.clear()
+    uc.inline.clear()
+    uc.storage_reachable = False
     uc.max_rows = 5  # fits the catalog and schema rows, not one schema's 6 columns or 9 tags: those split by table
 
     result = observed.sweep(db_session, provider=uc)
 
     assert result.failed_catalogs == {}
-    assert {k: (r.present, dict(r.tags or {})) for k, r in _rows(db_session).items()} == expected
-    assert any(" AND table_schema IN ('s0') AND table_name IN (" in s for s in uc.sql if ".columns " in s)
-    assert sum(1 for s in uc.sql if ".tables " in s) == 1 + 2 + 4  # whole, two halves, four schemas
+    assert _snapshot(db_session) == expected
+    assert any(" AND table_schema IN ('s0') AND table_name IN (" in s for s in uc.inline if ".columns " in s)
+    assert sum(1 for s in uc.inline if ".tables " in s) == 1 + 2 + 4  # whole, two halves, four schemas
+
+
+def test_a_failed_download_falls_back_to_inline_and_warns_once(db_session, caplog, monkeypatch):
+    uc = _wide_catalog()
+    observed.sweep(db_session, provider=uc)
+    expected = _snapshot(db_session)
+    db_session.query(MetadataObservedModel).delete()
+    db_session.commit()
+    uc.storage_reachable = False
+    uc.sql.clear()
+    uc.inline.clear()
+    caplog.clear()
+
+    with caplog.at_level("INFO", logger=observed.__name__):
+        first = observed.sweep(db_session, provider=uc)
+        # The three statements start together, so one to three of them try links before the first fails.
+        tried = len(uc.sql) - len(uc.inline)
+        second = observed.sweep(db_session, provider=uc)
+
+    assert first.failed_catalogs == {} and second.failed_catalogs == {}
+    assert _snapshot(db_session) == expected
+    assert 1 <= tried <= 3
+    # The next sweep doesn't try links again until the retry period is up.
+    assert len(uc.sql) - len(uc.inline) == tried
+    fallbacks = [r for r in caplog.records if "could not be fetched by external link" in r.getMessage()]
+    assert len(fallbacks) == tried and [r.levelname for r in fallbacks].count("WARNING") == 1
+    warning = next(r.getMessage() for r in fallbacks if r.levelname == "WARNING")
+    assert "ConnectionError" in warning and "storage.example" in warning and "Signature" not in warning
+    timing = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("Observed read: big —"))
+    assert "(inline after external links failed)" in timing
+
+    monkeypatch.setattr(observed, "_external_links_retry_at", 0.0)
+    uc.storage_reachable = True
+    caplog.clear()
+    with caplog.at_level("INFO", logger=observed.__name__):
+        observed.sweep(db_session, provider=uc)
+    assert not [r for r in caplog.records if "could not be fetched by external link" in r.getMessage()]
+    assert len(uc.sql) - len(uc.inline) == tried + 3
 
 
 def test_a_single_table_over_the_inline_limit_fails_the_catalog(db_session):
     uc = _wide_catalog()
+    uc.storage_reachable = False
     uc.max_rows = 1
 
     result = observed.sweep(db_session, provider=uc)
 
     assert "Inline byte limit exceeded" in result.failed_catalogs["big"]
     assert _rows(db_session) == {}
+
+
+@pytest.mark.parametrize("by_links", [True, False])
+def test_a_catalog_over_the_row_limit_is_left_unread(db_session, monkeypatch, by_links):
+    """36 relation tags against a limit of 30: refused from the manifest, or once the parts add up past it."""
+    uc = _wide_catalog()
+    monkeypatch.setattr(settings, "METADATA_MAX_ROWS_PER_READ", 30, raising=False)
+    if not by_links:
+        monkeypatch.setattr(observed, "_external_links_retry_at", time.monotonic() + 3600)
+        uc.max_rows = 5
+
+    result = observed.sweep(db_session, provider=uc)
+
+    error = result.failed_catalogs["big"]
+    assert "more than the 30 one read may hold" in error
+    assert ("36 rows" in error) == by_links
+    assert _rows(db_session) == {}
+    assert "may hold in memory" in observed.explain_read_error(error)
+
+    monkeypatch.setattr(settings, "METADATA_MAX_ROWS_PER_READ", 0, raising=False)
+    assert observed.sweep(db_session, provider=uc).failed_catalogs == {}
+
+
+def test_a_failed_statement_fails_the_whole_catalog_read(db_session):
+    """One statement failing mid-read leaves nothing half-read: the catalog is unread and untouched."""
+    uc = _metastore()
+    observed.sweep(db_session, provider=uc)
+    before = _snapshot(db_session)
+    uc.catalogs["sales"].schemas["bronze"].tables["orders"].tags["tier"] = "gold"
+    real_answer = uc._answer
+
+    def answer(sql):
+        if ".column_tags " in sql:
+            raise RuntimeError("[INTERNAL_ERROR] column_tags")
+        return real_answer(sql)
+
+    uc._answer = answer
+    result = observed.sweep(db_session, provider=uc, catalogs=["sales"])
+
+    assert "column_tags" in result.failed_catalogs["sales"]
+    assert _snapshot(db_session) == before
+
+
+class _SerialPool:
+    """Runs each task as it's submitted, so a read goes one statement at a time, in order."""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def submit(self, fn, *args, **kwargs):
+        future = Future()
+        try:
+            future.set_result(fn(*args, **kwargs))
+        except BaseException as e:  # noqa: BLE001 - handed to the caller, as a pool would
+            future.set_exception(e)
+        return future
+
+
+def _both_catalogs() -> FakeUC:
+    uc = _metastore()
+    uc.catalogs["big"] = _wide_catalog().catalogs["big"]
+    return uc
+
+
+# max_rows=7 fits each catalog's schemas and sales' 7 relations, so big's reads split by schema and then by table.
+@pytest.mark.parametrize("sweep, reachable, max_rows", [
+    (True, True, None), (True, True, 7), (True, False, 7), (False, True, None), (False, True, 7),
+])
+def test_a_concurrent_read_matches_a_sequential_one(monkeypatch, sweep, reachable, max_rows):
+    at = datetime(2026, 3, 1)
+
+    def read_all(uc):
+        return {
+            catalog: observed._read(uc, "system.information_schema", catalog, observed._Targets(), at, sweep=sweep)
+            for catalog in ("sales", "hr", "big")
+        }
+
+    def fake(delay):
+        uc = _both_catalogs()
+        uc.storage_reachable, uc.max_rows, uc.delay = reachable, max_rows, delay
+        return uc
+
+    uc = fake(0.005)
+    concurrent = read_all(uc)
+    monkeypatch.setattr(observed, "_external_links_retry_at", 0.0)
+    monkeypatch.setattr(observed, "ThreadPoolExecutor", _SerialPool)
+    sequential = read_all(fake(0.0))
+
+    assert concurrent == sequential
+    split_by_table = any(" AND schema_name IN ('s0') AND table_name IN (" in s for s in uc.inline)
+    assert split_by_table == (max_rows is not None and not (sweep and reachable))
+    assert concurrent["sales"]["sales.bronze.orders::email"]["tags"] == {"pii": None}
+    assert concurrent["sales"]["sales.bronze.orders"]["tags"] == {"classification": "restricted", "flagged": None}
+    assert len(concurrent["big"]) == 1 + 4 + 12 + 24
+
+
+def test_inline_parts_run_at_once_within_the_sweeps_statement_cap(db_session, monkeypatch):
+    monkeypatch.setattr(observed, "_SWEEP_STATEMENTS", threading.BoundedSemaphore(2))
+    uc = _wide_catalog()
+    uc.storage_reachable = False
+    uc.max_rows = 5
+    uc.delay = 0.02
+
+    result = observed.sweep(db_session, provider=uc)
+
+    assert result.failed_catalogs == {}
+    assert len(_rows(db_session)) == 1 + 4 + 12 + 24
+    assert uc.max_in_flight == 2
 
 
 def test_overlong_column_types_fall_back_to_the_bare_type_name():
@@ -419,6 +690,18 @@ def test_catalog_reads_log_with_the_callers_context(monkeypatch):
         current_request_id.reset(token)
 
     assert sorted(seen) == [(c, "metadata_reconcile:run-1") for c in ("a", "b", "c")]
+
+
+def test_read_ahead_holds_no_more_catalogs_than_it_reads_at_once(monkeypatch):
+    started = []
+    monkeypatch.setattr(observed, "_READ_WORKERS", 2)
+    monkeypatch.setattr(observed, "ThreadPoolExecutor", _SerialPool)
+    monkeypatch.setattr(observed, "_read_catalog", lambda provider, catalog: started.append(catalog) or catalog)
+
+    reads = observed._read_ahead(None, list("abcdef"))
+    assert next(reads)[0] == "a"
+    assert started == ["a", "b", "c"]  # a being written, b and c read ahead
+    assert [c for c, _, _ in reads] == list("bcdef")
 
 
 def test_sweep_marks_dropped_objects_missing_and_leaves_failed_catalogs_untouched(db_session):
@@ -551,7 +834,86 @@ def test_a_sweep_where_every_catalog_fails_keeps_the_last_sweep_time(db_session)
     assert observed.last_sweep_at(db_session) == before
 
 
+def test_a_read_missing_too_much_of_a_catalog_isnt_saved(db_session, monkeypatch):
+    monkeypatch.setattr(observed, "_MISSING_FLOOR", 2)
+    monkeypatch.setattr(settings, "METADATA_MAX_MISSING_PERCENT", 10)
+    uc = _metastore()
+    observed.sweep(db_session, provider=uc)
+    del uc.catalogs["sales"].schemas["bronze"]
+
+    result = observed.sweep(db_session, provider=uc)
+
+    assert "Max share missing per check" in result.failed_catalogs["sales"]
+    assert _rows(db_session)["sales.bronze.orders"].present is True
+    assert observed.unread_catalogs(db_session) == ["sales"]
+    assert "far fewer objects" in observed.unread_reasons(db_session)["sales"]
+    assert set(observed.confirmed_reads(db_session)) == {"hr"}
+
+    monkeypatch.setattr(settings, "METADATA_MAX_MISSING_PERCENT", 100)
+    result = observed.sweep(db_session, provider=uc)
+    assert result.failed_catalogs == {} and _rows(db_session)["sales.bronze.orders"].present is False
+
+
+def test_a_check_killed_mid_read_marks_the_catalog_unread(db_session, monkeypatch):
+    uc = _metastore()
+    observed.sweep(db_session, provider=uc)
+    observed._note_attempts(db_session, ["sales"], observed._utcnow())
+    db_session.commit()
+
+    assert observed.unread_catalogs(db_session) == []
+    assert observed._interrupted(db_session, now=observed._utcnow() + timedelta(minutes=21)) == ["sales"]
+
+    monkeypatch.setattr(observed, "_INTERRUPTED_AFTER", timedelta(0))
+    assert observed.unread_catalogs(db_session) == ["sales"]
+    assert "stopped while reading" in observed.unread_reasons(db_session)["sales"]
+    observed.sweep(db_session, provider=uc, catalogs=["sales"])
+    assert observed.unread_catalogs(db_session) == []
+
+
+def test_a_matched_catalog_that_disappears_is_reported_not_dropped(db_session, monkeypatch):
+    monkeypatch.setattr(settings, "METADATA_RECONCILE_CATALOGS", ["sales", "h*"])
+    uc = _metastore()
+    observed.sweep(db_session, provider=uc)
+    del uc.catalogs["hr"]
+
+    result = observed.sweep(db_session, provider=uc)
+
+    assert result.catalogs == ["sales"] and "no longer listed" in result.failed_catalogs["hr"]
+    assert observed.unread_catalogs(db_session) == ["hr"]
+    assert "no longer shows up" in observed.unread_reasons(db_session)["hr"]
+    assert _rows(db_session)["hr.people.staff"].present is True
+
+
 # --- refresh -------------------------------------------------------------------------
+
+
+def test_refresh_leaves_out_a_catalog_whose_own_row_stopped_coming_back(db_session):
+    uc = _metastore()
+    observed.sweep(db_session, provider=uc)
+    uc.catalogs["hr"].hidden = True
+    uc.catalogs["hr"].schemas.clear()
+
+    states = observed.refresh(db_session, [ObjectKey.parse("hr.people.staff"), ObjectKey.parse("sales.bronze.mv")],
+                              provider=uc)
+
+    assert "hr.people.staff" not in states and "hr" not in states
+    assert states["sales.bronze.mv"].present is True and states["sales"].present is True
+    assert _rows(db_session)["hr.people.staff"].present is True
+
+
+def test_refresh_leaves_out_objects_in_a_schema_that_stopped_coming_back(db_session):
+    uc = _metastore()
+    observed.sweep(db_session, provider=uc)
+    del uc.catalogs["sales"].schemas["bronze"]
+
+    states = observed.refresh(db_session, [
+        ObjectKey.parse("sales.bronze.orders"), ObjectKey.parse("sales.bronze"), ObjectKey.parse("sales.silver.new"),
+    ], provider=uc)
+
+    assert "sales.bronze.orders" not in states and "sales.bronze" not in states
+    assert states["sales.silver.new"].present is False
+    rows = _rows(db_session)
+    assert rows["sales.bronze.orders"].present is True and rows["sales.bronze"].present is True
 
 
 def test_refresh_rereads_targets_and_their_columns(db_session):

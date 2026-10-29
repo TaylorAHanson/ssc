@@ -537,10 +537,12 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
     {"group": "Metadata Manager", "section": "Reconciler", "key": "METADATA_ENFORCE_SCHEMAS",
      "label": "Enforce only in these schemas", "type": "string_list", "add_label": "Add schema",
      "requires": ["features.metadata_v2"],
-     "help": "Limits what enforce writes to these schemas of the catalogs above, as catalog.schema names or "
-             "patterns, such as sales_dev.bronze or sales_dev.*_raw. Everything else in those catalogs is still "
-             "checked and can still be edited here, but is only reported, as if syncing were set to plan; a "
-             "catalog's own tags are outside every schema. Blank = every schema of the catalogs above."},
+     "item_check": "catalog_schema",
+     "help": "What enforce writes to: catalog.schema names or patterns from the catalogs above, such as "
+             "sales_dev.bronze or sales_dev.*_raw, or * for every schema and the catalogs' own tags. Everything "
+             "else in those catalogs is still checked and can still be edited here, but is only reported, as if "
+             "syncing were set to plan; a catalog's own tags are outside every named schema. Blank = enforce "
+             "writes nothing."},
     {"group": "Metadata Manager", "section": "Reconciler", "key": "METADATA_NEW_OBJECT_POLL_SECONDS",
      "label": "New-table check interval (seconds)", "type": "int", "min": 0,
      "requires": ["features.metadata_v2"],
@@ -553,18 +555,27 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "help": "Adopt (default) = a new table's create-time tags and description become its desired state, so tags "
              "a pipeline sets in CREATE ... TAGS are kept. Ignore = the table stays unmanaged until someone edits "
              "it here. Only applies in the catalogs listed under Catalogs to reconcile."},
+    {"group": "Metadata Manager", "section": "Reconciler", "key": "METADATA_NEW_OBJECT_QUIET_MINUTES",
+     "label": "Wait after a new table changes (minutes)", "type": "int", "min": 0, "max": 1440,
+     "requires": ["features.metadata_v2"],
+     "help": "A new table, or one dropped and recreated, is left alone until it has gone this long without "
+             "changing, then adopted or synced. Pipelines often create a table and tag it a moment later; "
+             "taking it over in between would treat those tags as drift and remove them. When a table that "
+             "already has desired state is created or recreated, tags it was created with that its desired "
+             "state doesn't set are kept. 0 = no wait. Default 10."},
     {"group": "Metadata Manager", "section": "Reconciler", "key": "METADATA_EXEMPT_KEYS",
      "label": "Exempt tag keys", "type": "string_list", "add_label": "Add key",
      "requires": ["features.metadata_v2"],
      "help": "Keys the reconciler never sets or removes and that edits can't change. Keep "
              "system.certification_status here: OmniGuard owns it."},
     {"group": "Metadata Manager", "section": "Reconciler", "key": "METADATA_MAX_REMOVALS_PER_RUN",
-     "label": "Max removals per run", "type": "int", "min": 0,
+     "label": "Max removals per hour", "type": "int", "min": 0,
      "requires": ["features.metadata_v2"],
-     "help": "A run that would remove more tags, or clear more descriptions, than this applies nothing, is marked "
-             "paused on the Runs tab, and alerts governance. Guards against an import or adopt gone wrong "
-             "stripping tags in bulk. 0 = every removal waits for review, so the reconciler only adds unless you "
-             "resume the run."},
+     "help": "How many tags or descriptions syncing may remove or blank out in an hour, counted across every "
+             "run. A run that would go over applies nothing, is marked paused under Sync history, and alerts "
+             "governance. Guards against an import or adopt gone wrong stripping tags in bulk. Removals an admin "
+             "approved by resuming a paused run don't count, and clearing a pause starts the count again. 0 = every "
+             "removal waits for review, so syncing only adds unless an admin resumes the run. Default 50."},
     {"group": "Metadata Manager", "section": "Reconciler", "key": "METADATA_APPLY_CONCURRENCY",
      "label": "Statements in parallel", "type": "int", "min": 1, "max": 32,
      "requires": ["features.metadata_v2"],
@@ -573,8 +584,39 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
     {"group": "Metadata Manager", "section": "Reconciler", "key": "METADATA_ORPHAN_RETENTION_DAYS",
      "label": "Keep dropped objects (days)", "type": "int", "min": 1,
      "requires": ["features.metadata_v2"],
-     "help": "Desired state for a dropped table is kept this long, and re-applied if the table is recreated. "
-             "After that it is removed (still visible in History)."},
+     "help": "Desired state for a dropped table is kept this long, and re-applied if the table is recreated "
+             "(tags the new table was created with that it doesn't set are kept too). After that it is removed "
+             "(still visible in History), but only once a later full check of its catalog has read it "
+             "successfully and still not found the table, and only while syncing is set to enforce."},
+    {"group": "Metadata Manager", "section": "Reconciler", "key": "METADATA_RUN_HISTORY_DAYS",
+     "label": "Keep sync history (days)", "type": "int", "min": 0,
+     "requires": ["features.metadata_v2"],
+     "help": "Sync history runs, and the statements each listed, are deleted after this many days, a little "
+             "at a time after each full check. Report-only checks list the same statements every hour, so "
+             "history otherwise grows without end. Paused runs and the newest run of each kind are always "
+             "kept; tag and description changes stay in History regardless. 0 = keep everything. Default 30."},
+    {"group": "Metadata Manager", "section": "Reconciler", "key": "METADATA_MAX_MISSING_PERCENT",
+     "label": "Max share missing per check (%)", "type": "int", "min": 0, "max": 100,
+     "requires": ["features.metadata_v2"],
+     "help": "A full check that would mark more than this percent of a catalog's objects as dropped (and more "
+             "than 500 of them) isn't trusted: nothing from it is saved and the catalog shows as Couldn't read. "
+             "Losing access to part of a catalog looks exactly like a mass drop. If a large drop is real, raise "
+             "this, run Check now, then set it back. 100 = never refuse. Default 5."},
+    {"group": "Metadata Manager", "section": "Reconciler", "key": "METADATA_MAX_ROWS_PER_READ",
+     "label": "Largest catalog read (rows)", "type": "int", "min": 0,
+     "requires": ["features.metadata_v2"],
+     "help": "A full check holds each catalog's tables, columns and tags in memory while it saves them. A "
+             "catalog with more rows than this in any one of those reads is skipped and shows as Couldn't "
+             "read, instead of running the app out of memory and stopping every check. Raise it only if the "
+             "app has memory to spare. 0 = no limit. Default 2,000,000."},
+    {"group": "Metadata Manager", "section": "Reconciler", "key": "METADATA_ADOPT_MAX_READ_AGE_MINUTES",
+     "label": "Freshest copy to start managing from (minutes)", "type": "int", "min": 0,
+     "requires": ["features.metadata_v2"],
+     "help": "Starting to manage an object copies the tags and description Unity Catalog had at the last check, "
+             "and syncing then removes anything the copy is missing. Start managing, and an import that starts "
+             "managing objects, are refused unless the catalog was last read in full within this many minutes; "
+             "the message says to run Check now under Sync history. A first edit of up to 200 tables re-reads "
+             "them from Unity Catalog itself, and is refused if that read fails. 0 = no check."},
     {"group": "Metadata Manager", "section": "Permissions", "key": "METADATA_OWNER_TAG_KEY",
      "label": "Owner tag key", "type": "string", "requires": ["features.metadata_v2"],
      "help": "Members of the group named by this tag may edit the object's tags and description. When the object "
@@ -1511,6 +1553,12 @@ def _coerce_string_list(field: Dict[str, Any], value: Any) -> List[str]:
         s = _s(item)
         if s and s not in out:
             out.append(s)
+    if field.get("item_check") == "catalog_schema":
+        from app.services.metadata.scope import schema_pattern_problem
+
+        problems = [p for p in (schema_pattern_problem(s) for s in out) if p]
+        if problems:
+            raise ValueError(f"{label}: {problems[0]}")
     return out
 
 
@@ -1910,6 +1958,37 @@ def load_overrides(db: Session) -> int:
     if applied:
         logger.info("Applied %d settings override(s) from the database.", applied)
     return applied
+
+
+def refresh_overrides(db: Session, prefix: str) -> List[str]:
+    """Re-apply persisted overrides whose key starts with ``prefix`` where they differ from the live value.
+
+    A save in Admin -> Settings only reaches the process that handled it, so a worker
+    on another replica calls this to pick it up. Never raises; returns the keys changed.
+    """
+    from app.db.app_setting import AppSettingModel
+
+    try:
+        rows = db.query(AppSettingModel).filter(AppSettingModel.key.startswith(prefix, autoescape=True)).all()
+    except Exception as e:  # noqa: BLE001
+        db.rollback()
+        logger.warning("Settings override refresh skipped: %s", e)
+        return []
+    changed: List[str] = []
+    for row in rows:
+        if row.key in RETIRED_KEYS:
+            continue
+        try:
+            value = _coerce(_validate_key(row.key), row.value)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Skipping invalid settings override %s: %s", row.key, e)
+            continue
+        if _current_value(row.key) != value:
+            _apply(row.key, value)
+            changed.append(row.key)
+    if changed:
+        logger.info("Picked up settings saved on another replica: %s", ", ".join(sorted(changed)))
+    return changed
 
 
 def set_many(db: Session, changes: Dict[str, Any], updated_by: Optional[str] = None) -> Dict[str, Any]:

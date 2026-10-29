@@ -200,6 +200,11 @@ async def lifespan(app: FastAPI):
     yield
 
     logger.info("Application shutting down...")
+    try:
+        from app.services.metadata import reconciler as _reconciler
+        await asyncio.to_thread(_reconciler.request_shutdown)
+    except Exception as e:
+        logger.warning(f"Error stopping the metadata reconciler: {e}")
     if mcp_session_cm is not None:
         try:
             await mcp_session_cm.__aexit__(None, None, None)
@@ -309,9 +314,12 @@ except Exception as e:
 @app.get("/health")
 async def health():
     """Detailed health check endpoint."""
-    from app.db.session import get_database_url
+    from app.db.session import LakebaseUnavailable, get_database_url
     from app.core.config import settings
-    url = get_database_url()
+    try:
+        url = get_database_url()
+    except LakebaseUnavailable as e:
+        return {"status": "degraded", "service": "api", "database_type": "Lakebase (PostgreSQL)", "database_error": str(e)}
     db_type = "SQLite" if "sqlite" in url else "Lakebase (PostgreSQL)"
     
     # Mask URL for safe display

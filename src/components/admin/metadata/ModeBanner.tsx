@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { Notice } from '../../rbac/ui';
 import { useMetadata } from './context';
-import { formatTime, relativeTime } from './format';
+import { formatTime, limitedSchemas, relativeTime } from './format';
 
 /** Whether saved changes reach Unity Catalog right now, in plain language. */
 export function SyncStatus() {
@@ -17,7 +17,7 @@ export function SyncStatus() {
       Catalogs kept in sync: {config.managed_catalogs.includes('*') ? 'all of them' : config.managed_catalogs.join(', ')}.
     </span>
   ) : null;
-  const schemas = config.enforce_schemas ?? [];
+  const schemas = limitedSchemas(config);
   const limited = schemas.length ? (
     <span className="mt-1 block">
       {config.reconcile_mode === 'enforce' ? 'Written to Unity Catalog only in' : 'Once syncing is on, it writes only to'} {schemas.join(', ')}. Everything else is only
@@ -70,8 +70,8 @@ export function CircuitBreakerBanner({ action }: { action?: ReactNode }) {
   return (
     <Notice kind="error" title="Syncing paused itself">
       <p>
-        A sync would have removed more tags or descriptions than the safety limit allows, so it stopped before writing anything. Changes are still saved here, but nothing
-        reaches Unity Catalog until an admin reviews the removals and resumes.
+        A sync would have taken the tags or descriptions removed in the last hour over the safety limit, so it stopped before writing anything. Changes are
+        still saved here, but nothing reaches Unity Catalog until a Platform Admin reviews the removals and either applies them or clears the pause.
       </p>
       {action && <div className="mt-2">{action}</div>}
     </Notice>

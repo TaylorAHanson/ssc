@@ -189,6 +189,7 @@ class DesiredState(BaseModel):
     last_apply_status: Optional[ApplyStatus] = None
     last_apply_error: Optional[str] = None
     last_observed_at: Optional[datetime] = None
+    observed_created: Optional[datetime] = None
     drift_detected_at: Optional[datetime] = None
     desired_hash: Optional[str] = None
 
@@ -290,6 +291,9 @@ class ChangeOp(BaseModel):
     * ``replace_tags`` makes ``tags`` the full set (exempt keys are untouched);
     * ``set_comment`` sets ``comment``; ``clear_comment`` removes it.
 
+    An object UC already has but that isn't managed yet starts from its UC tags and
+    description, so ``set_tags`` keeps the others and a removal is a real removal.
+
     ``expected_versions`` maps a tag key to the version the caller last saw (0 = the
     tag must not exist yet); ``expected_comment_version`` does the same for the
     description. A mismatch fails the whole change with 409.
@@ -335,7 +339,8 @@ class ChangeRequest(BaseModel):
     # Also apply each op to the same object in these environments (D5).
     environments: List[str] = Field(default_factory=list)
     # request = the whole change goes to approval if any item needs it; split = commit the
-    # direct items and file the rest; reject = refuse with the reasons.
+    # direct items and file the rest (an unmanaged object UC has is filed whole when any of its
+    # items needs approval); reject = refuse with the reasons.
     on_approval_needed: ApprovalRouting = "request"
     idempotency_key: Optional[str] = None
 
@@ -382,13 +387,25 @@ class ChangeItem(BaseModel):
     # Whether the object already has a desired row; False = this change creates it.
     object_exists: bool = True
     object_state: ObjectState = "exists"
-    # The change creates the row of an object Unity Catalog already has, and UC already holds this value:
-    # it's recorded so the first desired state is complete, and nothing in UC changes.
+    # Nothing in UC changes. With object_exists False, the change creates the row of an object UC already has
+    # and UC already holds this value: it's recorded so the first desired state is complete. With
+    # object_exists True, an undo of the change that started managing the object drops the row, and UC
+    # keeps this value.
     unchanged_in_uc: bool = False
     # The environment this item was copied from, for a cross-environment copy or promote.
     copied_from: Optional[str] = None
     # The caller can't browse this object, so ``before`` and its version were left out of what it got back.
     before_hidden: bool = False
+
+    @property
+    def kept(self) -> bool:
+        """A value UC already has, carried into the object's first desired row."""
+        return self.unchanged_in_uc and not self.object_exists
+
+    @property
+    def stops_managing(self) -> bool:
+        """Part of an undo that drops the object's row: it's no longer managed, and UC keeps this value."""
+        return self.unchanged_in_uc and self.object_exists
 
 
 class Finding(BaseModel):
@@ -432,7 +449,7 @@ class ChangePreview(BaseModel):
     denied_count: int = 0
     # Ops that resolved to no change (already true).
     noop_count: int = 0
-    # Of direct_count: items that are ``unchanged_in_uc``.
+    # Of direct_count: values UC already has, carried into a first desired row (``ChangeItem.kept``).
     kept_count: int = 0
     needs_approval: bool = False
     approver_groups: List[str] = Field(default_factory=list)
@@ -547,6 +564,13 @@ class PlanItem(BaseModel):
     sql: str
     # Removed tags and cleared descriptions count toward the circuit breaker.
     removals: int = 0
+    # For apply only, so a refused statement can be split or undone; not part of any response.
+    # The type ``sql`` was built for (a column's relation type for a column).
+    statement_type: Optional[str] = Field(default=None, exclude=True)
+    # Keys of ``tags`` whose value this set blanks out; each is one of ``removals``.
+    blanks: List[str] = Field(default_factory=list, exclude=True)
+    # A view-column value change is an unset then a set; if the set is refused, this old tag is put back.
+    restore: Optional[Dict[str, Optional[str]]] = Field(default=None, exclude=True)
 
 
 class PlanOutcome(PlanItem):
@@ -604,8 +628,14 @@ class RunRequest(BaseModel):
     # sweep = refresh the whole snapshot and reconcile everything; plan = sweep without writing.
     kind: Literal["sweep", "plan", "queue"] = "sweep"
     catalogs: List[str] = Field(default_factory=list)
-    # Resume a run paused by the circuit breaker, applying its removals anyway.
+    # Refused: a paused run is resumed with POST /runs/paused/resume, which is bounded by what was reviewed.
     override_circuit_breaker: bool = False
+
+
+class PausedRunAction(BaseModel):
+    """Resume or clear the pause, naming the paused run that was reviewed."""
+
+    run_id: str = Field(min_length=1)
 
 
 # --- Search and detail ---------------------------------------------------------------
@@ -782,11 +812,14 @@ class MetadataConfig(BaseModel):
     # Same catalogs with a short reason the page can show (warehouse timeout, no BROWSE, ...).
     unread_reasons: Dict[str, str] = Field(default_factory=dict)
     circuit_breaker_tripped: bool = False
+    # The paused run to review while tripped, and whether this caller may resume or clear it.
+    circuit_breaker_run_id: Optional[str] = None
+    can_resume_sync: bool = False
     # Catalog names or patterns this deployment manages; empty = every catalog, but plan only.
     managed_catalogs: List[str] = Field(default_factory=list)
-    # catalog.schema names or patterns enforce is limited to; empty = every schema of managed_catalogs.
+    # catalog.schema names or patterns enforce writes to; * = everything, empty = nothing.
     enforce_schemas: List[str] = Field(default_factory=list)
-    # Set when enforce is configured but can't run (no catalog list), so the UI can say why.
+    # Set when enforce is configured but can't run (no catalog or schema list), so the UI can say why.
     enforce_blocked_reason: Optional[str] = None
 
 

@@ -241,7 +241,12 @@ def previewed(monkeypatch):
         return seen.get("result") or ChangePreview(items=[_decision(_item(), sensitive=["Removes the PII flag."])],
                                                    approval_count=1, digest="d-1", report_markdown="**report**")
 
+    def preview_revert(db, change_set_id, request, actor):
+        seen.update(reverts=change_set_id, actor=actor)
+        return preview(db, None, actor)
+
     monkeypatch.setattr(changes, "preview", preview)
+    monkeypatch.setattr(changes, "preview_revert", preview_revert)
     monkeypatch.setattr(authz, "owner_groups", lambda db, key, **kw: (["crm-owners"], "sales_dev.crm.customers"))
     return seen
 
@@ -270,6 +275,7 @@ def test_prepare_carries_a_reverts_change_set_id_from_the_filing_record(db, prev
 
     rq.prepare(db, request_id)
 
+    assert previewed["reverts"] == "cs-1"
     prepared = db.get(RequestModel, request_id).state_context[rq.PREPARED_CONTEXT_KEY]
     assert prepared["reverts_change_set_id"] == "cs-1"
     assert "reverts_change_set_id" not in db.get(RequestModel, request_id).state_context

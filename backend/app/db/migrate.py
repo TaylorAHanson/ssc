@@ -337,6 +337,7 @@ def run_startup_migrations(engine: Engine) -> None:
         _add_column(engine, "metadata_reconcile_items", "securable_type", "VARCHAR")
         _add_column(engine, "metadata_reconcile_items", "removals", "INTEGER DEFAULT 0")
         _add_column(engine, "metadata_reconcile_items", "payload", "JSON")
+        _add_column(engine, "metadata_objects", "observed_created", "TIMESTAMP")
         _add_index(engine, "ix_metadata_objects_securable_type", "metadata_objects", ["securable_type"])
         _add_index(engine, "ix_metadata_observed_securable_type", "metadata_observed", ["securable_type"])
         # Training courses that follow a Databricks Academy catalog course.

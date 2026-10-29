@@ -105,11 +105,13 @@ function expected(t: StagedTarget, keys: string[]): Record<string, number> | und
   const out: Record<string, number> = {};
   keys.forEach((k) => {
     if (t.baseVersions && k in t.baseVersions) out[k] = t.baseVersions[k];
-    else if (!(k in t.baseTags)) out[k] = 0;
+    // Not managed yet: nothing is desired, so any version means someone started managing it meanwhile.
+    else if (!t.managed || !(k in t.baseTags)) out[k] = 0;
   });
   return Object.keys(out).length ? out : undefined;
 }
 
+/** Only the edits: for an object not managed yet, the server keeps the tags and description it has in Unity Catalog. */
 export function opsFor(t: StagedTarget): ChangeOp[] {
   const base: Pick<ChangeOp, 'name' | 'column' | 'securable_type'> = {
     name: t.name,
@@ -117,15 +119,6 @@ export function opsFor(t: StagedTarget): ChangeOp[] {
     securable_type: t.declared || !t.managed ? t.securableType : null,
   };
   const ops: ChangeOp[] = [];
-  if (!t.managed) {
-    // The first desired row is enforced in full, so it must carry the tags the object already has.
-    const tags = effectiveTags(t);
-    const comment = effectiveComment(t);
-    const zeros = Object.fromEntries(Object.keys(tags).map((k) => [k, 0]));
-    if (Object.keys(tags).length) ops.push({ ...base, op: 'set_tags', tags, expected_versions: zeros });
-    if (comment !== null) ops.push({ ...base, op: 'set_comment', comment, expected_comment_version: 0 });
-    return ops;
-  }
   const setKeys = Object.keys(t.set);
   if (setKeys.length) ops.push({ ...base, op: 'set_tags', tags: { ...t.set }, expected_versions: expected(t, setKeys) });
   if (t.unset.length) ops.push({ ...base, op: 'unset_tags', keys: [...t.unset], expected_versions: expected(t, t.unset) });

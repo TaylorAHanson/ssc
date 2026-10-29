@@ -54,6 +54,10 @@ def _observed_tags(observed: Optional[ObservedState]) -> Dict[str, Optional[str]
     return normalize_tags(observed.tags)
 
 
+def _blank(value: Optional[str]) -> bool:
+    return value is None or not str(value).strip()
+
+
 def _observed_comment(observed: Optional[ObservedState]) -> Optional[str]:
     if observed is None or not observed.present:
         return None
@@ -184,11 +188,12 @@ def plan(
 ) -> List[PlanItem]:
     """Statements that bring UC to the desired state, typed from the observed table type.
 
-    One item per statement: an unset (``removals`` = keys removed), a set and a comment
-    (``removals=1`` when it clears a description) for most objects. A view column takes one statement per tag, and a changed value
-    there is an unset (``removals=0``, it isn't a removal) followed by a set, since
-    ``SET TAG`` can't overwrite. ``parent`` is the relation's observed row, used to
-    type a column's statements. Sorted with ``plan_sort_key``.
+    One item per statement: an unset (``removals`` = keys removed), a set (``removals`` = values
+    it blanks) and a comment (``removals=1`` when it clears or blanks a description) for most
+    objects. A view column takes one statement per tag, and a changed value there is an unset
+    (``removals=0``, it isn't a removal) followed by a set, since ``SET TAG`` can't overwrite.
+    ``parent`` is the relation's observed row, used to type a column's statements. Sorted with
+    ``plan_sort_key``.
     """
     key = _object_key(object_diff, observed)
     column = key.column_name
@@ -199,6 +204,7 @@ def plan(
         "name": key.name,
         "column": column,
         "securable_type": "column" if column else stype,
+        "statement_type": stype,
     }
     to_set = dict(sorted(object_diff.to_set.items()))
     to_unset = sorted(object_diff.to_unset)
@@ -207,15 +213,19 @@ def plan(
     def tag_sql(operation: str, **kwargs) -> List[str]:
         return build_tag_statement(stype, key.name, operation, column=column, **kwargs)
 
+    have = _observed_tags(observed)
+    blanks = {k for k, v in to_set.items() if _blank(v) and not _blank(have.get(k))}
     if column is not None and stype in VIEW_TYPES:
-        have = _observed_tags(observed)
         for k in to_unset:
             items.append(PlanItem(**base, operation="unset", keys=[k], sql=tag_sql("unset", keys=[k])[0], removals=1))
         for k in to_set:
             if k in have:
                 items.append(PlanItem(**base, operation="unset", keys=[k], sql=tag_sql("unset", keys=[k])[0]))
         for k, v in to_set.items():
-            items.append(PlanItem(**base, operation="set", tags={k: v}, sql=tag_sql("set", tags={k: v})[0]))
+            items.append(PlanItem(
+                **base, operation="set", tags={k: v}, sql=tag_sql("set", tags={k: v})[0], removals=int(k in blanks),
+                blanks=[k] if k in blanks else [], restore={k: have[k]} if k in have else None,
+            ))
     else:
         if to_unset:
             items.append(PlanItem(
@@ -223,9 +233,12 @@ def plan(
                 removals=len(to_unset),
             ))
         if to_set:
-            items.append(PlanItem(**base, operation="set", tags=to_set, sql=tag_sql("set", tags=to_set)[0]))
+            items.append(PlanItem(
+                **base, operation="set", tags=to_set, sql=tag_sql("set", tags=to_set)[0], removals=len(blanks),
+                blanks=sorted(blanks),
+            ))
     if object_diff.comment_changed:
-        cleared = object_diff.comment_after is None and object_diff.comment_before is not None
+        cleared = _blank(object_diff.comment_after) and not _blank(object_diff.comment_before)
         items.append(PlanItem(
             **base, operation="comment", comment=object_diff.comment_after,
             sql=build_comment_statement(stype, key.name, object_diff.comment_after, column=column),

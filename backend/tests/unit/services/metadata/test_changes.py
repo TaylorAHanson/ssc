@@ -3,6 +3,8 @@
 Other workstreams' modules are replaced with small fakes (``Fakes``) so these tests
 only exercise the change service and the store underneath it.
 """
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -19,7 +21,17 @@ from app.db.metadata import (
     MetadataSyncStateModel,
     MetadataTagModel,
 )
-from app.services.metadata import authz, changes, environments, errors, observed, policy, requests, store
+from app.services.metadata import (
+    authz,
+    changes,
+    environments,
+    errors,
+    observed,
+    policy,
+    reconciler,
+    requests,
+    store,
+)
 from app.services.metadata.types import (
     Actor,
     AdoptRequest,
@@ -84,7 +96,11 @@ class Fakes:
         self.denied = set()      # keys the actor can't even request
         self.flagged = {}        # key -> a Finding decide attaches
         self.decided = []
+        self.seeded = set()
         self.filed = []
+        self.refreshed = []
+        self.refresh_fails = False
+        self.unreadable = set()  # fqn_keys refresh can't read
 
     def observe(self, name, column=None, *, tags=None, comment=None, securable_type=None, present=True):
         key = ObjectKey.parse(name, column)
@@ -107,8 +123,18 @@ class Fakes:
         return [o for k, o in sorted(self.observed.items())
                 if k.startswith(relation_fqn_key + "::") and (o.present or include_missing)]
 
-    def decide(self, db, actor, items, *, observed=None):
+    def refresh(self, db, keys, *, provider=None):
+        keys = list(keys)
+        self.refreshed.append(sorted(k.fqn_key for k in keys))
+        if self.refresh_fails:
+            raise RuntimeError("warehouse unavailable")
+        return {k.fqn_key: self.observed.get(k.fqn_key) or ObservedState(
+            fqn_key=k.fqn_key, key=k, securable_type=LEVEL_TYPES[k.level], present=False)
+            for k in keys if k.fqn_key not in self.unreadable}
+
+    def decide(self, db, actor, items, *, observed=None, seeded=()):
         self.decided.append(list(items))
+        self.seeded = set(seeded)
         out = []
         for item in items:
             key = item.key if item.field == "tag" else "description"
@@ -150,9 +176,11 @@ def fakes(db, monkeypatch):
     monkeypatch.setattr(authz, "system_actor", lambda: SYSTEM)
     monkeypatch.setattr(observed, "get_observed", f.get_observed)
     monkeypatch.setattr(observed, "get_columns", f.get_columns)
+    monkeypatch.setattr(observed, "refresh", f.refresh)
     monkeypatch.setattr(requests, "file_change_request", f.file)
     monkeypatch.setattr(settings, "METADATA_MAX_OBJECTS_PER_CHANGE", 500)
     monkeypatch.setattr(settings, "METADATA_MIN_REASON_LENGTH", 0)
+    monkeypatch.setattr(settings, "METADATA_ADOPT_MAX_READ_AGE_MINUTES", 0)
     return f
 
 
@@ -371,18 +399,94 @@ def test_type_and_state_of_objects_without_a_row(db, fakes):
     }
 
 
-def test_editing_an_unmanaged_object_warns_about_uc_tags_it_drops(db, fakes):
-    fakes.observe(DEV, tags={"legacy": "x", "system.certification_status": "c"}, comment="From UC")
-    pv = preview(db, op("set_tags", tags={"tier": "gold"}))
-    warnings = [f for f in pv.findings if f.code == "unmanaged_object"]
-    assert len(warnings) == 1 and warnings[0].severity == "warn"
-    assert "legacy" in warnings[0].message and "description" in warnings[0].message
-    assert "certification" not in warnings[0].message
-    assert not pv.blocked
+# --- First edits of objects UC has -------------------------------------------------
 
-    keeps_everything = preview(db, op("set_tags", tags={"legacy": "x", "tier": "gold"}),
-                               op("set_comment", comment="From UC"))
-    assert not [f for f in keeps_everything.findings if f.code == "unmanaged_object"]
+
+def test_a_first_edit_keeps_the_tags_and_description_uc_has(db, fakes):
+    fakes.observe(DEV, tags={"legacy": "x", "system.certification_status": "c"}, comment="From UC")
+
+    pv = preview(db, op("set_tags", tags={"tier": "gold"}))
+
+    assert {(d.item.field, d.item.key): (d.item.action, d.item.unchanged_in_uc) for d in pv.items} == {
+        ("tag", "legacy"): ("set", True), ("tag", "tier"): ("set", False), ("comment", None): ("comment_set", True)}
+    assert fakes.seeded == {(DEV_KEY, "tag", "legacy"), (DEV_KEY, "comment", None)}
+    assert (pv.direct_count, pv.kept_count, pv.findings) == (3, 2, [])
+
+    result = submit(db, op("set_tags", tags={"tier": "gold"}))
+
+    d = desired(db)
+    assert (d.tags, d.comment.value) == ({"legacy": "x", "tier": "gold"}, "From UC")
+    assert result.change_set.summary["tags_set"] == 2
+
+
+def test_the_full_set_the_ui_used_to_send_still_works(db, fakes):
+    fakes.observe(DEV, tags={"legacy": "x"}, comment="From UC")
+
+    submit(db, op("set_tags", tags={"legacy": "x", "tier": "gold"}, expected_versions={"legacy": 0, "tier": 0}),
+           op("set_comment", comment="From UC", expected_comment_version=0))
+
+    assert fakes.seeded == set()
+    assert (desired(db).tags, desired(db).comment.value) == ({"legacy": "x", "tier": "gold"}, "From UC")
+
+
+def test_restating_what_uc_has_doesnt_start_managing_the_object(db, fakes):
+    fakes.observe(DEV, tags={"legacy": "x"}, comment="From UC")
+
+    result = submit(db, op("set_tags", tags={"legacy": "x"}), op("set_comment", comment="From UC"))
+
+    assert result.status == "noop" and desired(db) is None
+
+
+def test_removing_a_tag_only_uc_has_is_a_real_removal(db, fakes):
+    fakes.observe(DEV, tags={"legacy": "x", "keep": "y"})
+
+    pv = preview(db, op("unset_tags", keys=["legacy"]))
+    assert [(d.item.key, d.item.action, d.item.before, d.item.before_exists) for d in pv.items] == [
+        ("keep", "set", "y", True), ("legacy", "unset", "x", True)]
+
+    result = submit(db, op("unset_tags", keys=["legacy"]))
+
+    assert desired(db).tags == {"keep": "y"}
+    removed = next(e for e in result.change_set.events if e.action == "tag_unset")
+    assert (removed.key, removed.before) == ("legacy", {"value": "x", "version": 0})
+
+
+def test_replace_on_an_unmanaged_object_removes_its_uc_tags_and_a_sensitive_one_needs_approval(db, fakes):
+    fakes.sensitive = {"pii"}
+    fakes.observe(DEV, tags={"legacy": "x", "pii": "email", "system.certification_status": "c"})
+
+    pv = preview(db, op("replace_tags", tags={"tier": "gold"}))
+
+    assert {d.item.key: (d.item.action, d.item.before, d.item.before_exists) for d in pv.items} == {
+        "legacy": ("unset", "x", True), "pii": ("unset", "email", True), "tier": ("set", None, False)}
+    assert (pv.direct_count, pv.approval_count, pv.kept_count) == (2, 1, 0)
+
+    result = submit(db, op("replace_tags", tags={"tier": "gold"}), on_approval_needed="split")
+
+    assert result.status == "pending_approval" and desired(db) is None
+    assert sorted(i.key for i in fakes.filed[0]["items"]) == ["legacy", "pii", "tier"]
+
+
+def test_a_copy_repeats_only_the_edit_not_the_sources_uc_values(db, fakes):
+    fakes.observe(DEV, tags={"legacy": "x"}, comment="Dev description")
+    fakes.observe("Sales_Prd.Bronze.Orders", tags={"prd_only": "1", "legacy": "x"}, comment="Prd description")
+
+    submit(db, op("set_tags", tags={"tier": "gold"}), op("unset_tags", keys=["legacy"]), environments=["prd"])
+
+    assert desired(db).tags == {"tier": "gold"}
+    prd = desired(db, PRD_KEY)
+    assert (prd.tags, prd.comment.value) == ({"prd_only": "1", "tier": "gold"}, "Prd description")
+
+
+def test_a_copied_replace_removes_only_what_it_removed_on_the_source(db, fakes):
+    fakes.observe(DEV, tags={"legacy": "x", "old": "1"})
+    fakes.observe("Sales_Prd.Bronze.Orders", tags={"legacy": "x", "prd_only": "1"})
+
+    pv = preview(db, op("replace_tags", tags={"tier": "gold"}), environments=["prd"])
+
+    assert {d.item.key: (d.item.action, d.item.unchanged_in_uc) for d in pv.items if d.item.fqn_key == PRD_KEY} == {
+        "legacy": ("unset", False), "prd_only": ("set", True), "tier": ("set", False)}
+    assert (PRD_KEY, "tag", "prd_only") in fakes.seeded
 
 
 def test_values_an_unmanaged_object_already_has_are_flagged_unchanged_in_uc(db, fakes):
@@ -724,6 +828,7 @@ def test_revert_restores_previous_values_and_marks_the_change_set(db, fakes):
 
 
 def test_a_revert_needing_approval_is_filed_whole_even_when_split(db, fakes):
+    submit(db, op("set_comment", comment="Orders."))
     change = submit(db, op("set_tags", tags={"tier": "gold", "pii": "x"}))
     fakes.sensitive = {"pii"}
 
@@ -739,6 +844,55 @@ def test_a_revert_needing_approval_is_filed_whole_even_when_split(db, fakes):
         ("unset_tags", ["pii"], {"pii": 1}), ("unset_tags", ["tier"], {"tier": 1})]
     assert desired(db).tags == {"pii": "x", "tier": "gold"}
     assert store.get_change_set(db, change.change_set.id).reverted_by is None
+
+
+def test_undoing_start_managing_stops_managing_the_object(db, fakes):
+    fakes.observe(DEV, tags={"legacy": "x"}, comment="Orders.")
+    adopted = changes.adopt(db, AdoptRequest(names=[DEV]), ADMIN).change_set
+
+    pv = changes.preview_revert(db, adopted.id, RevertRequest(), JANE)
+    assert [f.code for f in pv.findings] == ["stops_managing"]
+    assert all(d.item.stops_managing for d in pv.items) and not pv.blocked
+
+    result = changes.revert(db, adopted.id, RevertRequest(), JANE, source="ui")
+
+    assert result.status == "committed" and result.change_set.summary["unmanaged"] == 1
+    assert desired(db) is None
+    row = db.query(MetadataObjectModel).filter_by(fqn_key=DEV_KEY).one()
+    assert row.status == "deleted"
+    dropped = next(e for e in result.change_set.events if e.action == "object_delete")
+    assert dropped.before["tags"] == {"legacy": "x"} and dropped.before["comment"] == "Orders."
+    with pytest.raises(errors.MetadataError, match="Start managing"):
+        changes.preview_revert(db, result.change_set.id, RevertRequest(), JANE)
+
+
+def test_undoing_a_first_edit_warns_about_changes_made_since(db, fakes):
+    fakes.observe(DEV, tags={"legacy": "x"})
+    first = submit(db, op("set_tags", tags={"tier": "gold"}))
+    submit(db, op("set_tags", tags={"owner": "team_a"}))
+
+    pv = changes.preview_revert(db, first.change_set.id, RevertRequest(), JANE)
+
+    assert [(f.code, f.key) for f in pv.findings] == [("stops_managing", None), ("changed_since", "owner")]
+    changes.revert(db, first.change_set.id, RevertRequest(), JANE, source="ui")
+    assert desired(db) is None
+
+
+def test_a_revert_goes_through_the_object_limit_and_managed_catalog_checks(db, fakes, monkeypatch):
+    change = submit(db, op("set_tags", tags={"tier": "gold"}),
+                    op("set_tags", name="sales_dev.bronze.events", tags={"tier": "gold"}))
+
+    monkeypatch.setattr(settings, "METADATA_MAX_OBJECTS_PER_CHANGE", 1)
+    pv = changes.preview_revert(db, change.change_set.id, RevertRequest(), JANE)
+    assert pv.blocked and "too_many_objects" in [f.code for f in pv.findings]
+
+    monkeypatch.setattr(settings, "METADATA_MAX_OBJECTS_PER_CHANGE", 500)
+    monkeypatch.setattr(settings, "METADATA_RECONCILE_CATALOGS", ["other_dev"])
+    pv = changes.preview_revert(db, change.change_set.id, RevertRequest(), JANE)
+    assert pv.blocked and "outside_managed_catalogs" in [f.code for f in pv.findings]
+    with pytest.raises(errors.ChangeBlocked):
+        changes.revert(db, change.change_set.id, RevertRequest(), JANE, source="ui")
+    assert desired(db).tags == {"tier": "gold"}
 
 
 # --- Adopt -----------------------------------------------------------------------
@@ -777,7 +931,7 @@ def test_adopting_a_catalog_makes_its_observed_state_desired(db, fakes):
         "system", "system", "adopt")
     assert desired(db, f"{DEV_KEY}::email").tags == {"pii": None}
     schema = desired(db, "sales_dev.bronze")
-    assert (schema.tags, schema.comment.value) == ({"owner": "team_a"}, None)
+    assert (schema.tags, schema.comment.value) == ({"owner": "team_a"}, "Bronze layer")
     assert desired(db, "sales_dev.bronze.dropped") is None and desired(db, "other_dev.s.t") is None
 
 
@@ -1020,6 +1174,7 @@ def test_record_prepared_refuses_drift_and_bad_payloads(db, fakes):
 
 
 def test_record_prepared_defaults_and_reverts(db, fakes):
+    submit(db, op("set_comment", comment="Orders."))
     change = submit(db, op("set_tags", tags={"tier": "gold"}))
     items = [i.model_dump(mode="json") for i in store.revert_items(db, change.change_set.id)]
 
@@ -1029,3 +1184,118 @@ def test_record_prepared_defaults_and_reverts(db, fakes):
     assert (cs.source, cs.reason, cs.reverts_change_set_id) == ("agent", "Approved", change.change_set.id)
     assert desired(db).tags == {}
     assert store.get_change_set(db, change.change_set.id).reverted_by == cs.id
+
+
+def test_record_prepared_of_an_approved_undo_of_a_first_edit_stops_managing(db, fakes):
+    change = submit(db, op("set_tags", tags={"tier": "gold"}))
+    items = [i.model_dump(mode="json") for i in store.revert_items(db, change.change_set.id)]
+
+    with pytest.raises(errors.MetadataError, match="isn't a revert"):
+        changes.record_prepared(db, request_id="req-8", requester=JANE, approver=None, prepared={"items": items})
+    cs = changes.record_prepared(db, request_id="req-9", requester=JANE, approver=None, prepared={
+        "items": items, "reverts_change_set_id": change.change_set.id})
+
+    assert desired(db) is None and cs.summary["unmanaged"] == 1
+
+
+# --- Starting from a recent read of UC ----------------------------------------------
+
+
+def _now():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+@pytest.fixture
+def fresh_reads(monkeypatch):
+    """Turns the freshness checks on; returns the catalog -> last whole read map they see."""
+    monkeypatch.setattr(settings, "METADATA_ADOPT_MAX_READ_AGE_MINUTES", 30)
+    monkeypatch.setattr(reconciler, "current_mode", lambda: "plan")
+    reads = {}
+    monkeypatch.setattr(observed, "_catalog_reads", lambda db: dict(reads))
+    return reads
+
+
+def test_a_first_edit_re_reads_the_object_before_starting_from_it(db, fakes, fresh_reads):
+    fakes.observe(DEV, tags={"legacy": "x"})
+
+    preview(db, op("set_tags", tags={"tier": "gold"}))
+    assert fakes.refreshed == []
+
+    submit(db, op("set_tags", tags={"tier": "gold"}))
+    assert fakes.refreshed == [[DEV_KEY]]
+    assert desired(db).tags == {"legacy": "x", "tier": "gold"}
+
+    submit(db, op("set_tags", tags={"tier": "silver"}))
+    assert len(fakes.refreshed) == 1
+
+
+@pytest.mark.parametrize("failure", ["raises", "unread"])
+def test_a_failed_re_read_refuses_the_first_edit(db, fakes, fresh_reads, failure):
+    fakes.observe(DEV, tags={"legacy": "x"})
+    if failure == "raises":
+        fakes.refresh_fails = True
+    else:
+        fakes.unreadable = {DEV_KEY}
+
+    with pytest.raises(errors.MetadataError, match="couldn't read Sales_Dev.Bronze.Orders from Unity Catalog"):
+        submit(db, op("set_tags", tags={"tier": "gold"}))
+
+    assert desired(db) is None and change_set_count(db) == 0 and fakes.filed == []
+
+
+def test_the_checks_are_off_at_zero_minutes_or_when_syncing_is_off(db, fakes, fresh_reads, monkeypatch):
+    fakes.observe(DEV, tags={"legacy": "x"})
+    fakes.refresh_fails = True
+    monkeypatch.setattr(reconciler, "current_mode", lambda: "off")
+    submit(db, op("set_tags", tags={"tier": "gold"}))
+
+    monkeypatch.setattr(reconciler, "current_mode", lambda: "plan")
+    monkeypatch.setattr(settings, "METADATA_ADOPT_MAX_READ_AGE_MINUTES", 0)
+    fakes.observe("Sales_Dev.Bronze.Events")
+    assert changes.adopt(db, AdoptRequest(names=["Sales_Dev.Bronze.Events"]), ADMIN).status == "committed"
+    assert fakes.refreshed == []
+
+
+def test_a_large_first_edit_needs_a_recent_whole_read_instead(db, fakes, fresh_reads, monkeypatch):
+    monkeypatch.setattr(changes, "FRESH_READ_LIMIT", 1)
+    fakes.observe(DEV, tags={"legacy": "x"})
+    fakes.observe("Sales_Dev.Bronze.Events", tags={"legacy": "y"})
+    both = (op("set_tags", tags={"tier": "gold"}), op("set_tags", name="Sales_Dev.Bronze.Events", tags={"tier": "gold"}))
+
+    fresh_reads["sales_dev"] = _now() - timedelta(hours=2)
+    with pytest.raises(errors.MetadataError, match="Run Check now under Sync history"):
+        submit(db, *both)
+    assert desired(db) is None
+
+    fresh_reads["sales_dev"] = _now()
+    submit(db, *both)
+    assert fakes.refreshed == [] and desired(db).tags == {"legacy": "x", "tier": "gold"}
+
+
+def test_start_managing_needs_a_recent_whole_read_of_the_catalog(db, fakes, fresh_reads):
+    fakes.observe(DEV, tags={"legacy": "x"})
+
+    with pytest.raises(errors.MetadataError, match="sales_dev is more than 30 minutes old"):
+        changes.adopt(db, AdoptRequest(names=[DEV]), ADMIN)
+    fresh_reads["sales_dev"] = _now() - timedelta(minutes=31)
+    with pytest.raises(errors.MetadataError, match="Check now"):
+        changes.adopt(db, AdoptRequest(catalogs=["Sales_Dev"]), ADMIN)
+    assert desired(db) is None
+
+    fresh_reads["sales_dev"] = _now() - timedelta(minutes=5)
+    assert changes.adopt(db, AdoptRequest(names=[DEV]), ADMIN).status == "committed"
+    fresh_reads["sales_dev"] = _now() - timedelta(hours=2)
+    assert changes.adopt(db, AdoptRequest(names=[DEV]), ADMIN).status == "noop"
+
+
+def test_an_import_that_starts_managing_needs_a_recent_whole_read(db, fakes, fresh_reads):
+    fakes.observe(DEV, tags={"legacy": "x"})
+    rows = [ImportRow(name=DEV, tags={"tier": "gold"})]
+
+    pv = changes.preview_import(db, ImportRequest(rows=rows), ADMIN)
+    assert pv.blocked and [f.code for f in pv.findings] == ["stale_snapshot"]
+    with pytest.raises(errors.ChangeBlocked):
+        changes.import_rows(db, ImportRequest(rows=rows), ADMIN)
+
+    submit(db, op("set_comment", comment="Orders."))
+    assert not changes.preview_import(db, ImportRequest(rows=rows), ADMIN).blocked

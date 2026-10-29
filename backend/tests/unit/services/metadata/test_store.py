@@ -357,13 +357,16 @@ def _orphan(db, fqn_key, days_ago):
     db.commit()
 
 
+READ_NOW = {"sales_dev": datetime.now(timezone.utc).replace(tzinfo=None)}
+
+
 def test_purge_orphans_soft_deletes_old_orphans_under_a_system_change_set(db):
     write(db, [tag("tier", "gold"), comment("Orders.")])
     write(db, [tag("tier", "gold", name="sales_dev.bronze.recent")])
     _orphan(db, T_KEY, 40)
     _orphan(db, "sales_dev.bronze.recent", 2)
 
-    assert store.purge_orphans(db, older_than_days=30) == 1
+    assert store.purge_orphans(db, older_than_days=30, read_after=READ_NOW) == 1
 
     assert store.get_object(db, T_KEY) is None
     deleted = store.get_object(db, T_KEY, include_deleted=True)
@@ -375,13 +378,22 @@ def test_purge_orphans_soft_deletes_old_orphans_under_a_system_change_set(db):
     event = store.get_change_set(db, cs.id).events[0]
     assert event.action == "object_delete"
     assert event.before["tags"] == {"tier": "gold"} and event.before["comment"] == "Orders."
-    assert store.purge_orphans(db, older_than_days=30) == 0
+    assert store.purge_orphans(db, older_than_days=30, read_after=READ_NOW) == 0
+
+
+@pytest.mark.parametrize("read_after", [{}, {"sales_dev": datetime(2000, 1, 1)}, {"other": datetime(2999, 1, 1)}])
+def test_an_orphan_is_kept_until_a_later_read_of_its_catalog_confirms_it(db, read_after):
+    write(db, [tag("tier", "gold")])
+    _orphan(db, T_KEY, 40)
+
+    assert store.purge_orphans(db, older_than_days=30, read_after=read_after) == 0
+    assert store.get_object(db, T_KEY).tags == {"tier": "gold"}
 
 
 def test_writing_to_a_deleted_row_restores_it_empty(db):
     write(db, [tag("tier", "gold"), tag("pii"), comment("Orders.")])
     _orphan(db, T_KEY, 40)
-    store.purge_orphans(db, older_than_days=30)
+    store.purge_orphans(db, older_than_days=30, read_after=READ_NOW)
 
     cs = write(db, [tag("owner", "team_a", object_state="pending")])
 
@@ -395,7 +407,7 @@ def test_writing_to_a_deleted_row_restores_it_empty(db):
 def test_a_deleted_row_has_version_zero_everywhere(db):
     write(db, [tag("tier", "gold"), comment("Orders.")])
     _orphan(db, T_KEY, 40)
-    store.purge_orphans(db, older_than_days=30)
+    store.purge_orphans(db, older_than_days=30, read_after=READ_NOW)
     with pytest.raises(errors.VersionConflict):
         write(db, [tag("tier", "silver", before="gold", before_version=1)])
 
@@ -486,18 +498,90 @@ def test_revert_items_restore_before_values_against_current_state(db):
 
 
 def test_revert_items_skip_values_already_restored(db):
+    write(db, [], ensure_objects=[store.ObjectSeed(key=ObjectKey.parse(T), securable_type="table")])
     cs = write(db, [tag("a", "1")])
     write(db, [tag("a", action="unset", before="1", before_version=1)])
-    assert store.revert_items(db, cs.id) == []
+    plan = store.revert_plan(db, cs.id)
+    assert plan.items == [] and plan.unmanaged == []
+    assert plan.changed_since == [(T_KEY, T, "a")]
 
 
-def test_revert_of_unknown_or_tagless_change_sets(db):
+def test_revert_of_unknown_or_empty_change_sets(db):
     with pytest.raises(errors.NotFound):
         store.revert_items(db, "nope")
-    seed = store.ObjectSeed(key=ObjectKey.parse("sales_dev"), securable_type="catalog")
-    cs = write(db, [], ensure_objects=[seed])
+    cs = write(db, [])
     with pytest.raises(errors.MetadataError, match="nothing to revert"):
         store.revert_items(db, cs.id)
+
+
+def test_reverting_the_change_set_that_created_a_row_drops_the_row(db):
+    cs = write(db, [tag("tier", "gold"), comment("Orders.")])
+    write(db, [tag("pii", "x")])
+
+    plan = store.revert_plan(db, cs.id)
+
+    assert plan.unmanaged == [T_KEY]
+    assert plan.changed_since == [(T_KEY, T, "pii")]
+    assert all(i.stops_managing for i in plan.items)
+    assert [(i.field, i.key, i.action, i.before, i.before_version) for i in plan.items] == [
+        ("tag", "pii", "unset", "x", 1), ("tag", "tier", "unset", "gold", 1), ("comment", None, "comment_clear", "Orders.", 1),
+    ]
+
+    revert = write(db, plan.items, source="revert", reverts_change_set_id=cs.id)
+
+    assert store.get_object(db, T_KEY) is None
+    row = store.get_object(db, T_KEY, include_deleted=True)
+    assert (row.status, row.tags, row.comment.value) == ("deleted", {}, None)
+    assert revert.summary["unmanaged"] == 1
+    [event] = revert.events
+    assert event.action == "object_delete"
+    assert event.before["tags"] == {"pii": "x", "tier": "gold"} and event.before["comment"] == "Orders."
+    assert db.query(MetadataReconcileQueueModel).filter_by(change_set_id=revert.id).count() == 0
+    assert store.get_change_set(db, cs.id).reverted_by == revert.id
+    with pytest.raises(errors.MetadataError, match="stopped managing"):
+        store.revert_items(db, revert.id)
+
+
+def test_a_row_created_by_a_tagless_change_set_is_dropped_too(db):
+    cs = write(db, [], ensure_objects=[store.ObjectSeed(key=ObjectKey.parse("sales_dev"), securable_type="catalog")])
+    [item] = store.revert_items(db, cs.id)
+    assert (item.field, item.action, item.before_exists, item.stops_managing) == ("comment", "comment_clear", False, True)
+
+
+def test_a_row_recreated_since_is_restored_value_by_value(db):
+    cs = write(db, [tag("tier", "gold")])
+    write(db, [tag("tier", action="unset", before="gold", before_version=1)])
+    db.query(MetadataObjectModel).filter_by(fqn_key=T_KEY).update({"status": "deleted"})
+    db.commit()
+    write(db, [tag("tier", "silver")])
+
+    plan = store.revert_plan(db, cs.id)
+
+    assert plan.unmanaged == []
+    assert [(i.key, i.action, i.stops_managing) for i in plan.items] == [("tier", "unset", False)]
+
+
+def test_dropping_a_row_conflicts_with_a_tag_set_since_it_was_planned(db):
+    cs = write(db, [tag("tier", "gold")])
+    items = store.revert_items(db, cs.id)
+    write(db, [tag("pii", "x")])
+    with pytest.raises(errors.VersionConflict) as exc:
+        write(db, items, source="revert", reverts_change_set_id=cs.id)
+    assert [(c.key, c.expected_version, c.current_version) for c in exc.value.conflicts] == [("pii", 0, 1)]
+    assert store.get_object(db, T_KEY).tags == {"tier": "gold", "pii": "x"}
+
+
+def test_a_first_row_records_the_uc_values_it_leaves_out(db):
+    removed = tag("pii", action="unset", before="email")
+    removed.before_exists = True
+    cleared = comment(None, before="From UC.")
+    cs = write(db, [tag("tier", "gold"), removed, cleared])
+
+    assert cs.summary["tags_unset"] == 1 and cs.summary["comments"] == 1
+    events = {(e.action, e.key): e for e in cs.events}
+    assert events["tag_unset", "pii"].before == {"value": "email", "version": 0}
+    assert events["comment_clear", None].before == {"value": "From UC.", "version": 0}
+    assert store.get_object(db, T_KEY).tags == {"tier": "gold"}
 
 
 def test_a_change_set_can_only_be_reverted_once(db):
