@@ -244,6 +244,72 @@ def test_a_run_whose_process_is_gone_or_that_is_very_old_is_closed_when_the_next
     assert db_session.get(MetadataReconcileRunModel, new_id).summary == {}
 
 
+def _running_elsewhere(db_session, run_id="cut-off"):
+    """A run another container started a few minutes ago, so neither its age nor its pid gives it away."""
+    db_session.add(MetadataReconcileRunModel(
+        id=run_id, trigger="sweep", mode="plan", status="running", skipped_catalogs=[],
+        summary={"scope": "all", "worker": "old-container:42"}, started_at=reconciler._utcnow() - timedelta(minutes=5),
+    ))
+    db_session.commit()
+    return run_id
+
+
+def _status(db_session, run_id):
+    db_session.expire_all()
+    return db_session.get(MetadataReconcileRunModel, run_id).status
+
+
+def test_a_run_cut_off_by_a_deploy_reads_as_failed_as_soon_as_sync_history_loads(db_session, monkeypatch):
+    """Nobody holds the run lock, so nothing is running anywhere: the row is left over from the old container."""
+    monkeypatch.setattr(reconciler, "_run_lock_held", lambda db: False)
+    run_id = _running_elsewhere(db_session)
+
+    assert reconciler.list_runs(db_session).items[0].status == "failed"
+    run = reconciler.get_run(db_session, run_id)
+    assert run.status == "failed" and "restarted" in run.error and run.finished_at is not None
+
+
+@pytest.mark.parametrize("read", ["list_runs", "get_run", "latest_running"])
+def test_a_run_another_container_is_doing_stays_running(db_session, monkeypatch, read):
+    monkeypatch.setattr(reconciler, "_run_lock_held", lambda db: True)
+    run_id = _running_elsewhere(db_session)
+
+    getattr(reconciler, read)(db_session, **({"run_id": run_id} if read == "get_run" else {}))
+
+    assert _status(db_session, run_id) == "running"
+
+
+def test_a_run_starting_under_the_lock_closes_what_is_left_and_page_loads_leave_it_alone(db_session, monkeypatch):
+    # The lock is held from here on: by the starting run itself.
+    monkeypatch.setattr(reconciler, "_run_lock_held", lambda db: True)
+    left_over = _running_elsewhere(db_session)
+
+    token = reconciler._holding_run_lock.set(True)
+    try:
+        new_id = reconciler.start_run(db_session, trigger="queue", mode="plan")
+        reconciler.list_runs(db_session)
+        reconciler.get_run(db_session, new_id)
+    finally:
+        reconciler._holding_run_lock.reset(token)
+
+    assert _status(db_session, left_over) == "failed"
+    assert _status(db_session, new_id) == "running"
+
+
+def test_the_lock_check_says_it_cannot_tell_rather_than_guess(db_session):
+    assert reconciler._run_lock_held(db_session) is None
+
+    class _Broken:
+        def __enter__(self):
+            raise RuntimeError("pg_locks unavailable")
+
+        def __exit__(self, *exc):
+            return False
+
+    bind = SimpleNamespace(dialect=SimpleNamespace(name="postgresql"), engine=SimpleNamespace(connect=_Broken))
+    assert reconciler._run_lock_held(SimpleNamespace(get_bind=lambda: bind)) is None
+
+
 def test_record_run_writes_a_finished_run_in_one_go(db_session):
     result = reconciler.record_run(
         db_session, trigger="sweep", mode="enforce", status="paused", paused_reason="Too many removals.",
@@ -321,9 +387,10 @@ def test_single_flight_holds_a_postgres_advisory_lock_for_the_run():
 
     with reconciler._single_flight(_postgres_session(conn)):
         assert conn.statements == [("SELECT pg_try_advisory_lock(:key)", reconciler._ADVISORY_LOCK_KEY)]
+        assert reconciler._holding_run_lock.get()
 
     assert conn.statements[-1] == ("SELECT pg_advisory_unlock(:key)", reconciler._ADVISORY_LOCK_KEY)
-    assert conn.closed
+    assert conn.closed and not reconciler._holding_run_lock.get()
 
 
 def test_single_flight_refuses_when_another_run_holds_the_lock():

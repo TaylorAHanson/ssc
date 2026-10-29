@@ -167,7 +167,10 @@ confused with **Admin** in the sidebar, which opens the platform dashboard) with
   A row marked *Couldn't read* didn't check that catalog at all (its details
   say why) and changed nothing in it. To see whether a long *Running* check is
   still working, search the app's logs for the id shown at the top of its
-  details: a slow read logs a line every minute.
+  details: a slow read logs a line every minute. A check cut off because the
+  app restarted or was redeployed shows as *Failed* the next time Sync history
+  loads; it wrote nothing more after it stopped, and the next check carries on
+  as normal.
 - **Automation access**: the pipelines and systems that may change tags through
   the API or MCP, and their scope. See [Metadata API and MCP](metadata-api.md);
 - **Bring in many tables at once**: **Start managing catalogs** and **Import

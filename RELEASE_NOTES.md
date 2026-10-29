@@ -13,6 +13,12 @@ Format rules (the app parses this file, so keep to them):
   before), and what the reader will notice or should do now.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
 
+## 2.8.1 — 2026-10-29
+
+### Fixed
+
+- **A Metadata Manager check cut off by a redeploy no longer shows as running for hours.** When the app was redeployed or restarted in the middle of a check, that check stayed *Running* in Sync history for up to six hours. Meanwhile **Preview a sync** and **Check and sync now** stayed greyed out, so you couldn't start a new check. Now the stopped check is marked *Failed*, with a note that the app restarted, as soon as Sync history loads, and you can start a new check straight away. Checks that are still working, including ones running in another copy of the app, are left alone.
+
 ## 2.8.0 — 2026-10-29
 
 ### Added

@@ -89,6 +89,8 @@ MODES = ("off", "plan", "enforce")
 CIRCUIT_BREAKER_KEY = "reconciler.circuit_breaker"
 # Session-level Postgres advisory lock key that keeps reconcile runs single flight across replicas.
 _ADVISORY_LOCK_KEY = 5_006_202_610_200_001
+# True while this context holds that lock; start_run then knows no other run can be live.
+_holding_run_lock: contextvars.ContextVar[bool] = contextvars.ContextVar("metadata_holding_run_lock", default=False)
 _MAX_PAGE_SIZE = 500
 _IN_CHUNK = 500
 _WRITE_CHUNK = 1000
@@ -415,18 +417,67 @@ def _worker_gone(worker: object) -> bool:
     return False
 
 
-def _close_abandoned_runs(db: Session) -> None:
+def _run_lock_held(db: Session) -> Optional[bool]:
+    """Whether any session holds the reconcile advisory lock; ``None`` when that can't be told (SQLite, an error)."""
+    bind = db.get_bind()
+    if bind.dialect.name != "postgresql":
+        return None
+    engine = getattr(bind, "engine", bind)
+    try:
+        with engine.connect() as conn:
+            # A bigint advisory key shows in pg_locks as classid (high 32 bits), objid (low 32 bits), objsubid 1.
+            return bool(conn.execute(text(
+                "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND granted AND objsubid = 1"
+                " AND database = (SELECT oid FROM pg_database WHERE datname = current_database())"
+                " AND classid::bigint = :hi AND objid::bigint = :lo)"
+            ), {"hi": _ADVISORY_LOCK_KEY >> 32, "lo": _ADVISORY_LOCK_KEY & 0xFFFFFFFF}).scalar())
+    except Exception:  # noqa: BLE001
+        logger.warning("Metadata: couldn't check whether a reconcile run holds the lock", exc_info=True)
+        return None
+
+
+def _close_abandoned_runs(db: Session, *, holding_lock: bool = False) -> int:
+    """Close ``running`` rows whose process stopped mid-run (a restart or deploy) as failed. Commits; returns how many.
+
+    On Postgres every live run holds the advisory lock, so when nobody holds it each ``running``
+    row is left over, wherever it ran. ``holding_lock`` says the caller holds it and has no row
+    yet (a run starting), so every ``running`` row is. Without that signal, a row counts as left
+    over once its process on this host is gone. A very old row always does.
+    """
+    running = (
+        db.query(MetadataReconcileRunModel.id, MetadataReconcileRunModel.started_at, MetadataReconcileRunModel.summary)
+        .filter(MetadataReconcileRunModel.status == "running")
+        .all()
+    )
+    if not running:
+        return 0
+    # Rows are read before the lock is checked: a run takes the lock before inserting its row.
+    held = False if holding_lock else _run_lock_held(db)
     cutoff = _utcnow() - _ABANDONED_RUN_AGE
-    running = db.query(MetadataReconcileRunModel).filter(MetadataReconcileRunModel.status == "running").all()
-    for run in running:
-        if run.started_at >= cutoff and not _worker_gone((run.summary or {}).get(_WORKER_KEY)):
+    closed = 0
+    for run_id, started_at, summary in running:
+        left_over = (
+            held is False
+            or started_at < cutoff
+            or (held is None and _worker_gone((summary or {}).get(_WORKER_KEY)))
+        )
+        if not left_over:
             continue
         logger.warning("Metadata: reconcile run %s (started %s) stopped without finishing; closing it as failed.",
-                       run.id, run.started_at)
-        run.status = "failed"
-        run.error = _ABANDONED_RUN_ERROR
-        run.finished_at = _utcnow()
-        run.summary = {k: v for k, v in (run.summary or {}).items() if k != _WORKER_KEY}
+                       run_id, started_at)
+        closed += (
+            db.query(MetadataReconcileRunModel)
+            .filter(MetadataReconcileRunModel.id == run_id, MetadataReconcileRunModel.status == "running")
+            .update({
+                MetadataReconcileRunModel.status: "failed",
+                MetadataReconcileRunModel.error: _ABANDONED_RUN_ERROR,
+                MetadataReconcileRunModel.finished_at: _utcnow(),
+                MetadataReconcileRunModel.summary: {k: v for k, v in (summary or {}).items() if k != _WORKER_KEY},
+            }, synchronize_session=False)
+        )
+    if closed:
+        db.commit()
+    return closed
 
 
 def start_run(
@@ -437,7 +488,7 @@ def start_run(
 
     Runs left ``running`` by a process that stopped mid-run are closed as failed first.
     """
-    _close_abandoned_runs(db)
+    _close_abandoned_runs(db, holding_lock=_holding_run_lock.get())
     run = MetadataReconcileRunModel(
         id=str(uuid.uuid4()), trigger=trigger, mode=mode, status="running", actor=actor,
         skipped_catalogs=[], summary={**(summary or {}), _WORKER_KEY: _worker()}, started_at=_utcnow(),
@@ -524,7 +575,8 @@ def list_runs(
     trigger: Optional[str] = None,
     status: Optional[str] = None,
 ) -> ReconcileRunPage:
-    """Runs newest first, without their statements (``get_run`` has those)."""
+    """Runs newest first, without their statements (``get_run`` has those). Closes abandoned rows first."""
+    _close_abandoned_runs(db)
     page = max(1, int(page or 1))
     page_size = min(max(1, int(page_size or 50)), _MAX_PAGE_SIZE)
     query = db.query(MetadataReconcileRunModel)
@@ -543,7 +595,8 @@ def list_runs(
 
 
 def get_run(db: Session, run_id: str) -> ReconcileResult:
-    """Raises ``errors.NotFound``."""
+    """Raises ``errors.NotFound``. Closes abandoned rows first, so a run cut off by a restart reads as failed."""
+    _close_abandoned_runs(db)
     run = db.get(MetadataReconcileRunModel, run_id)
     if run is None:
         raise errors.NotFound(f"Reconcile run '{run_id}' not found.")
@@ -603,9 +656,11 @@ def _single_flight(db: Session) -> Iterator[None]:
             raise ReconcileBusy(
                 "A check of Unity Catalog is already running. Wait for it to finish — it appears under Sync history."
             )
+        holding = _holding_run_lock.set(True)
         try:
             yield
         finally:
+            _holding_run_lock.reset(holding)
             try:
                 conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": _ADVISORY_LOCK_KEY})
                 conn.commit()
