@@ -13,6 +13,12 @@ Format rules (the app parses this file, so keep to them):
   before), and what the reader will notice or should do now.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
 
+## 2.10.0 — 2026-10-30
+
+### Added
+
+- **The Access Rules grid now has Find and replace.** Changing the same value in many rows, such as a group that was renamed, used to mean editing each cell by hand. Select **Find and replace** above the grid on any sheet you can edit, and look in every column or pick one. It searches only the rows the grid is showing, so the search, column filters and row view narrow it first. Matches are highlighted and you can step through them, then replace one at a time or all at once. **Whole value** matches a whole cell, or one whole group or privilege in a cell that holds several, so `grp_sales` doesn't also change `grp_sales_eu`. Replacements are staged like any other edit: they're checked when you select **Review**, nothing is saved until you commit, and **Discard** undoes them.
+
 ## 2.9.0 — 2026-10-29
 
 ### Changed

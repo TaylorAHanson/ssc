@@ -5,7 +5,7 @@ import type { RbacChangeSetResult, RbacField, RbacPermissions, RbacRule } from '
 import { Button } from '../ui/button';
 import { cn } from '../../lib/utils';
 import { ReviewDrawer } from './ReviewDrawer';
-import { RulesTable } from './RulesTable';
+import { RulesTable, type CellEdit } from './RulesTable';
 import { SheetPicker } from './SheetPicker';
 import { StagedChangesTray } from './StagedChangesTray';
 import {
@@ -81,6 +81,8 @@ export function RulesTab({ permissions, sheetName, onSheetChange, staged, setSta
   };
 
   const onEdit = (row: GridRow, field: RbacField, value: string) => setStaged((prev) => stageEdit(prev, row, field, value));
+  const onReplace = (edits: CellEdit[]) =>
+    setStaged((prev) => edits.reduce((acc, e) => stageEdit(acc, e.row, e.field, e.value), prev));
   const onDelete = (row: GridRow) => setStaged((prev) => stageDelete(prev, row));
   const onUndo = (row: GridRow) => setStaged((prev) => stageUndo(prev, row.key));
   const onAdd = (from?: GridRow) => {
@@ -179,6 +181,8 @@ export function RulesTab({ permissions, sheetName, onSheetChange, staged, setSta
           onDelete={onDelete}
           onUndo={onUndo}
           onAdd={onAdd}
+          onReplace={onReplace}
+          maxChanges={permissions.max_changes_per_commit}
         />
       )}
       <StagedChangesTray staged={staged} onDiscard={discard} onReview={() => setReviewing(true)} />

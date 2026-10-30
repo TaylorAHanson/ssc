@@ -121,6 +121,30 @@ If you can edit the sheet:
    a workspace or catalog name that isn't in the environment's list.
 3. Give a reason and commit. The whole set is saved together, or not at all.
 
+To change the same text in many cells, such as a renamed group, select
+**Find and replace** above the grid. Type the text to find and what to replace
+it with, then choose **All columns** or one column under **Look in**. It looks
+only in the rows the grid is showing, across every page, so use the search,
+the column filters or the row view first to narrow it. Matching cells are
+highlighted, and the arrows (or Enter and Shift+Enter in the Find box) step
+from one to the next. **Replace** changes the highlighted cell, and
+**Replace all** changes every match at once.
+
+- **Match case** matches only the exact capitalisation.
+- **Whole value** matches a whole cell instead of text inside it. In a cell
+  holding several values separated by `;`, such as a list of groups, it
+  matches one whole value, so `grp_sales` doesn't also match
+  `grp_sales_eu`. Leave **Replace with** blank to remove that value from
+  each cell. A replacement the cell already holds isn't added twice.
+- Read-only columns (marked with a lock) and rows staged for deletion are
+  skipped.
+
+Replacements are staged like any other edit: nothing is saved until you
+review and commit them, and **Discard** in the tray undoes them all. If
+**Replace all** would stage more rows than one save can hold (**Max row
+changes per save** in Settings), the panel says so; narrow the rows or pick one
+column and save in parts.
+
 Where a column has a set list of values, editing a cell offers that list
 instead of free text:
 

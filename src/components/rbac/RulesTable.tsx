@@ -14,7 +14,7 @@ import {
   type ColumnFiltersState,
   type SortingState,
 } from '@tanstack/react-table';
-import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, Clock, Copy, Lock, Plus, Search, Trash2, Undo2, X } from 'lucide-react';
+import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, Clock, Copy, Lock, Plus, Replace, Search, Trash2, Undo2, X } from 'lucide-react';
 import type { RbacCells, RbacField, RbacSheetInfo } from '../../types/rbac';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
@@ -22,10 +22,12 @@ import { cn } from '../../lib/utils';
 import { CellEditor } from './CellEditor';
 import { editorFor, flagFor, type CellFlag } from './cellOptions';
 import { ColGroup, ColumnResizer, ResetColumnsButton, ResizableTh } from './ColumnResizer';
+import { FindReplacePanel } from './FindReplacePanel';
+import { cellReplacer, findMatches, replaceableColumns, type FindMatch, type FindOptions } from './findReplace';
 import type { GridRow } from './staging';
 import { Badge } from './ui';
 import { useResizableColumns } from './useResizableColumns';
-import { PACKED_FIELDS, cellValue, splitPacked } from './utils';
+import { PACKED_FIELDS, cellValue, plural, splitPacked } from './utils';
 
 const STICKY_END = 'sticky right-0 border-b border-l border-gray-200 px-2';
 
@@ -46,6 +48,14 @@ const helper = createColumnHelper<typeof features, GridRow>();
 
 type View = 'all' | 'staged' | 'pending';
 
+export interface CellEdit {
+  row: GridRow;
+  field: RbacField;
+  value: string;
+}
+
+const NO_FIND: FindOptions = { find: '', replace: '', matchCase: false, wholeValue: false };
+
 interface RulesTableProps {
   sheet: RbacSheetInfo;
   rows: GridRow[];
@@ -55,6 +65,10 @@ interface RulesTableProps {
   onUndo: (row: GridRow) => void;
   /** Stage a new row (a copy of `from` when given) and return its key and starting cells. */
   onAdd: (from?: GridRow) => { key: string; cells: Partial<RbacCells> };
+  /** Stage several cell edits at once (find and replace). */
+  onReplace: (edits: CellEdit[]) => void;
+  /** Most row changes one save may hold; 0 means no limit. */
+  maxChanges: number;
 }
 
 const cellId = (rowKey: string, col: number) => `rbac-cell-${rowKey}-${col}`;
@@ -77,7 +91,7 @@ function revealCell(rowKey: string, col: number) {
 }
 
 /** The sheet's rows under its own headers: search, column filters, sorting, paging and inline edits. */
-export function RulesTable({ sheet, rows, editable, onEdit, onDelete, onUndo, onAdd }: RulesTableProps) {
+export function RulesTable({ sheet, rows, editable, onEdit, onDelete, onUndo, onAdd, onReplace, maxChanges }: RulesTableProps) {
   const [globalFilter, setGlobalFilter] = useState('');
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   const [sorting, setSorting] = useState<SortingState>([]);
@@ -191,6 +205,91 @@ export function RulesTable({ sheet, rows, editable, onEdit, onDelete, onUndo, on
     [rows],
   );
 
+  const [finding, setFinding] = useState(false);
+  const [findOptions, setFindOptions] = useState<FindOptions>(NO_FIND);
+  const [findScope, setFindScope] = useState<number | null>(null);
+  // Kept by cell rather than by position, so it survives the match list changing under it.
+  const [activeMatch, setActiveMatch] = useState<{ rowKey: string; col: number } | null>(null);
+  const [findNote, setFindNote] = useState<string | null>(null);
+
+  const findColumns = useMemo(() => replaceableColumns(sheet), [sheet]);
+  const matches = useMemo(
+    () => (finding ? findMatches(sheet, visible.map((r) => r.original), findScope, findOptions) : []),
+    [finding, sheet, visible, findScope, findOptions],
+  );
+  const matchCells = useMemo(() => new Set(matches.map((m) => cellId(m.row.key, m.col))), [matches]);
+  const currentMatch = activeMatch ? matches.findIndex((m) => m.row.key === activeMatch.rowKey && m.col === activeMatch.col) : -1;
+  const currentCell = currentMatch >= 0 ? cellId(matches[currentMatch].row.key, matches[currentMatch].col) : null;
+  const changes = useMemo(() => matches.filter((m) => m.next !== m.value), [matches]);
+  const matchRows = useMemo(() => new Set(matches.map((m) => m.row.key)).size, [matches]);
+
+  const updateFind = (next: FindOptions) => {
+    setFindOptions(next);
+    setFindNote(null);
+  };
+  const updateScope = (next: number | null) => {
+    setFindScope(next);
+    setFindNote(null);
+  };
+  const closeFind = () => {
+    setFinding(false);
+    setActiveMatch(null);
+    setFindNote(null);
+  };
+
+  const showMatch = (m: FindMatch | undefined) => {
+    if (!m) {
+      setActiveMatch(null);
+      return;
+    }
+    setActiveMatch({ rowKey: m.row.key, col: m.col });
+    const position = visible.findIndex((r) => r.original.key === m.row.key);
+    if (position >= 0) setPage(Math.floor(position / PAGE_SIZE));
+    revealCell(m.row.key, m.col);
+  };
+
+  const stepMatch = (direction: 1 | -1) => {
+    const n = matches.length;
+    if (n === 0) return;
+    const from = currentMatch >= 0 ? currentMatch + direction : direction > 0 ? 0 : n - 1;
+    showMatch(matches[(from + n) % n]);
+  };
+
+  const replaceOne = () => {
+    const m = matches[currentMatch];
+    // Like a text editor: the first press selects a match to look at, the next replaces it.
+    if (!m) {
+      showMatch(matches[0]);
+      return;
+    }
+    if (m.next !== m.value) onReplace([{ row: m.row, field: m.field, value: m.next }]);
+    setFindNote(null);
+    const stillMatches = cellReplacer(findOptions)?.(m.next, PACKED_FIELDS.has(m.field)) != null;
+    const after = matches.filter((_, i) => i !== currentMatch || stillMatches);
+    const at = stillMatches ? currentMatch + 1 : currentMatch;
+    showMatch(after.length ? after[at % after.length] : undefined);
+  };
+
+  const newlyStagedRows = useMemo(
+    () => new Set(changes.filter((m) => m.row.state === 'clean').map((m) => m.row.key)).size,
+    [changes],
+  );
+  const overLimit = maxChanges > 0 && counts.staged + newlyStagedRows > maxChanges;
+
+  const replaceAll = () => {
+    if (changes.length === 0) return;
+    const rowCount = new Set(changes.map((m) => m.row.key)).size;
+    onReplace(changes.map((m) => ({ row: m.row, field: m.field, value: m.next })));
+    setActiveMatch(null);
+    setFindNote(
+      `Replaced ${plural(changes.length, 'cell')} in ${plural(rowCount, 'row')}. They’re staged: review and commit them to save, or use Discard to undo.`,
+    );
+  };
+
+  const limitNote = overLimit
+    ? `Replacing all would leave ${(counts.staged + newlyStagedRows).toLocaleString()} rows staged, and one save holds at most ${maxChanges.toLocaleString()}. Narrow the rows shown or pick one column, and save in parts.`
+    : null;
+
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
@@ -230,11 +329,42 @@ export function RulesTable({ sheet, rows, editable, onEdit, onDelete, onUndo, on
         )}
         <ResetColumnsButton columns={widths} className="ml-auto" />
         {editable && (
-          <Button size="sm" onClick={() => add()} className={cn('h-8 gap-1.5 text-[13px]', !widths.customized && 'ml-auto')}>
-            <Plus className="h-4 w-4" /> Add row
-          </Button>
+          <>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => (finding ? closeFind() : setFinding(true))}
+              aria-expanded={finding}
+              className={cn('h-8 gap-1.5 text-[13px]', !widths.customized && 'ml-auto', finding && 'border-primary text-primary')}
+            >
+              <Replace className="h-4 w-4" /> Find and replace
+            </Button>
+            <Button size="sm" onClick={() => add()} className="h-8 gap-1.5 text-[13px]">
+              <Plus className="h-4 w-4" /> Add row
+            </Button>
+          </>
         )}
       </div>
+
+      {editable && finding && (
+        <FindReplacePanel
+          options={findOptions}
+          onOptionsChange={updateFind}
+          scope={findScope}
+          onScopeChange={updateScope}
+          columns={findColumns}
+          hasReadOnly={findColumns.length < sheet.columns.length}
+          matchCount={matches.length}
+          rowCount={matchRows}
+          current={currentMatch}
+          changeCount={changes.length}
+          note={findNote ?? limitNote}
+          onStep={stepMatch}
+          onReplaceOne={replaceOne}
+          onReplaceAll={replaceAll}
+          onClose={closeFind}
+        />
+      )}
 
       <div className="max-h-[65vh] overflow-auto rounded-lg border border-gray-200 bg-white">
         <table
@@ -346,6 +476,8 @@ export function RulesTable({ sheet, rows, editable, onEdit, onDelete, onUndo, on
                     const canEdit = editable && !!col.field && !deleted;
                     const packed = PACKED_FIELDS.has(col.field ?? '');
                     const flag = col.field ? flagFor(sheet, row, col.field) : null;
+                    const found = matchCells.has(cellId(row.key, i));
+                    const isCurrentMatch = currentCell === cellId(row.key, i);
                     return (
                       <td
                         key={i}
@@ -355,6 +487,8 @@ export function RulesTable({ sheet, rows, editable, onEdit, onDelete, onUndo, on
                           // A narrowed column clips; the editor may spill over its neighbours instead.
                           isEditing ? 'relative z-[2]' : 'overflow-hidden',
                           modified && 'bg-amber-50 shadow-[inset_0_0_0_1px_rgb(252,211,77)]',
+                          found && 'bg-sky-50 shadow-[inset_0_0_0_1px_rgb(125,211,252)]',
+                          isCurrentMatch && 'bg-sky-100 shadow-[inset_0_0_0_2px_rgb(14,165,233)]',
                           !col.field && 'text-gray-500',
                           deleted && 'line-through',
                         )}
