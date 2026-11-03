@@ -60,7 +60,9 @@ export function AssistantShelf({
   // Mirror the latest width so the drag-end handler persists the current value
   // (its closure would otherwise capture a stale width from mousedown time).
   const widthRef = useRef(width);
-  widthRef.current = width;
+  useEffect(() => {
+    widthRef.current = width;
+  }, [width]);
 
   // Drag the panel's left edge to resize. It's an overlay shelf, so widening it
   // simply covers more of the page underneath (no content reflow).

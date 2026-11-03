@@ -43,16 +43,20 @@ def _user(email, roles=(), actor_type="user"):
                 actor_type=actor_type, application_id=email if actor_type == "service_principal" else None)
 
 
-ADMIN = _user("admin@example.com", roles=["Platform Admin"])
+ADMIN = _user("admin@example.com", roles=["Super Admin"])
 EDITOR = _user("editor@example.com", roles=["Governance Admin"])
+APP_ADMIN = _user("app@example.com", roles=["Application Admin"])
+OPS = _user("ops@example.com", roles=["Ops Admin"])
 OWNER = _user("owner@example.com")
 NOBODY = _user("nobody@example.com")
 PIPELINE = _user(APP_ID, actor_type="service_principal")
-USERS = {u.email: u for u in (ADMIN, EDITOR, OWNER, NOBODY, PIPELINE)}
+USERS = {u.email: u for u in (ADMIN, EDITOR, APP_ADMIN, OPS, OWNER, NOBODY, PIPELINE)}
 
 ACTORS = {
     ADMIN.email: Actor(id=ADMIN.email, email=ADMIN.email, roles=ADMIN.roles, is_admin=True),
     EDITOR.email: Actor(id=EDITOR.email, email=EDITOR.email, roles=EDITOR.roles, is_admin=True),
+    APP_ADMIN.email: Actor(id=APP_ADMIN.email, email=APP_ADMIN.email, roles=APP_ADMIN.roles),
+    OPS.email: Actor(id=OPS.email, email=OPS.email, roles=OPS.roles),
     OWNER.email: Actor(id=OWNER.email, email=OWNER.email, groups=["crm-owners"]),
     NOBODY.email: Actor(id=NOBODY.email, email=NOBODY.email),
     APP_ID: Actor(id=APP_ID, actor_type="service_principal",
@@ -71,7 +75,7 @@ def _feature(monkeypatch):
     monkeypatch.setitem(_yaml_config.setdefault("features", {}), "metadata_v2", True)
     monkeypatch.setattr(authz, "actor_from_user", lambda db, user: ACTORS[user.id])
     monkeypatch.setattr(authz, "browse_scope", lambda db, actor, editable=None: authz.BrowseScope(
-        level="none" if actor.id == NOBODY.email else "full"))
+        level="none" if actor.id in (NOBODY.email, OPS.email) else "full"))
     monkeypatch.setattr(observed, "refresh", _refresh_from_snapshot)
 
 
@@ -162,16 +166,37 @@ def test_a_role_that_cannot_browse_gets_403(api):
     assert "browse" in response.json()["detail"]
 
 
-def test_only_admins_start_reconciler_runs(api, monkeypatch):
+def test_admins_editors_and_ops_start_reconciler_runs(api, monkeypatch):
     monkeypatch.setattr(reconciler, "run_detached", lambda **kw: ReconcileResult(
         run_id="r1", trigger="manual", mode="plan", status="completed", actor=kw["actor"]))
 
-    refused = api(OWNER).post(f"{BASE}/runs", json={"kind": "plan"})
-    started = api(ADMIN).post(f"{BASE}/runs", json={"kind": "plan"})
+    for user in (OWNER, APP_ADMIN, PIPELINE):
+        refused = api(user).post(f"{BASE}/runs", json={"kind": "plan"})
+        assert refused.status_code == 403, user.email
+    assert "Ops Admins" in api(APP_ADMIN).post(f"{BASE}/runs", json={"kind": "plan"}).json()["detail"]
+    for user in (ADMIN, EDITOR, OPS):
+        started = api(user).post(f"{BASE}/runs", json={"kind": "plan"})
+        assert started.status_code == 200, user.email
+        assert started.json()["actor"] == user.email
 
-    assert refused.status_code == 403
-    assert started.status_code == 200
-    assert started.json()["actor"] == ADMIN.email
+
+def test_ops_reads_sync_runs_without_browse_rights(api, monkeypatch):
+    monkeypatch.setattr(reconciler, "list_runs", lambda db, **kw: {"items": [], "total": 0, "page": 1, "page_size": 50})
+
+    assert api(OPS).get(f"{BASE}/runs").status_code == 200
+    assert api(NOBODY).get(f"{BASE}/runs").status_code == 403
+    assert api(OPS).get(f"{BASE}/objects").status_code == 403
+
+
+def test_config_reports_what_the_caller_may_do_with_syncs(api):
+    ops = api(OPS).get(f"{BASE}/config")
+    assert ops.status_code == 200
+    assert (ops.json()["can_run_sync"], ops.json()["can_resume_sync"]) == (True, False)
+    editor = api(EDITOR).get(f"{BASE}/config").json()
+    assert (editor["can_run_sync"], editor["can_resume_sync"]) == (True, True)
+    app_admin = api(APP_ADMIN).get(f"{BASE}/config").json()
+    assert (app_admin["can_run_sync"], app_admin["can_resume_sync"]) == (False, False)
+    assert api(NOBODY).get(f"{BASE}/config").status_code == 403
 
 
 def test_a_run_request_cant_override_the_breaker(api):
@@ -180,20 +205,20 @@ def test_a_run_request_cant_override_the_breaker(api):
     assert response.status_code == 400 and "/runs/paused/resume" in response.json()["detail"]
 
 
-def test_only_platform_admins_resume_or_clear_a_pause(api, monkeypatch):
+def test_only_super_and_governance_admins_resume_or_clear_a_pause(api, monkeypatch):
     calls = []
     monkeypatch.setattr(reconciler, "resume_paused", lambda db, **kw: calls.append(("resume", kw)) or ReconcileResult(
         run_id="r2", trigger="manual", mode="enforce", status="running", actor=kw["actor"]))
     monkeypatch.setattr(reconciler, "clear_paused", lambda db, **kw: calls.append(("clear", kw)))
 
     for path in ("resume", "clear"):
-        assert api(EDITOR).post(f"{BASE}/runs/paused/{path}", json={"run_id": "r1"}).status_code == 403
-        assert api(PIPELINE).post(f"{BASE}/runs/paused/{path}", json={"run_id": "r1"}).status_code == 403
+        for user in (APP_ADMIN, OPS, PIPELINE):
+            assert api(user).post(f"{BASE}/runs/paused/{path}", json={"run_id": "r1"}).status_code == 403
     resumed = api(ADMIN).post(f"{BASE}/runs/paused/resume", json={"run_id": "r1"})
-    cleared = api(ADMIN).post(f"{BASE}/runs/paused/clear", json={"run_id": "r1"})
+    cleared = api(EDITOR).post(f"{BASE}/runs/paused/clear", json={"run_id": "r1"})
 
     assert resumed.status_code == 200 and cleared.status_code == 200
-    assert calls == [("resume", {"run_id": "r1", "actor": ADMIN.email}), ("clear", {"run_id": "r1", "actor": ADMIN.email})]
+    assert calls == [("resume", {"run_id": "r1", "actor": ADMIN.email}), ("clear", {"run_id": "r1", "actor": EDITOR.email})]
     assert cleared.json()["can_resume_sync"] is True
 
 
@@ -647,6 +672,20 @@ def test_whoami_reports_the_browse_scope(db, owned, monkeypatch):
     assert (admin.browse_scope, admin.can_browse, admin.message) == ("full", True, None)
 
 
+def test_config_lists_key_policies_with_their_required_flags(api, monkeypatch):
+    monkeypatch.setattr(settings, "METADATA_KEY_MODE", "known_only")
+    monkeypatch.setattr(settings, "METADATA_KEY_POLICIES", [
+        {"key": "domain", "applies_to": "table", "required": True},
+        {"key": "cost_center", "value_required": "yes"},
+    ])
+
+    body = api(OWNER).get(f"{BASE}/config").json()
+
+    assert body["key_mode"] == "known_only"
+    assert [(p["key"], p["required"], p["value_required"]) for p in body["key_policies"]] == [
+        ("domain", True, False), ("cost_center", False, True)]
+
+
 def test_a_user_who_owns_nothing_gets_no_access(api, owned):
     client = api(NOBODY)
 
@@ -657,3 +696,92 @@ def test_a_user_who_owns_nothing_gets_no_access(api, owned):
 
 def test_a_registered_principal_still_sees_everything(api, owned):
     assert api(PIPELINE).get(f"{BASE}/objects", params={"page_size": 100}).json()["total"] == 3
+
+
+# --- AI-generated descriptions ----------------------------------------------------------------
+
+
+class _FakeDescriber:
+    endpoint_name = "fake-model"
+
+    def __init__(self):
+        self.calls = 0
+
+    async def generate_response(self, messages, tools=None, temperature=0.7, max_tokens=2000):
+        import json
+
+        self.calls += 1
+        doc = json.loads(messages[-1]["content"].split("\n", 1)[1])
+        return {"role": "assistant", "content": json.dumps(
+            {"table": None, "columns": {c["name"]: f"About {c['name']}." for c in doc["describe"]}})}
+
+
+@pytest.fixture
+def describer(monkeypatch, db):
+    from app.db.metadata import MetadataObservedModel
+    from app.services.metadata import describe
+    from app.services.metadata.types import ObjectKey
+
+    monkeypatch.setattr(settings, "METADATA_AI_DESCRIPTIONS", True)
+    monkeypatch.setattr(settings, "METADATA_RECONCILE_CATALOGS", [])
+    for name, column in (("sales_dev.crm.customers", None), ("sales_dev.crm.customers", "email"),
+                         ("hr_dev.people.staff", None), ("hr_dev.people.staff", "salary")):
+        key = ObjectKey.parse(name, column)
+        db.add(MetadataObservedModel(
+            fqn_key=key.fqn_key, catalog=key.catalog, schema_name=key.schema_name, object_name=key.object_name,
+            column_name=key.column_name, parent_key=key.parent().fqn_key, display_name=key.display,
+            securable_type="column" if column else "table", data_type="STRING" if column else None,
+            tags={}, present=True,
+        ))
+    db.commit()
+    fake = _FakeDescriber()
+    monkeypatch.setattr(describe, "_client", lambda: fake)
+    return fake
+
+
+def _metadata_row_counts(db):
+    from app.db.metadata import (
+        MetadataChangeSetModel,
+        MetadataEventModel,
+        MetadataObjectModel,
+        MetadataReconcileQueueModel,
+        MetadataTagModel,
+    )
+
+    return [db.query(m).count() for m in (MetadataObjectModel, MetadataTagModel, MetadataChangeSetModel,
+                                          MetadataEventModel, MetadataReconcileQueueModel)]
+
+
+def test_describe_returns_suggestions_and_writes_nothing(api, db, describer, monkeypatch):
+    def no_writes(*a, **k):
+        raise AssertionError("describe must not go through the change service")
+
+    monkeypatch.setattr(changes, "submit", no_writes)
+    monkeypatch.setattr(changes, "preview", no_writes)
+    before = _metadata_row_counts(db)
+
+    response = api(OWNER).post(f"{BASE}/describe", json={"object": "sales_dev.crm.customers"})
+
+    assert response.status_code == 200
+    assert response.json() == {"table": None, "columns": {"email": "About email."}, "skipped": [],
+                               "model": "fake-model"}
+    assert _metadata_row_counts(db) == before == [0, 0, 0, 0, 0]
+
+
+def test_describe_refuses_who_cant_see_or_edit_the_table(api, describer):
+    hidden = api(NOBODY).post(f"{BASE}/describe", json={"object": "sales_dev.crm.customers"})
+    outside = api(PIPELINE).post(f"{BASE}/describe", json={"object": "hr_dev.people.staff"})
+
+    assert hidden.status_code == 403
+    assert outside.status_code == 403 and "outside" in outside.json()["detail"]
+    assert describer.calls == 0
+
+
+def test_describe_is_refused_when_turned_off(api, describer, monkeypatch):
+    monkeypatch.setattr(settings, "METADATA_AI_DESCRIPTIONS", False)
+
+    response = api(ADMIN).post(f"{BASE}/describe", json={"object": "sales_dev.crm.customers"})
+
+    assert response.status_code == 409 and "turned off" in response.json()["detail"]
+    assert describer.calls == 0
+    assert api(ADMIN).get(f"{BASE}/config").json()["ai_descriptions_enabled"] is False

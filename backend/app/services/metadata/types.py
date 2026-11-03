@@ -261,7 +261,7 @@ class Actor(BaseModel):
     email: Optional[str] = None
     roles: List[str] = Field(default_factory=list)
     groups: List[str] = Field(default_factory=list)
-    # Platform Admin or one of METADATA_EDITOR_ROLES.
+    # Holds metadata.admin: Super Admin or one of METADATA_EDITOR_ROLES.
     is_admin: bool = False
     principal: Optional[PrincipalScope] = None
 
@@ -278,6 +278,8 @@ class WhoAmI(BaseModel):
     # full = every object; owned = only objects the caller owns; none = nothing.
     browse_scope: Literal["full", "owned", "none"] = "full"
     message: Optional[str] = None
+    # Holds metadata.runs: may read sync history and start a check, even without browse rights.
+    can_view_runs: bool = False
 
 
 # --- Changes -------------------------------------------------------------------------
@@ -775,7 +777,10 @@ class KeyPolicy(BaseModel):
     pattern: Optional[str] = None
     editor_groups: List[str] = Field(default_factory=list)
     sensitive: bool = False
+    # required = the tag can't be removed where it applies; value_required = it can't be set without a
+    # value. Independent: a required key may be key-only unless value_required is also on.
     required: bool = False
+    value_required: bool = False
     description: Optional[str] = None
 
 
@@ -814,6 +819,8 @@ class MetadataConfig(BaseModel):
     circuit_breaker_tripped: bool = False
     # The paused run to review while tripped, and whether this caller may resume or clear it.
     circuit_breaker_run_id: Optional[str] = None
+    # metadata.runs (start a check) and metadata.resume_paused_sync (apply or clear a pause).
+    can_run_sync: bool = False
     can_resume_sync: bool = False
     # Catalog names or patterns this deployment manages; empty = every catalog, but plan only.
     managed_catalogs: List[str] = Field(default_factory=list)
@@ -821,6 +828,41 @@ class MetadataConfig(BaseModel):
     enforce_schemas: List[str] = Field(default_factory=list)
     # Set when enforce is configured but can't run (no catalog or schema list), so the UI can say why.
     enforce_blocked_reason: Optional[str] = None
+    # POST /describe is on (METADATA_AI_DESCRIPTIONS).
+    ai_descriptions_enabled: bool = False
+
+
+# --- AI-generated descriptions ------------------------------------------------------
+
+DescribeMode = Literal["empty_only", "all"]
+DescribeSkipReason = Literal["has_description", "unknown_column", "over_limit", "no_suggestion", "model_error"]
+
+
+class DescribeRequest(BaseModel):
+    """Ask the model for description suggestions for a table and its columns; nothing is written."""
+
+    # A table or view: catalog.schema.table, as written or as its fqn_key.
+    object: str = Field(min_length=1, max_length=800)
+    # None = every column; [] = none (only the table, with include_table).
+    columns: Optional[List[str]] = Field(default=None, max_length=5000)
+    # empty_only skips what already has a description; all regenerates it.
+    mode: DescribeMode = "empty_only"
+    include_table: bool = False
+
+
+class DescribeSkip(BaseModel):
+    # None = the table's own description.
+    column: Optional[str] = None
+    reason: DescribeSkipReason
+
+
+class DescribeResult(BaseModel):
+    # Suggested table description, when asked for and the model gave one.
+    table: Optional[str] = None
+    # Column name (as Unity Catalog spells it) -> suggested description.
+    columns: Dict[str, str] = Field(default_factory=dict)
+    skipped: List[DescribeSkip] = Field(default_factory=list)
+    model: str = ""
 
 
 # --- Adopt and import ----------------------------------------------------------------

@@ -8,7 +8,8 @@ import { Drawer, ErrorBanner, Notice, SectionTitle, Skeleton } from '../../rbac/
 import { ActorTypeBadge, SourceBadge } from './badges';
 import { useMetadata } from './context';
 import { EventList } from './EventList';
-import { changeSetCounts, errorMessage, eventsByObject, formatTime } from './format';
+import { changeSetCounts, eventsByObject, formatTime } from './format';
+import { errorMessage } from '../../../lib/errors';
 import { useAsync } from './useAsync';
 
 /** One saved change: every before → after it made, and a way to undo it. */

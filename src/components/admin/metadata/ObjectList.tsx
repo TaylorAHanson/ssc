@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom';
 import type { ObjectSummary } from '../../../types/metadata';
 import { AttentionBadge } from './badges';
 import { useMetadata } from './context';
-import { TYPE_LABELS, objectLabel } from './format';
+import { TYPE_LABELS, isRequiredTag, objectLabel } from './format';
 import { browsePath, objectPath } from './paths';
 import { effectiveComment, effectiveTags, hasEdits, seedFromSummary, useStagingStore } from './staging';
 import { TagList } from './TagChips';
@@ -95,7 +95,7 @@ function Row({ s, showPath, count, hasCounts, selected, onToggle }: {
         {comment && <p className="mt-0.5 line-clamp-2 text-xs text-gray-600">{comment}</p>}
       </td>
       <td className="px-3 py-2.5">
-        <TagList tags={tags} exemptKeys={config.exempt_keys} max={4} emptyText="" />
+        <TagList tags={tags} exemptKeys={config.exempt_keys} isRequired={(k) => isRequiredTag(config, k, s.securable_type)} max={4} emptyText="" />
       </td>
       {hasCounts && <td className="px-3 py-2.5 text-right text-xs tabular-nums text-gray-500">{count?.toLocaleString() ?? '—'}</td>}
     </tr>

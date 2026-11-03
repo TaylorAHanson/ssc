@@ -35,7 +35,7 @@ next scheduled update.
    its `next_step`.
 2. Present each proposal's `report_markdown`: what changes, prerequisites added
    (e.g. `USE_CATALOG` / `USE_SCHEMA`), anything already in place or blocked,
-   and who approves (the type's approver group, or Platform Admins when none is
+   and who approves (the type's approver group, or Application Admins when none is
    set).
 3. **Mixed ask:** if there's more than one proposal, explain that it becomes one
    request per type, each approved by a different group, and that they're filed

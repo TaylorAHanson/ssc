@@ -10,13 +10,13 @@ from pydantic import BaseModel
 
 from app.db.session import get_db
 from app.db.odps import OdpsModel
-from app.api.deps import get_current_user, require_any_role
+from app.api.deps import ensure_capability, get_current_user, require_capability
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 # Data product documents are shared governance records, so saving is admin-only.
-_GOVERNANCE_ROLES = ["Platform Admin", "Governance Admin"]
+_GOVERNANCE_CAPABILITY = "governance.control_tower"
 
 class OdpsResponse(BaseModel):
     id: str
@@ -56,7 +56,7 @@ def get_odps_history(odps_id: str, db: Session = Depends(get_db)):
 def save_odps(
     odps: OdpsCreate,
     db: Session = Depends(get_db),
-    current_user = Depends(require_any_role(_GOVERNANCE_ROLES)),
+    current_user = Depends(require_capability(_GOVERNANCE_CAPABILITY)),
 ):
     """Save a new version of an ODPS document."""
     # Validate YAML
@@ -97,7 +97,7 @@ def save_odps(
 async def draft_odps(
     request: OdpsDraftRequest, 
     db: Session = Depends(get_db),
-    current_user = Depends(require_any_role(_GOVERNANCE_ROLES))
+    current_user = Depends(require_capability(_GOVERNANCE_CAPABILITY))
 ):
     """Draft a new ODPS document using LLM based on existing Data Contracts and optional OpenAPI spec."""
     from app.tools.governance.draft_odps import draft_odps_document
@@ -129,8 +129,7 @@ def delete_odps(
     db: Session = Depends(get_db)
 ):
     """Delete all versions of an ODPS document."""
-    if not current_user.has_role("platform_admin") and not current_user.has_role("governance_admin"):
-        raise HTTPException(status_code=403, detail="Not authorized to delete ODPS documents")
+    ensure_capability(current_user, _GOVERNANCE_CAPABILITY)
         
     docs = db.query(OdpsModel).filter(OdpsModel.id == odps_id).all()
     

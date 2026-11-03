@@ -23,7 +23,8 @@ import {
 } from './staging';
 import { EmptyState, ErrorBanner, Notice, Skeleton, Spinner, type ToastMessage } from './ui';
 import { useLoad } from './useLoad';
-import { SETTINGS_PATH, errorMessage, loadSheets, plural } from './utils';
+import { SETTINGS_PATH, loadSheets, plural } from './utils';
+import { errorMessage } from '../../lib/errors';
 
 const RULES_PAGE = 5000;
 
@@ -136,7 +137,7 @@ export function RulesTab({ permissions, sheetName, onSheetChange, staged, setSta
         {permissions.can_import ? (
           <Button size="sm" className="mt-3" onClick={onGoToImport}>Go to Import</Button>
         ) : (
-          <p className="mt-1">A Platform Admin runs it from the Import tab.</p>
+          <p className="mt-1">A Governance Admin runs it from the Import tab.</p>
         )}
       </EmptyState>
     );
@@ -163,8 +164,8 @@ export function RulesTab({ permissions, sheetName, onSheetChange, staged, setSta
       {sheet && !sheet.editable && (
         <Notice kind="info">
           View only. Rows on this sheet are edited by{' '}
-          {plane?.approver_group ? <code>{plane.approver_group}</code> : 'Platform Admins (no approver group is set)'}
-          {plane?.approver_group ? ' and by Platform Admins' : ''}.
+          {plane?.approver_group ? <code>{plane.approver_group}</code> : 'Governance Admins (no approver group is set)'}
+          {plane?.approver_group ? ' and by Governance Admins' : ''}.
         </Notice>
       )}
       {rulesState.error ? (

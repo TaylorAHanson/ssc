@@ -393,6 +393,63 @@ async def test_check_resource_access_runs_as_user_on_home_workspace():
     assert mock_sql.call_args.args[0] == "SHOW GRANTS ON CATALOG main"
 
 
+@pytest.mark.parametrize("name, resource_type, expected_sql", [
+    ("main.sales", None, "SHOW GRANTS ON SCHEMA main.sales"),
+    ("main.sales.orders", None, "SHOW GRANTS ON TABLE main.sales.orders"),
+    ("main.sales.raw_files", "VOLUME", "SHOW GRANTS ON VOLUME main.sales.raw_files"),
+    ("main.sales.mask_email", "FUNCTION", "SHOW GRANTS ON FUNCTION main.sales.mask_email"),
+    ("main.ml.churn", "MODEL", "SHOW GRANTS ON MODEL main.ml.churn"),
+])
+@pytest.mark.asyncio
+async def test_check_resource_access_covers_every_securable_type(name, resource_type, expected_sql):
+    provider = MagicMock()
+    provider.execute_sql = AsyncMock(return_value={"rows": []})
+    with patch("app.tools.check_resource_access.get_uc_provider", return_value=provider):
+        res = await check_resource_access.execute(
+            resource_name=name, resource_type=resource_type, _obo_token="user-token",
+        )
+
+    assert res["success"] is True
+    assert res["resource_type"] == expected_sql.split()[3]
+    assert provider.execute_sql.call_args.args[0] == expected_sql
+    assert provider.execute_sql.call_args.kwargs["require_obo"] is True
+
+
+@pytest.mark.parametrize("name, resource_type", [
+    ("main.sales", "TABLE"),
+    ("main", "SCHEMA"),
+    ("a.b.c.d", None),
+])
+@pytest.mark.asyncio
+async def test_check_resource_access_rejects_a_name_that_does_not_fit_the_type(name, resource_type):
+    provider = MagicMock()
+    provider.execute_sql = AsyncMock()
+    with patch("app.tools.check_resource_access.get_uc_provider", return_value=provider):
+        res = await check_resource_access.execute(
+            resource_name=name, resource_type=resource_type, _obo_token="user-token",
+        )
+
+    assert res["success"] is False
+    assert res["error"] == "invalid_resource_name"
+    provider.execute_sql.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_check_resource_access_marks_privileges_inherited_from_a_parent():
+    provider = MagicMock()
+    provider.execute_sql = AsyncMock(return_value={"rows": [
+        {"Principal": "analysts", "ActionType": "SELECT", "ObjectType": "TABLE", "ObjectKey": "main.sales.orders"},
+        {"Principal": "analysts", "ActionType": "USE CATALOG", "ObjectType": "CATALOG", "ObjectKey": "main"},
+    ]})
+    with patch("app.tools.check_resource_access.get_uc_provider", return_value=provider):
+        res = await check_resource_access.execute(
+            resource_name="main.sales.orders", principal="Analysts", _obo_token="user-token",
+        )
+
+    assert res["principal_privileges"] == ["SELECT", "USE CATALOG"]
+    assert res["inherited_from"] == {"USE CATALOG": "CATALOG main"}
+
+
 @pytest.mark.asyncio
 async def test_terramate_poll_status_reaches_terminal():
     with patch("app.providers.terramate.client.TerramateProvider.get_request", new_callable=AsyncMock) as mock_get:

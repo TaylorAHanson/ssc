@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-_WRITE_ROLES = ["Platform Admin", "Governance Admin"]
+_WRITE_CAPABILITY = "context_catalog.manage"
 
 
 def _require_feature() -> None:
@@ -143,7 +143,7 @@ def create_domain(
     *,
     db: Session = Depends(deps.get_db),
     body: DomainCreate,
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
     __: None = Depends(_require_direct_editing),
 ) -> Any:
@@ -179,7 +179,7 @@ def update_domain(
     domain_id: str,
     db: Session = Depends(deps.get_db),
     body: DomainUpdate,
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
     __: None = Depends(_require_direct_editing),
 ) -> Any:
@@ -196,7 +196,7 @@ def delete_domain(
     *,
     domain_id: str,
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
     __: None = Depends(_require_direct_editing),
 ) -> Any:
@@ -218,7 +218,7 @@ def create_document(
     domain_id: str,
     db: Session = Depends(deps.get_db),
     body: DocumentCreate,
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
     __: None = Depends(_require_direct_editing),
 ) -> Any:
@@ -249,7 +249,7 @@ async def upload_document(
     file: UploadFile = File(...),
     title: Optional[str] = Form(default=None),
     status: str = Form(default="published"),
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
     __: None = Depends(_require_direct_editing),
 ) -> Any:
@@ -314,7 +314,7 @@ def update_document(
     document_id: str,
     db: Session = Depends(deps.get_db),
     body: DocumentUpdate,
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
     __: None = Depends(_require_direct_editing),
 ) -> Any:
@@ -334,7 +334,7 @@ def delete_document(
     *,
     document_id: str,
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
     __: None = Depends(_require_direct_editing),
 ) -> Any:
@@ -373,7 +373,7 @@ def export_context_bundle(
     domain_ids: Optional[str] = None,
     published_only: bool = False,
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
 ) -> Any:
     """Export domains + documents as a portable, env-agnostic JSON bundle.
@@ -392,7 +392,7 @@ def import_context_bundle(
     *,
     body: ContextImportRequest,
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
     __: None = Depends(_require_direct_editing),
 ) -> Any:

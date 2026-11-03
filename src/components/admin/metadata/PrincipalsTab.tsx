@@ -6,7 +6,8 @@ import { Button } from '../../ui/button';
 import { Badge, CopyButton, EmptyState, ErrorBanner, Modal, Notice, Skeleton } from '../../rbac/ui';
 import { ConnectHelp } from './ConnectHelp';
 import { useMetadata } from './context';
-import { OPERATION_LABELS, errorMessage, formatTime, relativeTime } from './format';
+import { OPERATION_LABELS, formatTime, relativeTime } from './format';
+import { errorMessage } from '../../../lib/errors';
 import { PrincipalForm } from './PrincipalForm';
 import { useAsync } from './useAsync';
 

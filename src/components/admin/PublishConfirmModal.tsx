@@ -22,6 +22,7 @@ import type {
   WorkflowTestHealth,
   WorkflowTool,
 } from '../../services/api';
+import { errorMessage } from '../../lib/errors';
 
 interface Props {
   workflow: Workflow;
@@ -32,7 +33,7 @@ interface Props {
 }
 
 /** Confirmation shown before a draft workflow goes live. Validates the graph (if any)
- *  and summarizes the "blast radius" so a platform admin sees exactly what they're
+ *  and summarizes the "blast radius" so an admin sees exactly what they're
  *  turning on: gates, steps, mutating actions, and the request-type binding. */
 export function PublishConfirmModal({ workflow, graphSpec, tools, onConfirm, onClose }: Props) {
   const [validating, setValidating] = useState(!!graphSpec);
@@ -135,7 +136,7 @@ export function PublishConfirmModal({ workflow, graphSpec, tools, onConfirm, onC
       .catch((e) => {
         if (cancelled) return;
         setValid(false);
-        setValidationError(e instanceof Error ? e.message : 'Invalid workflow');
+        setValidationError(errorMessage(e, 'Invalid workflow'));
       })
       .finally(() => !cancelled && setValidating(false));
     return () => {

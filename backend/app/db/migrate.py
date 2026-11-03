@@ -14,10 +14,12 @@ the exception: it runs *after* ``create_all``, since it needs the tables to exis
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 
-from sqlalchemy import inspect, text
+from sqlalchemy import JSON, String, column, inspect, select, text, update
+from sqlalchemy import table as sa_table
 from sqlalchemy.engine import Engine
 
 logger = logging.getLogger(__name__)
@@ -229,6 +231,178 @@ def _add_context_document_review_columns(engine: Engine) -> None:
             ))
 
 
+# --- Platform Admin -> Application Admin role rename -------------------------
+
+_OLD_ROLE = "Platform Admin"
+_NEW_ROLE = "Application Admin"
+_SUPER_ROLE = "Super Admin"
+
+# Registry rows seeded before the rename that the old role reached only through its
+# implicit pass on every role check. Keyed by tool name: (seeded roles, roles now).
+# test_role_rename_migration checks these against the tools' declared capabilities.
+_AUTHORING_TOOLS = (
+    "list_workflow_building_blocks", "search_similar_workflows", "research_workflow_context",
+    "get_workflow", "validate_workflow_spec", "preview_workflow_spec", "evaluate_workflow_spec",
+    "save_workflow_draft", "save_workflow_tests", "list_workflow_tests", "run_workflow_tests",
+    "publish_workflow",
+)
+_PROBE_TOOLS = ("lmws_probe_config", "lmws_probe_read", "lmws_probe_membership_add")
+_LEGACY_TOOL_ROLE_UPGRADES: dict[str, tuple[list[str], list[str]]] = {
+    **{name: (["Governance Admin"], [_NEW_ROLE, "Governance Admin"]) for name in _AUTHORING_TOOLS},
+    **{name: ([_NEW_ROLE], [_NEW_ROLE, "Ops Admin"]) for name in _PROBE_TOOLS},
+}
+
+
+def _is_old_role(value: object) -> bool:
+    return isinstance(value, str) and " ".join(value.replace("_", " ").split()).lower() == "platform admin"
+
+
+def _rename_in_value(value: object) -> tuple[object, int]:
+    """Replace the old role name anywhere in a JSON value; lists are de-duplicated."""
+    if _is_old_role(value):
+        return _NEW_ROLE, 1
+    if isinstance(value, list):
+        renamed = [_rename_in_value(item) for item in value]
+        count = sum(n for _, n in renamed)
+        if not count:
+            return value, 0
+        out: list = []
+        for new, _ in renamed:
+            if isinstance(new, str) and new in out:
+                continue
+            out.append(new)
+        return out, count
+    if isinstance(value, dict):
+        out_d: dict = {}
+        count = 0
+        for key, item in value.items():
+            out_d[key], n = _rename_in_value(item)
+            count += n
+        return (out_d, count) if count else (value, 0)
+    return value, 0
+
+
+def _json_value(value: object) -> object:
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except ValueError:
+            return value
+    return value
+
+
+def rename_platform_admin_role(engine: Engine) -> dict[str, int]:
+    """Rename the stored role 'Platform Admin' to 'Application Admin'. Safe on every boot.
+
+    * ``role_mappings``: each Platform Admin row becomes Application Admin, and the
+      same identity gets a Super Admin row too (the old role passed every check,
+      which only Super Admin does now).
+    * ``tool_registry.allowed_roles``: the name is replaced and the list de-duplicated.
+      On the boot that renames, rows still holding exactly their old seed are
+      widened to the new defaults (``_LEGACY_TOOL_ROLE_UPGRADES``).
+    * ``app_settings``: role lists in persisted overrides (viewer and editor roles,
+      embedded apps' allowed personas, ...) get the new name.
+    """
+    counts = {"role_mappings": 0, "super_admin_rows": 0, "tool_registry": 0,
+              "tool_registry_widened": 0, "settings": 0}
+    tables = set(inspect(engine).get_table_names())
+    with engine.begin() as conn:
+        if "role_mappings" in tables:
+            rows = conn.execute(text("SELECT id, external_role, internal_role FROM role_mappings")).all()
+            supers = {r.external_role for r in rows if r.internal_role == _SUPER_ROLE}
+            for row in rows:
+                if not _is_old_role(row.internal_role):
+                    continue
+                conn.execute(text("UPDATE role_mappings SET internal_role = :role WHERE id = :id"),
+                             {"role": _NEW_ROLE, "id": row.id})
+                counts["role_mappings"] += 1
+                if row.external_role not in supers:
+                    conn.execute(text("INSERT INTO role_mappings (external_role, internal_role) "
+                                      "VALUES (:ext, :role)"), {"ext": row.external_role, "role": _SUPER_ROLE})
+                    supers.add(row.external_role)
+                    counts["super_admin_rows"] += 1
+
+        if "tool_registry" in tables:
+            registry = sa_table("tool_registry", column("id", String), column("tool_name", String),
+                             column("allowed_roles", JSON))
+            for row in conn.execute(select(registry.c.id, registry.c.tool_name, registry.c.allowed_roles)).all():
+                roles = _json_value(row.allowed_roles)
+                if not isinstance(roles, list):
+                    continue
+                new_roles, n = _rename_in_value(roles)
+                upgrade = _LEGACY_TOOL_ROLE_UPGRADES.get(row.tool_name)
+                if counts["role_mappings"] and upgrade and new_roles == upgrade[0]:
+                    new_roles = list(upgrade[1])
+                    counts["tool_registry_widened"] += 1
+                elif not n:
+                    continue
+                conn.execute(update(registry).where(registry.c.id == row.id).values(allowed_roles=new_roles))
+                counts["tool_registry"] += 1
+
+        if "app_settings" in tables:
+            store = sa_table("app_settings", column("key", String), column("value", JSON))
+            for row in conn.execute(select(store.c.key, store.c.value)).all():
+                new_value, n = _rename_in_value(_json_value(row.value))
+                if n:
+                    conn.execute(update(store).where(store.c.key == row.key).values(value=new_value))
+                    counts["settings"] += 1
+
+    if any(counts.values()):
+        logger.info(
+            "Migration: renamed Platform Admin to Application Admin in %d role mapping(s) "
+            "(+%d Super Admin), %d tool registry row(s) (%d widened to the new defaults) "
+            "and %d setting(s)",
+            counts["role_mappings"], counts["super_admin_rows"], counts["tool_registry"],
+            counts["tool_registry_widened"], counts["settings"],
+        )
+    return counts
+
+
+# --- Retired chat tools --------------------------------------------------------
+
+# Chat tools removed from the code. Fixed-shape system-table reads that Databricks
+# Genie Code answers better as the same user; check_object_permissions was merged into
+# check_resource_access. Their registry rows are deleted so the Tool Registry page and
+# the agent never offer them.
+RETIRED_TOOL_NAMES: tuple[str, ...] = (
+    "get_cost_summary",
+    "get_forecasted_spend",
+    "get_resource_efficiency_metrics",
+    "check_tagging_compliance",
+    "search_audit_logs",
+    "audit_user_access",
+    "check_overprovisioned_users",
+    "check_orphaned_assets",
+    "check_asset_quality",
+    "check_object_permissions",
+)
+
+
+def delete_retired_tool_rows(engine: Engine) -> int:
+    """Delete code-defined registry rows for ``RETIRED_TOOL_NAMES``. Safe on every boot.
+
+    Only local and workflow rows go: an MCP server's tool that happens to share a
+    name belongs to that server and is kept.
+    """
+    if "tool_registry" not in set(inspect(engine).get_table_names()):
+        return 0
+    registry = sa_table("tool_registry", column("tool_name", String), column("origin", String))
+    with engine.begin() as conn:
+        result = conn.execute(
+            registry.delete().where(
+                registry.c.tool_name.in_(RETIRED_TOOL_NAMES),
+                registry.c.origin.in_(("local", "workflow")),
+            )
+        )
+    deleted = result.rowcount or 0
+    if deleted:
+        logger.info(
+            "Migration: deleted %d tool registry row(s) for retired chat tools", deleted,
+            extra={"data": {"retired_tools": list(RETIRED_TOOL_NAMES)}},
+        )
+    return deleted
+
+
 def run_startup_migrations(engine: Engine) -> None:
     """Apply in-place schema renames. Safe to call on every startup."""
     try:
@@ -347,6 +521,14 @@ def run_startup_migrations(engine: Engine) -> None:
         _prune_orphaned_workflow_children(engine)
     except Exception as e:  # noqa: BLE001 - never block startup on a migration
         logger.warning("Startup migration step failed (continuing): %s", e)
+    try:
+        rename_platform_admin_role(engine)
+    except Exception as e:  # noqa: BLE001 - never block startup on a migration
+        logger.warning("Role rename migration failed (continuing): %s", e)
+    try:
+        delete_retired_tool_rows(engine)
+    except Exception as e:  # noqa: BLE001 - never block startup on a migration
+        logger.warning("Retired tool cleanup failed (continuing): %s", e)
 
 
 # --- Lakebase Change Data Feed readiness ------------------------------------

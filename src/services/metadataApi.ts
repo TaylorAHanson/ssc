@@ -9,6 +9,8 @@ import type {
   ChangeSetPage,
   ChangeSource,
   DatasetSummary,
+  DescribeRequest,
+  DescribeResult,
   ImportRequest,
   KeyInfo,
   MetadataConfig,
@@ -163,6 +165,11 @@ export async function listDatasets(): Promise<DatasetSummary[]> {
   return call('/datasets');
 }
 
+/** POST /describe: AI-drafted descriptions to stage for review. Writes nothing. */
+export async function describeObject(request: DescribeRequest): Promise<DescribeResult> {
+  return post('/describe', request);
+}
+
 // --- Changes ----------------------------------------------------------------------------
 
 /** POST /changes/preview */
@@ -297,6 +304,7 @@ export const metadataApi = {
   searchObjects,
   getObject,
   listKeys,
+  describeObject,
   previewChange,
   submitChange,
   previewPromote,

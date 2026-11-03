@@ -1,7 +1,9 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
+import { ROLE_PRIORITY } from '../types';
 import type { User, RoleMapping, UserPersona } from '../types';
 import { userService } from '../services/userService';
+import { errorMessage } from '../lib/errors';
 
 interface UserState {
     currentUser: User | null;
@@ -32,14 +34,40 @@ interface UserState {
     setDefaultHomePage: (val: string) => void;
 }
 
+/** The old name of Application Admin, still accepted from saved dev-mode picks. */
+const LEGACY_PLATFORM_ADMIN = 'Platform Admin';
+
+/** For display only (highest role); gate features with `can` / `hasCapability`. */
 const derivePersona = (user: User | null): UserPersona => {
     if (!user) return 'User';
-    if (user.roles.includes('Platform Admin')) return 'Platform Admin';
-    if (user.roles.includes('Governance Admin')) return 'Governance Admin';
-    if (user.roles.includes('Security Admin')) return 'Security Admin';
-    if (user.roles.includes('Finance Admin')) return 'Finance Admin';
-    return 'User';
+    const roles = user.roles.map((r) => (r === LEGACY_PLATFORM_ADMIN ? 'Application Admin' : r));
+    return ROLE_PRIORITY.find((role) => role !== 'User' && roles.includes(role)) ?? 'User';
 };
+
+/** Whether the user holds any of the given capability ids (from GET /roles/me). */
+export const hasCapability = (user: User | null, ...capabilityIds: string[]): boolean =>
+    !!user?.capabilities && capabilityIds.some((id) => user.capabilities!.includes(id));
+
+/** Folds a role name for comparison; the old name Platform Admin reads as Application Admin. */
+const foldRole = (role: string): string => {
+    const folded = role.replace(/_/g, ' ').trim().replace(/\s+/g, ' ').toLowerCase();
+    return folded === 'platform admin' ? 'application admin' : folded;
+};
+
+/**
+ * Whether the user holds one of `allowed` (role names from settings, e.g. an embedded
+ * app's allowed personas). Super Admin passes any role check.
+ */
+export const matchesRoles = (user: User | null, allowed: string[]): boolean => {
+    if (!user) return false;
+    const mine = new Set(user.roles.map(foldRole));
+    if (mine.has('super admin')) return true;
+    return allowed.some((role) => mine.has(foldRole(role)));
+};
+
+/** Hook: whether the current user holds any of the given capabilities. */
+export const useCan = (...capabilityIds: string[]): boolean =>
+    useUserStore((s) => hasCapability(s.currentUser, ...capabilityIds));
 
 export const useUserStore = create<UserState>()(
     persist(
@@ -64,9 +92,9 @@ export const useUserStore = create<UserState>()(
                 const nextIsDevMode = !get().isDevMode;
                 let nextRoleOverride = get().activeRoleOverride;
 
-                // Auto-select Platform Admin if enabling dev mode and no override selected
+                // Auto-select Super Admin if enabling dev mode and no override selected
                 if (nextIsDevMode && !nextRoleOverride) {
-                    nextRoleOverride = 'Platform Admin';
+                    nextRoleOverride = 'Super Admin';
                 }
 
                 set({ isDevMode: nextIsDevMode, activeRoleOverride: nextRoleOverride });
@@ -92,10 +120,7 @@ export const useUserStore = create<UserState>()(
             fetchCurrentUser: async () => {
                 try {
                     // Don't fetch until store is hydrated from localStorage
-                    if (!get().hydrated) {
-                        console.log('[userStore] Skipping fetch: not yet hydrated');
-                        return;
-                    }
+                    if (!get().hydrated) return;
 
                     set({ isLoading: true, error: null });
                     const { activeRoleOverride, isDevMode } = get();
@@ -110,20 +135,21 @@ export const useUserStore = create<UserState>()(
                         isInitialized: true,
                         error: null
                     });
-                } catch (error: any) {
+                } catch (error) {
+                    const message = errorMessage(error, 'Failed to load the current user');
                     const isDefinitiveError =
-                        error.message.includes('401') ||
-                        error.message.includes('404') ||
-                        error.message.includes('Unauthorized');
+                        message.includes('401') ||
+                        message.includes('404') ||
+                        message.includes('Unauthorized');
 
                     set({
-                        error: error.message,
+                        error: message,
                         isLoading: false,
                         isInitialized: isDefinitiveError
                     });
 
                     // Log the error for debugging reset issues
-                    console.error('[userStore] Fetch current user failed:', error.message);
+                    console.error('[userStore] Fetch current user failed:', message);
                 }
             },
 
@@ -132,8 +158,8 @@ export const useUserStore = create<UserState>()(
                     set({ isLoading: true, error: null });
                     const roleMappings = await userService.getRoleMappings();
                     set({ roleMappings, isLoading: false });
-                } catch (error: any) {
-                    set({ error: error.message, isLoading: false });
+                } catch (error) {
+                    set({ error: errorMessage(error, 'Failed to load role mappings'), isLoading: false });
                 }
             },
 
@@ -142,8 +168,8 @@ export const useUserStore = create<UserState>()(
                     set({ isLoading: true, error: null });
                     await userService.createRoleMapping(externalRole, internalRole);
                     await get().fetchRoleMappings();
-                } catch (error: any) {
-                    set({ error: error.message, isLoading: false });
+                } catch (error) {
+                    set({ error: errorMessage(error, 'Failed to save the role mapping'), isLoading: false });
                     throw error;
                 }
             },
@@ -153,8 +179,8 @@ export const useUserStore = create<UserState>()(
                     set({ isLoading: true, error: null });
                     await userService.updateRoleMapping(id, externalRole, internalRole);
                     await get().fetchRoleMappings();
-                } catch (error: any) {
-                    set({ error: error.message, isLoading: false });
+                } catch (error) {
+                    set({ error: errorMessage(error, 'Failed to save the role mapping'), isLoading: false });
                     throw error;
                 }
             },
@@ -164,8 +190,8 @@ export const useUserStore = create<UserState>()(
                     set({ isLoading: true, error: null });
                     await userService.deleteRoleMapping(id);
                     await get().fetchRoleMappings();
-                } catch (error: any) {
-                    set({ error: error.message, isLoading: false });
+                } catch (error) {
+                    set({ error: errorMessage(error, 'Failed to save the role mapping'), isLoading: false });
                     throw error;
                 }
             }
@@ -182,6 +208,11 @@ export const useUserStore = create<UserState>()(
                 // Migrate legacy `/home` preference to the new `/request` path.
                 if (state?.defaultHomePage === '/home') {
                     state.setDefaultHomePage('/request');
+                }
+                // The old role name: it passed every check, as Super Admin does now.
+                if (state?.activeRoleOverride === LEGACY_PLATFORM_ADMIN) {
+                    // Not hydrated yet, so this only stores the pick (no fetch).
+                    void state.setRoleOverride('Super Admin');
                 }
                 state?.setHydrated(true);
             },

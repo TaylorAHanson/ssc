@@ -2,7 +2,7 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } f
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { AlertCircle, Calendar, CheckCircle2, ListChecks, Loader2, RefreshCw, Search, X } from 'lucide-react';
 import { useRequestStore } from '../stores/requestStore';
-import { useUserStore } from '../stores/userStore';
+import { useCan, useUserStore } from '../stores/userStore';
 import { useBrandingStore } from '../stores/brandingStore';
 import { GUIDE_APPROVALS, GUIDE_REQUESTS, useGuideEnabled } from '../lib/guide';
 import { useVisibleInterval } from '../hooks/useVisibleInterval';
@@ -30,8 +30,10 @@ const PAGE_SIZE = 100;
 
 // Roles that approve something. Group-based approvers (no role) still get the
 // tab as soon as anything is assigned to them.
+// 'platform_admin' is the old name of application_admin.
 const APPROVER_ROLES = new Set([
-  'platform_admin', 'data_owner', 'manager', 'governance_admin', 'security_admin', 'finance_admin', 'security',
+  'super_admin', 'application_admin', 'platform_admin', 'data_owner', 'manager', 'governance_admin',
+  'security_admin', 'finance_admin', 'security',
 ]);
 
 const APPROVAL_STATUS_OPTIONS: { value: ApprovalStatusFilter; label: string }[] = [
@@ -54,7 +56,7 @@ const ts = (iso: string) => parseUtcDate(iso).getTime();
 /**
  * Requests and approvals on one page. The URL picks the tab, so existing links
  * keep working: `/approvals` is the approver's queue, `/requests` the caller's
- * own requests, `/requests?view=all` every request (Platform Admins), and
+ * own requests, `/requests?view=all` every request (for `requests.view_all`), and
  * `/requests/:id` opens one request over the list.
  */
 export function Requests() {
@@ -78,11 +80,12 @@ export function Requests() {
     () => currentUser?.roles.map((r) => r.toLowerCase().replace(/\s+/g, '_')) ?? [],
     [currentUser],
   );
-  const isPlatformAdmin = userRoles.includes('platform_admin');
+  const seesAllRequests = useCan('requests.view_all');
+  const canEditParameters = useCan('requests.edit_parameters');
 
   const view: View = location.pathname.startsWith('/approvals')
     ? 'approvals'
-    : isPlatformAdmin && searchParams.get('view') === 'all' ? 'all' : 'mine';
+    : seesAllRequests && searchParams.get('view') === 'all' ? 'all' : 'mine';
 
   // --- Data ------------------------------------------------------------------
   const [requestsLoaded, setRequestsLoaded] = useState(false);
@@ -99,17 +102,17 @@ export function Requests() {
     };
   }, [fetchRequests, fetchApprovals]);
 
-  // A Platform Admin's main list is everyone's (and capped), so their own
+  // With requests.view_all the main list is everyone's (and capped), so their own
   // requests are fetched on their own; for anyone else the main list is theirs.
   const [ownRequests, setOwnRequests] = useState<Request[] | null>(null);
   const fetchOwnRequests = useCallback(async () => {
-    if (!isPlatformAdmin) return;
+    if (!seesAllRequests) return;
     try {
       setOwnRequests(await api.getRequests({ mine: true }));
     } catch {
       setOwnRequests((prev) => prev ?? []);
     }
-  }, [isPlatformAdmin]);
+  }, [seesAllRequests]);
   useEffect(() => {
     void fetchOwnRequests();
   }, [fetchOwnRequests]);
@@ -126,7 +129,7 @@ export function Requests() {
   }, [loadDelegations]);
 
   // Poll the list on screen to catch state transitions (paused while the tab is hidden).
-  useVisibleInterval(view === 'mine' && isPlatformAdmin ? fetchOwnRequests : fetchRequests, 10000, view !== 'approvals');
+  useVisibleInterval(view === 'mine' && seesAllRequests ? fetchOwnRequests : fetchRequests, 10000, view !== 'approvals');
   useVisibleInterval(fetchApprovals, 30000, view === 'approvals');
 
   const refresh = async () => {
@@ -147,8 +150,8 @@ export function Requests() {
     userRoles.some((r) => APPROVER_ROLES.has(r));
   const pendingTotal = approvals.filter((a) => a.status === 'pending').length;
   const myRequests = useMemo(
-    () => (isPlatformAdmin ? ownRequests ?? [] : requests),
-    [requests, isPlatformAdmin, ownRequests],
+    () => (seesAllRequests ? ownRequests ?? [] : requests),
+    [requests, seesAllRequests, ownRequests],
   );
   const myActive = myRequests.filter(isRequestActive).length;
   const tabs = [
@@ -163,7 +166,7 @@ export function Requests() {
       id: 'all' as const,
       label: 'All requests',
       count: null,
-      show: isPlatformAdmin && (uiTabs?.my_requests !== false || view === 'all'),
+      show: seesAllRequests && (uiTabs?.my_requests !== false || view === 'all'),
     },
   ].filter((t) => t.show);
 
@@ -348,14 +351,14 @@ export function Requests() {
     setIsDeleting(id);
     try {
       await deleteRequest(id);
-      if (isPlatformAdmin) setOwnRequests((prev) => prev?.filter((r) => r.id !== id) ?? prev);
+      if (seesAllRequests) setOwnRequests((prev) => prev?.filter((r) => r.id !== id) ?? prev);
     } finally {
       setIsDeleting(null);
     }
   };
 
   // Details from an approval row. An approver who isn't the requester (or a
-  // Platform Admin) can't open the request itself, so say so instead of
+  // someone who sees every request) can't open the request itself, so say so instead of
   // silently doing nothing.
   // The store's list is polled by the details view, so prefer it for live updates.
   const findKnown = (id: string) => requests.find((r) => r.id === id) ?? ownRequests?.find((r) => r.id === id);
@@ -373,7 +376,7 @@ export function Requests() {
       setExpanded((prev) => new Set(prev).add(a.id));
       setDetailsError({
         key: a.id,
-        message: "Only the requester and platform admins can open this request's full history; its parameters and reports are shown here.",
+        message: "Only the requester and admins who can see every request can open its full history; its parameters and reports are shown here.",
       });
     }
   };
@@ -383,7 +386,7 @@ export function Requests() {
   // request may not be in it; fetch that one directly.
   const listedLinked = requestId ? findKnown(requestId) : undefined;
   const [linkedRequest, setLinkedRequest] = useState<{ id: string; request: Request | null } | null>(null);
-  const needsLookup = !!requestId && requestsLoaded && (!isPlatformAdmin || ownRequests !== null) && !listedLinked;
+  const needsLookup = !!requestId && requestsLoaded && (!seesAllRequests || ownRequests !== null) && !listedLinked;
   useEffect(() => {
     if (!needsLookup || !requestId) return;
     let mounted = true;
@@ -402,7 +405,7 @@ export function Requests() {
 
   // --- Render ----------------------------------------------------------------
   const loaded = view === 'approvals' ? approvalsLoaded
-    : view === 'mine' && isPlatformAdmin ? ownRequests !== null
+    : view === 'mine' && seesAllRequests ? ownRequests !== null
       : requestsLoaded;
   const noun = view === 'approvals' ? 'approvals' : 'requests';
   const colSpan = view === 'approvals' ? 7 : view === 'all' ? 7 : 6;
@@ -711,7 +714,7 @@ export function Requests() {
                   onToggleSelect={() => toggleSelected(approval.id)}
                   onAction={(action) => setDialog({ approval, action })}
                   onViewDetails={() => void openApprovalDetails(approval)}
-                  canEdit={isPlatformAdmin && !!approval.canEditParameters}
+                  canEdit={canEditParameters && !!approval.canEditParameters}
                   detailsError={detailsError?.key === key ? detailsError.message : null}
                 />
               ))

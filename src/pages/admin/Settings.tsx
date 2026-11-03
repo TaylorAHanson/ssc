@@ -35,6 +35,7 @@ import { LegacyDashboards } from './LegacyDashboards';
 import { TrainingUpload } from '../../components/admin/TrainingUpload';
 import { StringListField, CommunityLinksEditor, EmbeddedAppsEditor } from './catalogEditors';
 import { LEGACY_DASHBOARDS_GROUP, TRAINING_GROUP } from './settingsGroups';
+import { errorMessage } from '../../lib/errors';
 
 // Pages rendered by the client rather than from the generic field list. The
 // backend's `sections` names them; these must match settings_store.py.
@@ -85,7 +86,7 @@ export const Settings = () => {
       setState(s);
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load settings');
+      setError(errorMessage(e, 'Failed to load settings'));
     } finally {
       setIsLoading(false);
     }
@@ -200,7 +201,7 @@ export const Settings = () => {
       setMessage({ type: 'success', text: 'Settings saved. Changes are live.' });
       setTimeout(() => setMessage(null), 4000);
     } catch (e) {
-      setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Failed to save settings' });
+      setMessage({ type: 'error', text: errorMessage(e, 'Failed to save settings') });
     } finally {
       setIsSaving(false);
     }

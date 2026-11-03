@@ -4,13 +4,19 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../..
 import { Search, AlertCircle, FileCheck, CheckCircle2, Edit, X, Save, History, Loader2, Info, ChevronUp, ChevronDown, ChevronRight, Filter, Trash2, RefreshCw, Download } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { api } from '../../services/api';
-import type { DataContract } from '../../services/api';
+import type { DataContract, DataQuality } from '../../services/api';
 import { DatasetCertificationDrawer } from '../../components/admin/DatasetCertificationDrawer';
 import type { DrawerTab } from '../../components/admin/DatasetCertificationDrawer';
 import { format } from 'date-fns';
 import { formatPacific, parseUtc } from '../../lib/certificationDates';
 import Editor from '@monaco-editor/react';
 import yaml from 'js-yaml';
+import { errorMessage } from '../../lib/errors';
+import { parseContractYaml } from '../../types/odcs';
+
+const dataQualityOf = (contract: DataContract): DataQuality => contract.data_quality || {};
+
+type StatusFilter = 'all' | 'certified' | 'uncertified' | 'awaiting';
 
 export function DataCertification() {
   const [datasets, setDatasets] = useState<DataContract[]>([]);
@@ -18,7 +24,7 @@ export function DataCertification() {
   const [searchTerm, setSearchTerm] = useState('');
   const [sortField, setSortField] = useState<'name' | 'reliability' | 'lastRun' | 'created'>('name');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'certified' | 'uncertified' | 'awaiting'>('all');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [isSyncingContracts, setIsSyncingContracts] = useState(false);
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
   const [isCheckingPolicy, setIsCheckingPolicy] = useState(false);
@@ -72,8 +78,9 @@ export function DataCertification() {
         if (requestId) {
           try {
             const request = await api.getRequest(requestId);
-            if (request && request.metadata && request.metadata.odcs_yaml) {
-              setYamlContent(request.metadata.odcs_yaml);
+            const odcsYaml = request?.metadata?.odcs_yaml;
+            if (typeof odcsYaml === 'string' && odcsYaml) {
+              setYamlContent(odcsYaml);
               return;
             }
           } catch (reqError) {
@@ -110,9 +117,9 @@ export function DataCertification() {
       await api.deleteDataContract(datasetId);
       if (detailDatasetId === datasetId) closeDetail();
       await reloadContracts();
-    } catch (e: any) {
+    } catch (e) {
       console.error('Failed to delete contract', e);
-      alert('Failed to delete contract: ' + e.message);
+      alert('Failed to delete contract: ' + errorMessage(e, 'unknown error'));
     }
   };
 
@@ -122,8 +129,8 @@ export function DataCertification() {
     try {
       yaml.load(val);
       setYamlError(null);
-    } catch (e: any) {
-      setYamlError(e.message);
+    } catch (e) {
+      setYamlError(errorMessage(e, 'Invalid YAML'));
     }
   };
 
@@ -133,7 +140,8 @@ export function DataCertification() {
     try {
       let datasetId = editingAsset?.dataset_id;
       if (!datasetId) {
-        const parsed = yaml.load(yamlContent) as any;
+        const parsed = parseContractYaml(yamlContent);
+        if (!parsed) throw new Error('The contract YAML must be a mapping of ODCS fields.');
         const servers = parsed.servers || [];
         const catalog = servers[0]?.catalog || 'main';
         const schema = servers[0]?.schema || 'default';
@@ -145,8 +153,8 @@ export function DataCertification() {
       await api.createDataContract(datasetId, yamlContent);
       setIsEditorOpen(false);
       await reloadContracts();
-    } catch (e: any) {
-      setYamlError(e.message || 'Failed to save data contract');
+    } catch (e) {
+      setYamlError(errorMessage(e, 'Failed to save data contract'));
     } finally {
       setIsSaving(false);
     }
@@ -160,9 +168,9 @@ export function DataCertification() {
       setSyncMessage({ type: 'success', text: `Policy Check Started: ${res.message || 'Success'}` });
       setTimeout(() => setSyncMessage(null), 5000);
       await reloadContracts();
-    } catch (e: any) {
+    } catch (e) {
       console.error(e);
-      setSyncMessage({ type: 'error', text: e.message || "Error checking policy." });
+      setSyncMessage({ type: 'error', text: errorMessage(e, "Error checking policy.") });
       setTimeout(() => setSyncMessage(null), 5000);
     } finally {
       setIsCheckingPolicy(false);
@@ -177,9 +185,9 @@ export function DataCertification() {
       setSyncMessage({ type: 'success', text: `Sync Complete: ${res.message}` });
       setTimeout(() => setSyncMessage(null), 5000);
       await reloadContracts();
-    } catch (e: any) {
+    } catch (e) {
       console.error(e);
-      setSyncMessage({ type: 'error', text: e.message || "Error syncing contracts." });
+      setSyncMessage({ type: 'error', text: errorMessage(e, "Error syncing contracts.") });
       setTimeout(() => setSyncMessage(null), 5000);
     } finally {
       setIsSyncingContracts(false);
@@ -191,9 +199,9 @@ export function DataCertification() {
     setSyncMessage(null);
     try {
       await api.downloadCertificationReport();
-    } catch (e: any) {
+    } catch (e) {
       console.error(e);
-      setSyncMessage({ type: 'error', text: e.message || 'Error generating report.' });
+      setSyncMessage({ type: 'error', text: errorMessage(e, 'Error generating report.') });
       setTimeout(() => setSyncMessage(null), 5000);
     } finally {
       setIsGeneratingReport(false);
@@ -235,7 +243,7 @@ export function DataCertification() {
   };
 
   const getStatus = (contract: DataContract) => {
-    const dq = contract.data_quality || {} as any;
+    const dq = dataQualityOf(contract);
     const rel = dq.failed_rule_count !== undefined ? dq.failed_rule_count : (dq.reliability !== undefined ? dq.reliability : 'N/A');
 
     // Certified is driven solely by the Unity Catalog certification status.
@@ -265,11 +273,11 @@ export function DataCertification() {
       return matchesSearch && getStatus(contract) === statusFilter;
     })
     .sort((a, b) => {
-      const dqA = a.data_quality || {} as any;
-      const dqB = b.data_quality || {} as any;
+      const dqA = dataQualityOf(a);
+      const dqB = dataQualityOf(b);
       
-      let valA: any = (a.table_name || a.dataset_id || '').toLowerCase();
-      let valB: any = (b.table_name || b.dataset_id || '').toLowerCase();
+      let valA: string | number = (a.table_name || a.dataset_id || '').toLowerCase();
+      let valB: string | number = (b.table_name || b.dataset_id || '').toLowerCase();
       
       if (sortField === 'reliability') {
         valA = dqA.failed_rule_count !== undefined ? dqA.failed_rule_count : (dqA.reliability !== undefined && dqA.reliability !== 'N/A' ? Number(dqA.reliability) : -1);
@@ -323,7 +331,7 @@ export function DataCertification() {
                   <Filter className="w-4 h-4 text-gray-500 mr-2" />
                   <select 
                     value={statusFilter}
-                    onChange={(e) => setStatusFilter(e.target.value as any)}
+                    onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
                     className="bg-transparent border-none outline-none focus:ring-0 text-gray-700 w-40"
                   >
                     <option value="all">All Statuses</option>
@@ -421,7 +429,7 @@ export function DataCertification() {
                   </tr>
                 ) : (
                   processedDatasets.map(contract => {
-                    const dq = contract.data_quality || {} as any;
+                    const dq = dataQualityOf(contract);
 
                     // Authoritative per-rule checklist (all categories) from the last
                     // policy run — the same rows the Sentinel report renders. The failed

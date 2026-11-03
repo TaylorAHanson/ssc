@@ -1,8 +1,9 @@
-import { Lock, X } from 'lucide-react';
+import { Lock, ShieldCheck, X } from 'lucide-react';
 import type { Tags } from '../../../types/metadata';
 import { cn } from '../../../lib/utils';
+import { REQUIRED_TAG_TITLE } from './format';
 
-export type ChipTone = 'default' | 'added' | 'removed' | 'changed' | 'exempt' | 'muted';
+export type ChipTone = 'default' | 'added' | 'removed' | 'changed' | 'exempt' | 'muted' | 'required';
 
 const CHIP_TONES: Record<ChipTone, string> = {
   default: 'border-gray-200 bg-white text-gray-700',
@@ -11,23 +12,28 @@ const CHIP_TONES: Record<ChipTone, string> = {
   changed: 'border-amber-300 bg-amber-50 text-amber-900',
   exempt: 'border-dashed border-gray-300 bg-gray-50 text-gray-500',
   muted: 'border-gray-200 bg-gray-50 text-gray-500',
+  required: 'border-indigo-300 bg-indigo-50 text-indigo-900',
 };
 
-export function TagChip({ tagKey, value, tone = 'default', title, onRemove, removeLabel }: {
+/** `required` marks a tag that can't be removed: a shield, and the required tone unless another tone says more. */
+export function TagChip({ tagKey, value, tone = 'default', title, required, onRemove, removeLabel }: {
   tagKey: string;
   value: string | null | undefined;
   tone?: ChipTone;
   title?: string;
+  required?: boolean;
   onRemove?: () => void;
   removeLabel?: string;
 }) {
   const keyOnly = value === null || value === undefined || value === '';
+  const shown = required && tone === 'default' ? 'required' : tone;
   return (
     <span
-      title={title ?? (keyOnly ? `${tagKey} (key only, no value)` : `${tagKey} = ${value}`)}
-      className={cn('inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-xs', CHIP_TONES[tone])}
+      title={title ?? (required ? REQUIRED_TAG_TITLE : keyOnly ? `${tagKey} (key only, no value)` : `${tagKey} = ${value}`)}
+      className={cn('inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-xs', CHIP_TONES[shown])}
     >
       {tone === 'exempt' && <Lock className="h-3 w-3 shrink-0" aria-label="Managed outside this tool" />}
+      {required && tone !== 'exempt' && <ShieldCheck className="h-3 w-3 shrink-0 text-indigo-600" aria-label="Required tag, can’t be removed" />}
       <span className="truncate">
         {tagKey}
         {!keyOnly && (
@@ -46,10 +52,11 @@ export function TagChip({ tagKey, value, tone = 'default', title, onRemove, remo
   );
 }
 
-/** A compact, wrapping list of tags; exempt keys are marked and sorted last. */
-export function TagList({ tags, exemptKeys = [], max, emptyText = 'No tags' }: {
+/** A compact, wrapping list of tags; exempt keys are marked and sorted last, required keys are marked. */
+export function TagList({ tags, exemptKeys = [], isRequired, max, emptyText = 'No tags' }: {
   tags: Tags | null | undefined;
   exemptKeys?: string[];
+  isRequired?: (key: string) => boolean;
   max?: number;
   emptyText?: string;
 }) {
@@ -61,7 +68,7 @@ export function TagList({ tags, exemptKeys = [], max, emptyText = 'No tags' }: {
   return (
     <span className="flex flex-wrap gap-1">
       {shown.map(([k, v]) => (
-        <TagChip key={k} tagKey={k} value={v} tone={exemptKeys.includes(k) ? 'exempt' : 'default'} />
+        <TagChip key={k} tagKey={k} value={v} tone={exemptKeys.includes(k) ? 'exempt' : 'default'} required={isRequired?.(k)} />
       ))}
       {shown.length < entries.length && (
         <span className="text-xs text-gray-500" title={entries.slice(shown.length).map(([k]) => k).join(', ')}>

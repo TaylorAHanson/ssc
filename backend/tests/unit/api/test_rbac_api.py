@@ -51,8 +51,8 @@ def _user(email, roles=(), groups=()):
                 entitlements=[email, *groups], is_active=True)
 
 
-ADMIN = _user("admin@example.com", roles=["Platform Admin"])
-VIEWER = _user("viewer@example.com", roles=["Governance Admin"])
+ADMIN = _user("admin@example.com", roles=["Governance Admin"])
+VIEWER = _user("viewer@example.com", roles=["Finance Admin"])
 UC_MEMBER = _user("uc@example.com", groups=["uc approvers"])
 WS_MEMBER = _user("ws@example.com", groups=[WS_GROUP])
 EVERY_GROUP = _user("every@example.com", groups=[UC_GROUP, WS_GROUP, MS_GROUP])
@@ -77,7 +77,7 @@ def _settings(monkeypatch):
     monkeypatch.setattr(settings, "RBAC_UC_APPROVER_GROUP", UC_GROUP)
     monkeypatch.setattr(settings, "RBAC_WS_APPROVER_GROUP", WS_GROUP)
     monkeypatch.setattr(settings, "RBAC_METASTORE_APPROVER_GROUP", MS_GROUP)
-    monkeypatch.setattr(settings, "RBAC_VIEWER_ROLES", ["Governance Admin"])
+    monkeypatch.setattr(settings, "RBAC_VIEWER_ROLES", ["Finance Admin"])
     monkeypatch.setattr(settings, "RBAC_ALLOW_RESET", False)
     monkeypatch.setattr(settings, "RBAC_MAX_CHANGES_PER_COMMIT", 200)
     monkeypatch.setattr(settings, "RBAC_MIN_REASON_LENGTH", 10)
@@ -633,7 +633,7 @@ def test_a_filed_revert_is_recorded_once_another_member_approves(api, db, two_pe
     assert revert["reason"] == f"Created on the wrong schema (request {request_id})"
 
 
-def test_a_two_person_revert_across_types_is_one_request_for_platform_admins(api, db, two_person_dev, steps):
+def test_a_two_person_revert_across_types_is_one_request_for_application_admins(api, db, two_person_dev, steps):
     original = _original(db, uc_create(), ws_create())
     res = api(EVERY_GROUP).post(f"{BASE}/history/{original.change_set_id}/revert", json={"reason": REASON})
     assert res.status_code == 200 and res.json()["request_id"]
@@ -646,7 +646,7 @@ def test_a_two_person_revert_across_types_is_one_request_for_platform_admins(api
 # --- Import ------------------------------------------------------------------------------------
 
 
-def test_import_is_platform_admin_only(api, monkeypatch):
+def test_import_is_rules_admin_only(api, monkeypatch):
     def fail(*a, **kw):
         raise AssertionError("the service must not be reached")
 
@@ -656,7 +656,7 @@ def test_import_is_platform_admin_only(api, monkeypatch):
         client = api(user)
         assert client.get(f"{BASE}/imports").status_code == 403
         res = client.post(f"{BASE}/imports/preview", files=upload("rbac.xlsx", xlsx()))
-        assert res.status_code == 403 and "Platform Admins" in res.json()["detail"]
+        assert res.status_code == 403 and "Governance Admins" in res.json()["detail"]
         assert client.post(f"{BASE}/imports", files=upload("rbac.xlsx", xlsx()),
                            data={"preview_id": "p", "mode": "initial"}).status_code == 403
 
@@ -739,7 +739,7 @@ def test_uploads_stay_in_memory(api, monkeypatch):
     assert seen == {"size": len(payload), "filename": "rbac.xlsx", "actor": ADMIN.email}
 
 
-def test_a_platform_admin_can_revert_an_import_but_an_approver_cannot(api, db):
+def test_a_rules_admin_can_revert_an_import_but_an_approver_cannot(api, db):
     client = api(ADMIN)
     data = xlsx()
     p = client.post(f"{BASE}/imports/preview", files=upload("rbac.xlsx", data)).json()

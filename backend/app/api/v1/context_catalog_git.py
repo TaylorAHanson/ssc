@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-_WRITE_ROLES = ["Platform Admin", "Governance Admin"]
+_WRITE_CAPABILITY = "context_catalog.manage"
 
 
 def _require_feature() -> None:
@@ -42,7 +42,7 @@ def get_git_status(
 
 @router.post("/sync")
 async def sync_from_git(
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
 ):
     """Pull the branch into the catalog now (and push any queued saves)."""

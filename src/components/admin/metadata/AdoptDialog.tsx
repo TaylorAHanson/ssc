@@ -6,7 +6,8 @@ import { Switch } from '../../ui/switch';
 import { Textarea } from '../../ui/textarea';
 import { ErrorBanner, Modal, Notice, Spinner } from '../../rbac/ui';
 import { useMetadata } from './context';
-import { errorMessage, plural, reasonHint } from './format';
+import { plural, reasonHint } from './format';
+import { errorMessage } from '../../../lib/errors';
 import { ResultView } from './ResultView';
 import { useAsync } from './useAsync';
 

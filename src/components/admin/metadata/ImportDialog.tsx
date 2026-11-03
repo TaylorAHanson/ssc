@@ -6,6 +6,7 @@ import { Notice } from '../../rbac/ui';
 import { useMetadata } from './context';
 import { ReviewDialog } from './ReviewDialog';
 import { useReviewFlow } from './useReviewFlow';
+import { errorMessage } from '../../../lib/errors';
 
 const CSV_EXAMPLE = `name,column,comment,tags
 my_catalog.bronze.orders,,Raw orders from the ERP,"{""domain"": ""sales"", ""pii"": null}"
@@ -29,7 +30,7 @@ function parse(text: string): Parsed | null {
       if (rows.some((r) => !r || typeof r !== 'object' || typeof (r as ImportRow).name !== 'string')) return { ok: false, error: 'Every row needs a "name".' };
       return { ok: true, request: { rows: rows as ImportRow[] }, rows: rows.length };
     } catch (e) {
-      return { ok: false, error: `That isn’t valid JSON: ${e instanceof Error ? e.message : 'parse error'}` };
+      return { ok: false, error: `That isn’t valid JSON: ${errorMessage(e, 'parse error')}` };
     }
   }
   const lines = trimmed.split(/\r?\n/).filter((l) => l.trim());

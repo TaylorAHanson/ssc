@@ -2,8 +2,10 @@
 
 Each type (plane) has one Databricks group, named in settings. Its members
 approve that type's requests (the poller routes the approval to the group via
-``assigned_to_role``) and edit that type's rows directly. Platform Admins can do
-both for every type. Viewer roles see everything and edit nothing.
+``assigned_to_role``) and edit that type's rows directly. Access Rules admins
+(``access_rules.admin``: Governance and Super Admins) edit every type; a type
+with no group is approved by Application Admins. Viewers see everything and edit
+nothing.
 """
 from __future__ import annotations
 
@@ -21,7 +23,8 @@ from app.services.rbac.layout import PLANE_LABELS
 
 logger = logging.getLogger(__name__)
 
-PLATFORM_ADMIN = "Platform Admin"
+ADMIN_CAPABILITY = "access_rules.admin"
+VIEW_CAPABILITY = "access_rules.view"
 
 _GROUP_SETTINGS: Dict[str, str] = {
     PLANE_UC: "RBAC_UC_APPROVER_GROUP",
@@ -52,11 +55,11 @@ def approver_group(plane: str) -> Optional[str]:
 
 
 def approval_label(plane: Optional[str], group: Optional[str]) -> str:
-    """``UC securables approvers: grp_x``, or ``Platform Admins (no UC securables group set)``."""
+    """``UC securables approvers: grp_x``, or ``Application Admins (no UC securables group set)``."""
     label = PLANE_LABELS.get(plane or "")
     if group:
         return f"{label} approvers: {group}" if label else f"Access rule approvers: {group}"
-    return f"Platform Admins (no {label} group set)" if label else "Platform Admins"
+    return f"Application Admins (no {label} group set)" if label else "Application Admins"
 
 
 def is_member(user: User, group: Optional[str]) -> bool:
@@ -64,12 +67,12 @@ def is_member(user: User, group: Optional[str]) -> bool:
     return in_group(user.entitlements, group)
 
 
-def _is_platform_admin(user: User) -> bool:
-    return user.has_role(PLATFORM_ADMIN)
+def is_rules_admin(user: User) -> bool:
+    return user.can(ADMIN_CAPABILITY)
 
 
 def can_edit(user: User, plane: str) -> bool:
-    return _is_platform_admin(user) or is_member(user, approver_group(plane))
+    return is_rules_admin(user) or is_member(user, approver_group(plane))
 
 
 def editable_planes(user: User) -> List[str]:
@@ -77,10 +80,8 @@ def editable_planes(user: User) -> List[str]:
 
 
 def can_view(user: User) -> bool:
-    """Platform Admin, a viewer role, or a member of any approver group."""
-    if _is_platform_admin(user):
-        return True
-    if any(role and user.has_role(role) for role in (settings.RBAC_VIEWER_ROLES or [])):
+    """An Access Rules admin or viewer (``RBAC_VIEWER_ROLES`` included), or a member of any approver group."""
+    if is_rules_admin(user) or user.can(VIEW_CAPABILITY):
         return True
     return any(is_member(user, approver_group(plane)) for plane in PLANES)
 
@@ -89,8 +90,8 @@ def require_view(user: User) -> None:
     """Raise RbacForbidden unless ``can_view``."""
     if not can_view(user):
         raise RbacForbidden(
-            "You don't have access to Access Rules. Ask a Platform Admin to add you to an approver "
-            "group or a viewer role."
+            "You don't have access to Access Rules. Ask a Governance Admin to add you to an approver "
+            "group, or an Application Admin to add your role to the viewer roles."
         )
 
 
@@ -99,7 +100,7 @@ def require_edit(user: User, plane: str) -> None:
     if not can_edit(user, plane):
         label = PLANE_LABELS.get(plane, plane)
         group = approver_group(plane)
-        who = f"members of {group} and Platform Admins" if group else "Platform Admins"
+        who = f"members of {group} and Governance Admins" if group else "Governance Admins"
         raise RbacForbidden(f"Only {who} can change {label} rules.")
 
 
@@ -172,7 +173,7 @@ async def permissions(user: User) -> RbacPermissions:
         )
         for plane, group, status in zip(PLANES, groups, statuses)
     ]
-    is_admin = _is_platform_admin(user)
+    is_admin = is_rules_admin(user)
     return RbacPermissions(
         can_view=can_view(user),
         can_import=is_admin,

@@ -215,7 +215,7 @@ async def test_a_failing_provider_degrades_only_its_own_section(db_session, monk
     built = await uc.build_sections(_identity(), ["identity", "groups"], db=db_session)
 
     assert built["groups"]["error"] == "LMWS timed out"
-    assert built["identity"]["persona"] == "Platform Admin"
+    assert built["identity"]["persona"] == "Application Admin"
     assert "error" not in built["identity"]
 
 
@@ -492,7 +492,8 @@ def test_the_users_own_email_is_not_reported_as_a_directory_group():
 
 
 def test_persona_follows_the_role_priority():
-    assert uc.derive_persona(["Finance Admin", "Platform Admin"]) == "Platform Admin"
+    assert uc.derive_persona(["Finance Admin", "Platform Admin"]) == "Application Admin"
+    assert uc.derive_persona(["Ops Admin", "Super Admin"]) == "Super Admin"
     assert uc.derive_persona(["Finance Admin"]) == "Finance Admin"
     assert uc.derive_persona([]) == "User"
 

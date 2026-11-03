@@ -1,22 +1,80 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
-import { ArrowUpRight, RefreshCw } from 'lucide-react';
+import { ArrowUpRight, ChevronDown, Loader2, RefreshCw, Sparkles } from 'lucide-react';
 import { getObject, MetadataApiError, notifyReconcile } from '../../../services/metadataApi';
 import type { ObjectDetail, ObjectSummary } from '../../../types/metadata';
 import { Button } from '../../ui/button';
 import { Input } from '../../ui/input';
 import { Badge, EmptyState, ErrorBanner, Notice, SectionTitle, Skeleton } from '../../rbac/ui';
+import { AI_NOTE, editsCatalog, outcomeMessage, suggestDescriptions, type SuggestOptions } from './aiSuggest';
 import { AttentionBadge } from './badges';
 import { useMetadata } from './context';
+import { MenuItem, Popover } from './Popover';
 import { EventList } from './EventList';
-import { errorMessage, plural, reportOnlyNote, syncsObject } from './format';
+import { plural, reportOnlyNote, syncsObject } from './format';
+import { errorMessage } from '../../../lib/errors';
 import { DescriptionField, TagsField } from './InlineEdit';
 import { Breadcrumb, ObjectHeader } from './ObjectHeader';
 import { ApplySection, CounterpartsSection, DescriptionSection, DesiredVsActual } from './ObjectSections';
 import { PromoteDialog } from './PromoteDialog';
 import { Rollup } from './Rollup';
-import { hasEdits, seedFromSummary, useStagingStore } from './staging';
+import { effectiveComment, hasEdits, seedFromSummary, useStagingStore } from './staging';
 import { useAsync } from './useAsync';
+
+interface AiControls {
+  /** Every column with no description, counting unsaved edits. */
+  generateEmpty: () => void;
+  regenerateAll: () => void;
+  column: (name: string) => void;
+  busy: boolean;
+  error: string | null;
+}
+
+/** AI suggest actions for one table, or null when they're off or this deployment doesn't take edits here. */
+function useAiControls(detail: ObjectDetail): (AiControls & { table: () => void }) | null {
+  const { config, notify } = useMetadata();
+  const [running, setRunning] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+
+  const run = async (opts: SuggestOptions, bulk: boolean) => {
+    if (bulk) {
+      setError(null);
+      setRunning((n) => n + 1);
+    }
+    try {
+      const outcome = await suggestDescriptions(detail, opts);
+      if (bulk || !outcome.staged) notify(outcomeMessage(outcome), outcome.staged ? { kind: 'success' } : undefined);
+    } catch (e) {
+      const message = errorMessage(e, 'Couldn’t get AI suggestions. Try again in a moment.');
+      if (bulk) setError(message);
+      else notify(message, { kind: 'error' });
+    } finally {
+      if (bulk) setRunning((n) => n - 1);
+    }
+  };
+
+  if (!config.ai_descriptions_enabled || !editsCatalog(config, detail.key.catalog)) return null;
+  return {
+    busy: running > 0,
+    error,
+    generateEmpty: () => {
+      const targets = useStagingStore.getState().targets;
+      const empty = detail.columns.filter((c) => {
+        const seed = seedFromSummary(c);
+        const t = targets[seed.key];
+        return c.column && !(t ? effectiveComment(t) : seed.baseComment)?.trim();
+      });
+      if (!empty.length) {
+        notify('Every column already has a description. Use Regenerate all to replace them with new suggestions.');
+        return;
+      }
+      void run({ mode: 'empty_only', columns: empty.map((c) => c.column as string) }, true);
+    },
+    regenerateAll: () => void run({ mode: 'all' }, true),
+    column: (name) => void run({ mode: 'all', columns: [name], replaceTyped: true }, false),
+    table: () => void run({ mode: 'all', columns: [], includeTable: true, replaceTyped: true }, false),
+  };
+}
 
 /** One table or view on its own page: edit its description, tags and columns in place. */
 export function ObjectPage() {
@@ -51,6 +109,10 @@ function ObjectBody({ detail, table, focusColumn, reload }: { detail: ObjectDeta
   const [checking, setChecking] = useState(false);
   const desired = detail.desired?.status === 'active' ? detail.desired : null;
   const outOfSync = detail.drift.filter((d) => !d.exempt).length;
+  const ai = useAiControls(detail);
+  const hasAiSuggestions = useStagingStore((s) =>
+    Object.values(s.targets).some((t) => !!t.comment?.ai && (t.key === detail.fqn_key || t.key.startsWith(`${detail.fqn_key}::`))),
+  );
 
   const checkNow = async () => {
     setChecking(true);
@@ -69,7 +131,7 @@ function ObjectBody({ detail, table, focusColumn, reload }: { detail: ObjectDeta
 
   return (
     <>
-      <ObjectHeader detail={detail} title={table} />
+      <ObjectHeader detail={detail} title={table} onSuggestDescription={ai?.table} />
 
       <div className="text-sm text-gray-600">
         {detail.editable ? 'You can change this directly. Your changes are saved when you select Review and save.' : 'Changes you make here are sent to the owners for approval before they’re saved.'}
@@ -107,7 +169,13 @@ function ObjectBody({ detail, table, focusColumn, reload }: { detail: ObjectDeta
         </Notice>
       )}
 
-      <ColumnsGrid columns={detail.columns} focusColumn={focusColumn} />
+      {hasAiSuggestions && (
+        <Notice kind="info" className="py-2">
+          {AI_NOTE}
+        </Notice>
+      )}
+
+      <ColumnsGrid columns={detail.columns} focusColumn={focusColumn} ai={ai} />
 
       <Rollup title="Details" hint={detailsHint(detail)}>
         <section>
@@ -160,7 +228,7 @@ function detailsHint(detail: ObjectDetail): string {
   return parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : parts[0];
 }
 
-function ColumnsGrid({ columns, focusColumn }: { columns: ObjectSummary[]; focusColumn: string | null }) {
+function ColumnsGrid({ columns, focusColumn, ai }: { columns: ObjectSummary[]; focusColumn: string | null; ai: AiControls | null }) {
   const [filter, setFilter] = useState('');
   const term = filter.trim().toLowerCase();
   const shown = term
@@ -180,7 +248,45 @@ function ColumnsGrid({ columns, focusColumn }: { columns: ObjectSummary[]; focus
         {columns.length > 12 && (
           <Input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Find a column" aria-label="Find a column" className="h-8 w-56 text-sm" />
         )}
+        {ai && (
+          <div className="ml-auto flex items-center">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 gap-1.5 rounded-r-none"
+              onClick={ai.generateEmpty}
+              disabled={ai.busy}
+              title="Suggest descriptions for columns that don’t have one. Suggestions are added as unsaved changes for you to review."
+            >
+              {ai.busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+              {ai.busy ? 'Generating…' : 'AI generate'}
+            </Button>
+            <Popover
+              label={<ChevronDown className="h-3.5 w-3.5" />}
+              ariaLabel="More AI generate options"
+              align="right"
+              buttonClassName="h-8 rounded-l-none border-l-0 px-2"
+            >
+              {(close) => (
+                <MenuItem
+                  onClick={() => {
+                    close();
+                    if (!ai.busy) ai.regenerateAll();
+                  }}
+                  hint="New suggestions for every column, including ones that already have a description. Nothing is saved until you review it."
+                >
+                  Regenerate all
+                </MenuItem>
+              )}
+            </Popover>
+          </div>
+        )}
       </div>
+      {ai?.error && (
+        <Notice kind="error" title="Couldn’t get AI suggestions">
+          {ai.error}
+        </Notice>
+      )}
       <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
         <table className="w-full min-w-[40rem] table-fixed text-left text-sm">
           <thead className="bg-gray-50 text-xs text-gray-600">
@@ -192,7 +298,12 @@ function ColumnsGrid({ columns, focusColumn }: { columns: ObjectSummary[]; focus
           </thead>
           <tbody>
             {shown.map((c) => (
-              <ColumnRow key={c.fqn_key} column={c} focused={!!focusColumn && c.column?.toLowerCase() === focusColumn.toLowerCase()} />
+              <ColumnRow
+                key={c.fqn_key}
+                column={c}
+                focused={!!focusColumn && c.column?.toLowerCase() === focusColumn.toLowerCase()}
+                onSuggest={ai && c.column ? () => ai.column(c.column as string) : undefined}
+              />
             ))}
           </tbody>
         </table>
@@ -202,7 +313,7 @@ function ColumnsGrid({ columns, focusColumn }: { columns: ObjectSummary[]; focus
   );
 }
 
-function ColumnRow({ column: c, focused }: { column: ObjectSummary; focused: boolean }) {
+function ColumnRow({ column: c, focused, onSuggest }: { column: ObjectSummary; focused: boolean; onSuggest?: () => void }) {
   const seed = seedFromSummary(c);
   const unsaved = useStagingStore((s) => !!s.targets[seed.key] && hasEdits(s.targets[seed.key]));
   return (
@@ -215,7 +326,7 @@ function ColumnRow({ column: c, focused }: { column: ObjectSummary; focused: boo
         </div>
       </td>
       <td className="px-3 py-2.5">
-        <DescriptionField seed={seed} compact />
+        <DescriptionField seed={seed} compact onSuggest={onSuggest} />
       </td>
       <td className="px-3 py-2.5">
         <TagsField seed={seed} compact />

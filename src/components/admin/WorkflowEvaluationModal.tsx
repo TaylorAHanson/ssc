@@ -8,6 +8,7 @@ import type {
   WorkflowEvaluation,
   WorkflowGraphSpec,
 } from '../../services/api';
+import { errorMessage } from '../../lib/errors';
 
 interface Props {
   spec: WorkflowGraphSpec;
@@ -114,7 +115,7 @@ export function WorkflowEvaluationModal({ spec, instructionsMarkdown, onClose }:
     try {
       setResult(await api.evaluateSpec(spec, instructionsMarkdown ?? ''));
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Evaluation failed');
+      setError(errorMessage(e, 'Evaluation failed'));
       setResult(null);
     } finally {
       setRunning(false);

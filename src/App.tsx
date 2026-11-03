@@ -111,7 +111,7 @@ function App() {
           <Route
             path="/admin/:tab"
             element={
-              <ProtectedRoute allowedPersonas={['Platform Admin']}>
+              <ProtectedRoute capability={['admin.hub', 'feedback.manage']}>
                 <Admin />
               </ProtectedRoute>
             }
@@ -120,7 +120,7 @@ function App() {
             <Route
               path="/governance/allowlist"
               element={
-                <ProtectedRoute allowedPersonas={['Platform Admin', 'Governance Admin']}>
+                <ProtectedRoute capability={'allowlist.manage'}>
                   <Allowlist />
                 </ProtectedRoute>
               }
@@ -130,14 +130,14 @@ function App() {
             <Route
               path="/governance/sentinel"
               element={
-                <ProtectedRoute allowedPersonas={['Platform Admin', 'Governance Admin']}>
+                <ProtectedRoute capability={'sentinel.view'}>
                   <EnforcementSentinel />
                 </ProtectedRoute>
               }
             />
           )}
           {/* Access is checked by the page against /rbac/permissions: approver-group
-              members can open it without an admin persona. */}
+              members can open it without an admin role. */}
           {uiTabs?.access_rules !== false && (
             <Route path="/governance/access-rules" element={<AccessRules />} />
           )}
@@ -145,7 +145,7 @@ function App() {
             <Route
               path="/governance/certification"
               element={
-                <ProtectedRoute allowedPersonas={['Platform Admin', 'Governance Admin']}>
+                <ProtectedRoute capability={'governance.control_tower'}>
                   <DataCertification />
                 </ProtectedRoute>
               }
@@ -155,14 +155,14 @@ function App() {
             <Route
               path="/governance/odps"
               element={
-                <ProtectedRoute allowedPersonas={['Platform Admin', 'Governance Admin']}>
+                <ProtectedRoute capability={'governance.control_tower'}>
                   <ODPS />
                 </ProtectedRoute>
               }
             />
           )}
           {/* Access is checked by the page against /metadata/whoami: data owners can browse and
-              edit without an admin persona, and the admin page follows the caller's role. */}
+              edit without an admin role, and the admin page follows the caller's role. */}
           {uiTabs?.tag_management !== false && (
             <Route path="/governance/metadata/*" element={<MetadataManager />} />
           )}
@@ -173,7 +173,7 @@ function App() {
             <Route
               path="/governance/context-catalog"
               element={
-                <ProtectedRoute allowedPersonas={['Platform Admin', 'Governance Admin']}>
+                <ProtectedRoute capability={'context_catalog.manage'}>
                   <ContextCatalog />
                 </ProtectedRoute>
               }
@@ -183,7 +183,7 @@ function App() {
             <Route
               path="/build/workflows"
               element={
-                <ProtectedRoute allowedPersonas={['Platform Admin', 'Governance Admin']}>
+                <ProtectedRoute capability={'workflows.author'}>
                   <Workflows />
                 </ProtectedRoute>
               }
@@ -193,7 +193,7 @@ function App() {
             <Route
               path="/build/tool-registry"
               element={
-                <ProtectedRoute allowedPersonas={['Platform Admin', 'Governance Admin']}>
+                <ProtectedRoute capability={'tools.registry.view'}>
                   <ToolRegistry />
                 </ProtectedRoute>
               }
@@ -208,7 +208,7 @@ function App() {
             <Route
               path="/build/training"
               element={
-                <ProtectedRoute allowedPersonas={['Platform Admin', 'Governance Admin']}>
+                <ProtectedRoute capability={'training.manage'}>
                   <TrainingAdmin />
                 </ProtectedRoute>
               }
@@ -218,7 +218,7 @@ function App() {
             <Route
               path="/build/preview-features"
               element={
-                <ProtectedRoute allowedPersonas={['Platform Admin', 'Governance Admin']}>
+                <ProtectedRoute capability={'preview_features.manage'}>
                   <PreviewFeatures />
                 </ProtectedRoute>
               }

@@ -14,7 +14,7 @@ from app.models.user import User
 from tests.factories.approval_factory import ApprovalFactory
 
 ADMIN = User(id="admin@example.com", email="admin@example.com", full_name="Admin",
-             roles=["Platform Admin"], is_active=True)
+             roles=["Super Admin"], is_active=True)
 
 
 @pytest.fixture

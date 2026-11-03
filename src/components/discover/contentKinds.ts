@@ -51,7 +51,8 @@ export function countDomainContent(
     for (const mv of domainViews) {
       for (const d of mv.downstream_dashboards ?? []) {
         if (!d?.name) continue;
-        (d.type === 'app' ? lineageApps : dashboards).add(d.name);
+        if (d.type === 'app') lineageApps.add(d.name);
+        else dashboards.add(d.id || d.name);
       }
     }
     counts.dashboards = dashboards.size;

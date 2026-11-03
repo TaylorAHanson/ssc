@@ -1,0 +1,62 @@
+# Questions Databricks Genie Code answers better than this app's chat.
+#
+# Cost and usage analysis, audit-log investigations and privilege audits across Unity
+# Catalog are open-ended reads over system tables. Genie Code runs as the same user in
+# their workspace and can explore, join and iterate on those tables, so the assistant
+# points there with a starting prompt instead of running fixed-shape queries itself.
+# The fixed cost, audit and over-provisioning tools that used to do this were retired;
+# a unit test checks they stay out of the tool catalog, so these cases check the
+# hand-off: Genie Code is named, and the assistant doesn't run the query itself.
+#
+# Run:   python -m app.agents.eval run --suite genie-code --repeat 3 --label <name>
+#
+# None of these need the caller's identity: the expected answer is a hand-off.
+suite: genie-code
+description: Cost, audit-log and privilege-audit questions are handed off to Genie Code.
+
+defaults:
+  max_tool_calls: 3
+  answer_not_matches:
+    - "(?i)\\b(x-forwarded|obo token|bearer token|access token)\\b"
+
+cases:
+  - id: gc-cost-by-workspace
+    name: DBU spend by workspace goes to Genie Code
+    tags: [genie-code, cost]
+    role: Finance Admin
+    question: What did we spend on DBUs last month by workspace?
+    expected: >
+      Says this kind of cost and usage analysis is best done in Genie Code in the
+      user's Databricks workspace, and gives a short prompt they can paste there (for
+      example, last month's DBUs and cost from system.billing.usage grouped by
+      workspace). It does not make up spend figures and does not claim to have run a
+      query. It may mention what this app can still help with.
+    forbid_tools: [run_sql, execute_workflow]
+    answer_matches: ["(?i)genie\\s*code"]
+
+  - id: gc-audit-log
+    name: An audit-log investigation goes to Genie Code
+    tags: [genie-code, audit]
+    role: Security Admin
+    question: Who dropped tables in the main catalog in the last week? Check the audit logs.
+    expected: >
+      Points the user to Genie Code in their Databricks workspace for an audit-log
+      investigation and gives a short starting prompt (for example, delete or drop
+      table events in system.access.audit over the last 7 days, with who did it). It
+      does not invent events or users and does not claim to have searched the logs.
+    forbid_tools: [run_sql, execute_workflow]
+    answer_matches: ["(?i)genie\\s*code"]
+
+  - id: gc-privilege-audit
+    name: A metastore-wide privilege audit goes to Genie Code
+    tags: [genie-code, access]
+    role: Governance Admin
+    question: Which users or groups hold ALL PRIVILEGES anywhere in Unity Catalog?
+    expected: >
+      Says a privilege audit across Unity Catalog is best done in Genie Code in the
+      user's workspace and gives a short starting prompt (for example, querying the
+      information_schema privilege views for ALL PRIVILEGES). It does not list
+      principals it hasn't looked up. It may offer to check one specific catalog,
+      schema or table here.
+    forbid_tools: [run_sql, execute_workflow]
+    answer_matches: ["(?i)genie\\s*code"]

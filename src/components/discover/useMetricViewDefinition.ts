@@ -1,6 +1,7 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import { api } from '../../services/api';
 import type { MetricViewDefinition } from '../../services/api';
+import { errorMessage } from '../../lib/errors';
 
 // Metric view definitions (KPIs, source tables) are read as the user, one warehouse
 // statement per view. Cards that mount together ask within the same tick, so their
@@ -37,7 +38,7 @@ function flush() {
     api
       .getMetricViewDefinitions(chunk)
       .then((result) => chunk.forEach((id) => definitions.set(id, result[id] ?? failed('Not returned'))))
-      .catch((e: Error) => chunk.forEach((id) => definitions.set(id, failed(e.message))))
+      .catch((e: unknown) => chunk.forEach((id) => definitions.set(id, failed(errorMessage(e)))))
       .finally(notify);
   }
 }

@@ -30,7 +30,7 @@ class PreviewAccessChangeInput(BaseModel):
     description=(
         "Dry-run an Access Rules change against the ledger and policy without filing anything. Returns "
         "one proposal per type of rule (UC securables, UC metastore, workspace securables), each with "
-        "its approver group (or the Platform Admin fallback), outcomes per item (change / already true "
+        "its approver group (or the Application Admin fallback), outcomes per item (change / already true "
         "/ blocked), added prerequisites, findings, a summary and report_markdown, plus group_ref when "
         "there is more than one proposal. Present each proposal's report, get an explicit yes, then file one "
         "rbac_access_change request per proposal with that proposal's submit_items, the user's "

@@ -107,7 +107,7 @@ class Approval(BaseModel):
     """Approval model.
     
     status values: 'pending', 'approved', 'rejected', 'delegated', 'superseded'
-    A 'superseded' approval means the platform admin chose to edit parameters instead
+    A 'superseded' approval means an Application Admin chose to edit parameters instead
     of approving/rejecting. The new parameters will trigger a fresh plan run.
     """
     id: str

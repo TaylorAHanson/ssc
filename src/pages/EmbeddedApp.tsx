@@ -1,7 +1,7 @@
 import { Link, useParams } from 'react-router-dom';
 import { ExternalLink } from 'lucide-react';
 import { useBrandingStore } from '../stores/brandingStore';
-import { resolveNavIcon } from '../lib/navIcons';
+import { renderNavIcon } from '../lib/navIcons';
 
 // Renders a configured companion app inside an iframe so users can move
 // between it and this app without leaving the tab. Driven entirely by the
@@ -19,10 +19,9 @@ export function EmbeddedApp() {
   const app = embeddedApps.find((a) => a.id === appId);
 
   if (!app) {
-    const Icon = resolveNavIcon(undefined);
     return (
       <div className="flex flex-col items-center justify-center h-full text-center px-6 py-12 text-gray-600">
-        <Icon className="w-10 h-10 mb-3 text-gray-400" />
+        {renderNavIcon(undefined, 'w-10 h-10 mb-3 text-gray-400')}
         <h2 className="text-lg font-semibold text-heading mb-1">
           This embedded app is not configured
         </h2>

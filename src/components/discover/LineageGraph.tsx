@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { api } from '../../services/api';
 import { catalogExplorerUrl } from '../../lib/databricksLinks';
+import { errorMessage } from '../../lib/errors';
 
 // ---------------------------------------------------------------------------
 // Types & helpers
@@ -400,7 +401,7 @@ export function LineageGraph({ seedTables, workspaceUrl, height = '100%' }: Line
                     return [...prev, ...additions];
                 });
             } catch (e) {
-                setError(e instanceof Error ? e.message : 'Failed to fetch lineage.');
+                setError(errorMessage(e, 'Failed to fetch lineage.'));
             } finally {
                 setLoadingFqn(null);
             }

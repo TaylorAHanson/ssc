@@ -7,7 +7,7 @@ which refuses need-to-know lists outright, while LMWS exposes separate
 which of those the service account can actually use for a given list, before any
 of it is wired into the governed membership path.
 
-They are Platform-Admin-gated and intentionally *not* alternatives to
+They are gated by the ``platform.probe`` capability (Application and Ops Admins) and intentionally *not* alternatives to
 ``add_group_membership`` — the write probe defaults to ``dry_run=True`` and
 exists to characterize the endpoints, not to service user requests. See
 :mod:`app.providers.lmws.n2k` for the endpoint tables and response envelope.
@@ -44,10 +44,10 @@ class LmwsProbeConfigInput(BaseModel):
 
 @tool(
     name="lmws_probe_config",
-    description="Platform-admin diagnostic: verify LMWS configuration, secret scope access, and endpoint URLs without calling the gateway.",
+    description="Admin diagnostic: verify LMWS configuration, secret scope access, and endpoint URLs without calling the gateway.",
     args_schema=LmwsProbeConfigInput,
     side_effect_class="read",
-    required_role="platform_admin",
+    required_capability="platform.probe",
     feature_flag="core",
     friendly_label="Checking LMWS configuration...",
 )
@@ -106,10 +106,10 @@ class LmwsProbeReadInput(BaseModel):
 
 @tool(
     name="lmws_probe_read",
-    description="Platform-admin diagnostic: call a read-only LMWS endpoint (e.g. n2kListMetadataGet, requestStatus) using service account credentials.",
+    description="Admin diagnostic: call a read-only LMWS endpoint (e.g. n2kListMetadataGet, requestStatus) using service account credentials.",
     args_schema=LmwsProbeReadInput,
     side_effect_class="read",
-    required_role="platform_admin",
+    required_capability="platform.probe",
     feature_flag="core",
     friendly_label="Probing LMWS endpoint...",
 )
@@ -230,10 +230,10 @@ class LmwsProbeAddInput(BaseModel):
 
 @tool(
     name="lmws_probe_membership_add",
-    description="Platform-admin diagnostic: probe LMWS and FWS membership-add endpoints for an identity list to test ACL and supervisor status. Defaults to dry_run=True.",
+    description="Admin diagnostic: probe LMWS and FWS membership-add endpoints for an identity list to test ACL and supervisor status. Defaults to dry_run=True.",
     args_schema=LmwsProbeAddInput,
     side_effect_class="membership",
-    required_role="platform_admin",
+    required_capability="platform.probe",
     feature_flag="core",
     friendly_label="Probing LMWS membership endpoints...",
 )

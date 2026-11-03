@@ -60,8 +60,11 @@ def _legacy_visible_tools(current_user: User, surface: str) -> List[Any]:
     is_authoring = surface == "workflow"
     out: List[Any] = []
     for tool in AGENT_TOOLS:
+        capability = getattr(tool, "required_capability", None)
+        if capability and not current_user.can(capability):
+            continue
         role = getattr(tool, "required_role", None)
-        if role and not current_user.has_role(role):
+        if not capability and role and not current_user.has_role(role):
             continue
         if not getattr(tool, "is_available", lambda: True)():
             continue

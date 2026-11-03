@@ -14,6 +14,7 @@ import {
   type FeedbackType,
   type FeedbackStatus,
 } from '../../services/api';
+import { errorMessage } from '../../lib/errors';
 
 const TYPE_META: Record<FeedbackType, { label: string; icon: React.ReactNode; color: string }> = {
   bug: { label: 'Bug', icon: <Bug className="w-3.5 h-3.5" />, color: 'bg-red-50 text-red-700 border-red-200' },
@@ -80,7 +81,7 @@ export function FeedbackAdmin() {
         setDetail(null);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load feedback');
+      setError(errorMessage(e, 'Failed to load feedback'));
     } finally {
       setLoading(false);
     }
@@ -106,7 +107,7 @@ export function FeedbackAdmin() {
           setNotes(d.admin_notes || '');
         }
       } catch (e) {
-        if (mounted) setError(e instanceof Error ? e.message : 'Failed to load item');
+        if (mounted) setError(errorMessage(e, 'Failed to load item'));
       } finally {
         if (mounted) setLoadingDetail(false);
       }
@@ -127,7 +128,7 @@ export function FeedbackAdmin() {
         await load();
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to update status');
+      setError(errorMessage(e, 'Failed to update status'));
     }
   };
 
@@ -138,7 +139,7 @@ export function FeedbackAdmin() {
       const updated = await updateFeedback(detail.id, { admin_notes: notes });
       setDetail(updated);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to save notes');
+      setError(errorMessage(e, 'Failed to save notes'));
     } finally {
       setSavingNotes(false);
     }
@@ -153,7 +154,7 @@ export function FeedbackAdmin() {
       setSelectedId(null);
       setDetail(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to delete');
+      setError(errorMessage(e, 'Failed to delete'));
     }
   };
 

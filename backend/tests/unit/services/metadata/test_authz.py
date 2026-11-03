@@ -146,14 +146,17 @@ def test_actor_from_a_user(db_session):
 
 
 @pytest.mark.parametrize("roles,editor_roles,admin", [
-    (["Platform Admin"], ["Governance Admin"], True),
-    (["platform_admin"], [], True),
+    (["Super Admin"], [], True),
+    (["Application Admin"], ["Governance Admin"], False),
+    (["platform_admin"], [], False),
+    (["Platform Admin"], ["Application Admin"], True),
+    (["Ops Admin"], ["Governance Admin"], False),
     (["governance_admin"], ["Governance Admin"], True),
     (["Data Steward"], ["Governance Admin"], False),
     (["Data Steward"], ["data steward"], True),
     ([], ["Governance Admin"], False),
 ])
-def test_admins_are_platform_admins_and_editor_roles(db_session, monkeypatch, roles, editor_roles, admin):
+def test_admins_are_super_admins_and_editor_roles(db_session, monkeypatch, roles, editor_roles, admin):
     monkeypatch.setattr(settings, "METADATA_EDITOR_ROLES", editor_roles)
     u = User(id=EMAIL, email=EMAIL, full_name="Jane", entitlements=[EMAIL], roles=roles)
 

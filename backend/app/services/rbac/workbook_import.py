@@ -454,7 +454,7 @@ def run(
     ``initial`` requires an empty ledger. ``reset`` requires RBAC_ALLOW_RESET,
     ``confirmation == CONFIRMATION_PHRASE`` and no open rbac_access_change
     request; it soft-deletes every active rule and inserts the workbook's rows
-    as one change set (source ``import``). Platform Admin is checked by the caller.
+    as one change set (source ``import``). The Access Rules admin check is done by the caller.
     """
     imp = (
         db.query(RbacImportModel)

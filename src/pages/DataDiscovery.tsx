@@ -9,7 +9,19 @@ import {
   Users, Server, Eye
 } from 'lucide-react';
 import { api } from '../services/api';
-import type { DataAsset, LegacyMapping, TableDetailsResponse } from '../services/api';
+import type { DataAsset, DataContract, LegacyMapping, TableDetailsResponse } from '../services/api';
+import {
+  parseContractYaml,
+  type OdcsAuthoritativeDefinition,
+  type OdcsColumn,
+  type OdcsContract,
+  type OdcsCustomProperty,
+  type OdcsServer,
+  type OdcsSlaProperty,
+  type OdcsSupportChannel,
+  type OdcsTable,
+  type OdcsTeamMember,
+} from '../types/odcs';
 import { useBrandingStore } from '../stores/brandingStore';
 import {
   appUrl,
@@ -26,6 +38,7 @@ import {
   useDomainHierarchy,
   useMetricViews,
   useLegacyMappings,
+  type CatalogAsset,
 } from '../lib/catalogCache';
 import { useViewScroll } from '../hooks/useViewScroll';
 import {
@@ -47,10 +60,11 @@ import { DiscoverSearchResults } from '../components/discover/DiscoverSearchResu
 import { SidePanel } from '../components/discover/SidePanel';
 import { DataPreview } from '../components/discover/DataPreview';
 import { DiscoverSearch } from '../components/discover/DiscoverSearch';
-
-import yaml from 'js-yaml';
+import { errorMessage } from '../lib/errors';
 
 const INLINE_AGENT_STORAGE_KEY = 'discover_inline_agent';
+
+type LoadedContract = DataContract & { parsed: OdcsContract | null };
 
 export function DataDiscovery() {
   const navigate = useNavigate();
@@ -243,7 +257,7 @@ export function DataDiscovery() {
   );
 
   // Contract details for the selected dataset (loaded lazily when modal opens for a dataset)
-  const [selectedContract, setSelectedContract] = useState<any | null>(null);
+  const [selectedContract, setSelectedContract] = useState<LoadedContract | null>(null);
   const [contractError, setContractError] = useState<string | null>(null);
   const [isLoadingContract, setIsLoadingContract] = useState(false);
 
@@ -261,7 +275,7 @@ export function DataDiscovery() {
         setContractError(null);
         return;
       }
-      const isDatasetLike = selectedDataset.type === 'dataset' || (selectedDataset as any).type === 'data_product';
+      const isDatasetLike = selectedDataset.type === 'dataset' || selectedDataset.type === 'data_product';
       if (!isDatasetLike) {
         setSelectedContract(null);
         setContractError(null);
@@ -278,10 +292,10 @@ export function DataDiscovery() {
           setContractError('No data contract found for this dataset.');
           return;
         }
-        const parsed = yaml.load(active.yaml_content) as any;
+        const parsed = parseContractYaml(active.yaml_content);
         setSelectedContract({ ...active, parsed });
-      } catch (e: any) {
-        if (mounted) setContractError(e?.message || 'Failed to load data contract.');
+      } catch (e: unknown) {
+        if (mounted) setContractError(errorMessage(e, 'Failed to load data contract.'));
       } finally {
         if (mounted) setIsLoadingContract(false);
       }
@@ -308,7 +322,7 @@ export function DataDiscovery() {
         return;
       }
       const fqn = selectedDataset.id
-        || `${selectedDataset.catalog}.${(selectedDataset as any).schema_name}.${selectedDataset.table_name}`;
+        || `${selectedDataset.catalog}.${selectedDataset.schema_name}.${selectedDataset.table_name}`;
       if (!fqn || fqn.split('.').length !== 3) {
         setSelectedTableDetails(null);
         setTableDetailsError('Cannot resolve table name.');
@@ -331,7 +345,7 @@ export function DataDiscovery() {
       } catch (e) {
         if (mounted) {
           setSelectedTableDetails(null);
-          setTableDetailsError(e instanceof Error ? e.message : 'Failed to load table details.');
+          setTableDetailsError(errorMessage(e, 'Failed to load table details.'));
         }
       } finally {
         if (mounted) setIsLoadingTableDetails(false);
@@ -393,7 +407,7 @@ export function DataDiscovery() {
       (!(showAccessibleOnly && accessibleAvailable) || accessibleIds.has(a.id));
     const score = (a: DataAsset) => {
       const has = (text?: string | null) => Boolean(text && text.toLowerCase().includes(term));
-      if (has(a.table_name) || has(a.table_name.replace(/_/g, ' '))) return 3;
+      if (has(a.table_name) || has(a.table_name?.replace(/_/g, ' '))) return 3;
       if (legacyNamesMatching(a.id).length > 0) return 3;
       if (has(a.description) || has(a.owner) || (a.kpis || []).some((k) => has(k.name))) return 2;
       if (has(a.domain) || has(a.subdomain)) return 1;
@@ -438,7 +452,7 @@ export function DataDiscovery() {
       }
       if (effectiveSearchTerm.trim()) {
         const term = effectiveSearchTerm.toLowerCase();
-        const kpiNames = (mv.kpis || []).map((k: { name?: string; value?: string }) => `${k.name || ''} ${k.value || ''}`).join(' ');
+        const kpiNames = (mv.kpis || []).map((k) => `${k.name || ''} ${k.value || ''}`).join(' ');
         const hay = `${mv.table_name} ${mv.description || ''} ${mv.domain || ''} ${mv.subdomain || ''} ${kpiNames}`.toLowerCase();
         if (!hay.includes(term) && legacyNamesMatching(mv.id).length === 0) return false;
       }
@@ -472,6 +486,7 @@ export function DataDiscovery() {
       views?: number;
       updated_at?: string;
       url?: string | null;
+      workspace_name?: string | null;
     }> = [];
     const aList: Array<{
       id: string;
@@ -492,11 +507,10 @@ export function DataDiscovery() {
         if (!selectedDomain) {
           dList.push({
             id: ds.id,
-            name: ds.table_name || ds.name,
+            name: ds.table_name,
             type: 'dashboard',
             description: ds.description || 'Dashboard',
-            views: ds.views,
-            updated_at: ds.updated_at,
+            updated_at: ds.updated_at ?? undefined,
             url: dashboardUrl(databricksWorkspaceUrl, ds.id),
           });
         }
@@ -505,11 +519,10 @@ export function DataDiscovery() {
         if (matchesDomain) {
           aList.push({
             id: ds.id,
-            name: ds.table_name || ds.name,
+            name: ds.table_name,
             type: 'app',
             description: ds.description || '',
-            views: ds.views,
-            updated_at: ds.updated_at,
+            updated_at: ds.updated_at ?? undefined,
             // The running app, not its settings page; fall back to the workspace page.
             url: ds.url || appUrl(databricksWorkspaceUrl, ds.id),
             thumbnail_url: ds.thumbnail_url ?? null,
@@ -518,8 +531,9 @@ export function DataDiscovery() {
       }
     }
 
-    // Harvest from metric views downstream_dashboards
-    const seenD = new Set(dList.map((d) => d.name));
+    // Harvest from metric views downstream_dashboards. Dashboards dedupe by id:
+    // ones whose name couldn't be read share a fallback title.
+    const seenD = new Set(dList.map((d) => d.id));
     const seenA = new Set(aList.map((a) => a.name));
 
     for (const mv of filteredMetricViews) {
@@ -532,9 +546,11 @@ export function DataDiscovery() {
           views?: number;
           updated_at?: string;
           url?: string | null;
+          workspace_name?: string | null;
         }>) {
           if (!d || !d.name) continue;
           const isApp = d.type === 'app';
+          const dashKey = d.id || d.name;
           if (isApp && !seenA.has(d.name)) {
             seenA.add(d.name);
             aList.push({
@@ -546,16 +562,17 @@ export function DataDiscovery() {
               updated_at: d.updated_at,
               url: d.url,
             });
-          } else if (!isApp && !seenD.has(d.name)) {
-            seenD.add(d.name);
+          } else if (!isApp && !seenD.has(dashKey)) {
+            seenD.add(dashKey);
             dList.push({
-              id: d.id || d.name,
+              id: dashKey,
               name: d.name,
               type: 'dashboard',
               description: d.description || `Downstream analytical view built on ${mv.table_name}`,
               views: d.views,
               updated_at: d.updated_at,
               url: d.url,
+              workspace_name: d.workspace_name,
             });
           }
         }
@@ -588,11 +605,11 @@ export function DataDiscovery() {
         const contracts = await api.getContractHistory(dataset.id);
         if (contracts && contracts.length > 0) {
           const activeContract = contracts.find(c => c.is_active) || contracts[0];
-          const parsed = yaml.load(activeContract.yaml_content) as any;
+          const parsed = parseContractYaml(activeContract.yaml_content);
           
           if (parsed && parsed.schema && parsed.servers && parsed.servers.length > 0) {
             const server = parsed.servers[0];
-            const assetsList = parsed.schema.map((s: any) => `${server.catalog}.${server.schema}.${s.physicalName || s.name}`);
+            const assetsList = parsed.schema.map((s) => `${server.catalog}.${server.schema}.${s.physicalName || s.name}`);
             
             navigate('/', { 
               state: { 
@@ -788,8 +805,8 @@ export function DataDiscovery() {
 }
 
 interface DetailsModalProps {
-  asset: any;
-  contract: any | null;
+  asset: CatalogAsset;
+  contract: LoadedContract | null;
   isLoadingContract: boolean;
   contractError: string | null;
   tableDetails: TableDetailsResponse | null;
@@ -827,17 +844,20 @@ function DetailsModal({
   const purpose = parsed?.description?.purpose;
   const limitations = parsed?.description?.limitations;
   const usage = parsed?.description?.usage;
-  const servers: any[] = Array.isArray(parsed?.servers) ? parsed.servers : [];
-  const schema: any[] = Array.isArray(parsed?.schema) ? parsed.schema : [];
-  const team: any[] = Array.isArray(parsed?.team) ? parsed.team : [];
-  const slaProperties: any[] = Array.isArray(parsed?.slaProperties) ? parsed.slaProperties : [];
-  const support: any[] = Array.isArray(parsed?.support) ? parsed.support : [];
-  const authoritativeDefinitions: any[] = Array.isArray(parsed?.authoritativeDefinitions)
+  const servers: OdcsServer[] = parsed && Array.isArray(parsed.servers) ? parsed.servers : [];
+  const schema = useMemo<OdcsTable[]>(
+    () => (parsed && Array.isArray(parsed.schema) ? parsed.schema : []),
+    [parsed],
+  );
+  const team: OdcsTeamMember[] = parsed && Array.isArray(parsed.team) ? parsed.team : [];
+  const slaProperties: OdcsSlaProperty[] = parsed && Array.isArray(parsed.slaProperties) ? parsed.slaProperties : [];
+  const support: OdcsSupportChannel[] = parsed && Array.isArray(parsed.support) ? parsed.support : [];
+  const authoritativeDefinitions: OdcsAuthoritativeDefinition[] = parsed && Array.isArray(parsed.authoritativeDefinitions)
     ? parsed.authoritativeDefinitions
     : [];
 
   // Owner derivation: prefer asset.owner, then contract author/creator role
-  const contractOwner = team.find((t: any) => /owner|steward/i.test(String(t?.role || '')))?.username
+  const contractOwner = team.find((t) => /owner|steward/i.test(String(t?.role || '')))?.username
     || parsed?.dataProductOwner
     || null;
 
@@ -848,11 +868,11 @@ function DetailsModal({
 
   // Aggregate dataset-wide classification from any table customProperty (e.g., "u-nnpi", "PII")
   const datasetClassifications = Array.from(new Set(
-    schema.flatMap((tbl: any) => {
+    schema.flatMap((tbl) => {
       const cps = Array.isArray(tbl?.customProperties) ? tbl.customProperties : [];
       return cps
-        .filter((cp: any) => /classification/i.test(String(cp?.property || '')))
-        .map((cp: any) => String(cp?.value || '').trim())
+        .filter((cp) => /classification/i.test(String(cp?.property || '')))
+        .map((cp) => String(cp?.value || '').trim())
         .filter(Boolean);
     })
   ));
@@ -873,17 +893,18 @@ function DetailsModal({
   // Build seed tables for the Lineage tab.
   const lineageSeeds: LineageSeedTable[] = useMemo(() => {
     if (isDataset && primaryServer && schema.length > 0) {
-      return schema.map((tbl: any) => {
+      return schema.map((tbl) => {
         const physical = tbl.physicalName || tbl.name;
         const fqn = `${primaryServer.catalog}.${primaryServer.schema}.${physical}`;
         const cps = Array.isArray(tbl.customProperties) ? tbl.customProperties : [];
-        const getCp = (key: string) => cps.find((p: any) => String(p?.property || '').toLowerCase() === key)?.value;
+        const getCp = (key: string) => cps.find((p) => String(p?.property || '').toLowerCase() === key)?.value;
         const ups = getCp('upstream_tables');
         const downs = getCp('downstream_tables');
+        const classification = getCp('classification');
         return {
           fqn,
           displayName: physical,
-          classification: getCp('classification') || null,
+          classification: typeof classification === 'string' ? classification || null : null,
           upstreams: Array.isArray(ups) ? ups : undefined,
           downstreams: Array.isArray(downs) ? downs : undefined,
         } satisfies LineageSeedTable;
@@ -1127,7 +1148,7 @@ function DetailsModal({
                 <section>
                   <SectionHeading icon={<Server className="w-4 h-4" />} title="Servers" count={servers.length} />
                   <div className="space-y-2">
-                    {servers.map((s: any, i: number) => {
+                    {servers.map((s, i) => {
                       const serverHref = catalogExplorerUrl(workspaceUrl, s.catalog, s.schema);
                       return (
                         <div key={s.id || i} className="border border-gray-200 rounded-lg p-3 bg-white">
@@ -1201,7 +1222,7 @@ function DetailsModal({
                     Click a table to see its columns, access groups, and tags. View the data flow visually in the Lineage tab.
                   </p>
                   <div className="space-y-2">
-                    {schema.map((tbl: any, i: number) => (
+                    {schema.map((tbl, i) => (
                       <SchemaTableEntry
                         key={tbl.id || i}
                         tbl={tbl}
@@ -1341,7 +1362,7 @@ function DetailsModal({
                   <SectionHeading icon={<Calendar className="w-4 h-4" />} title="Service Level" />
                   {slaProperties.length > 0 ? (
                     <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-                      {slaProperties.map((sp: any, i: number) => (
+                      {slaProperties.map((sp, i) => (
                         <div key={i} className="flex justify-between text-sm p-3 border-b border-gray-100 last:border-b-0">
                           <span className="text-gray-500 capitalize">{String(sp.property || '').replace(/([A-Z])/g, ' $1').trim()}</span>
                           <span className="font-medium text-gray-900">
@@ -1381,7 +1402,7 @@ function DetailsModal({
                 <section>
                   <SectionHeading icon={<Users className="w-4 h-4" />} title="Team" count={team.length} />
                   <div className="border border-gray-200 rounded-lg overflow-hidden">
-                    {team.map((t: any, i: number) => (
+                    {team.map((t, i) => (
                       <div key={i} className="flex flex-wrap items-center justify-between gap-2 p-3 border-b border-gray-100 last:border-b-0 text-sm">
                         <div className="flex items-center gap-2 min-w-0">
                           <span className="font-medium text-gray-900 truncate">{t.username || t.name || '—'}</span>
@@ -1399,7 +1420,7 @@ function DetailsModal({
                 <section>
                   <SectionHeading title="Support" />
                   <div className="space-y-1.5">
-                    {support.map((s: any, i: number) => (
+                    {support.map((s, i) => (
                       <div key={i} className="text-sm flex items-center gap-2">
                         {s.channel && <span className="font-medium text-gray-700 capitalize">{s.channel}:</span>}
                         {s.url ? (
@@ -1428,7 +1449,7 @@ function DetailsModal({
                 <section>
                   <SectionHeading icon={<LinkIcon className="w-4 h-4" />} title="References" count={authoritativeDefinitions.length} />
                   <div className="space-y-1.5 text-sm">
-                    {authoritativeDefinitions.map((d: any, i: number) => (
+                    {authoritativeDefinitions.map((d, i) => (
                       <div key={i} className="flex flex-wrap items-center gap-2">
                         {d.type && (
                           <span className="px-2 py-0.5 rounded text-[11px] font-medium bg-gray-100 text-gray-700 border border-gray-200 capitalize">
@@ -1516,25 +1537,27 @@ function SchemaTableEntry({
   catalog,
   schema,
 }: {
-  tbl: any;
+  tbl: OdcsTable;
   expandedByDefault?: boolean;
   workspaceUrl?: string;
   catalog?: string | null;
   schema?: string | null;
 }) {
   const [open, setOpen] = useState(!!expandedByDefault);
-  const cols: any[] = Array.isArray(tbl.properties) ? tbl.properties : [];
+  const cols: OdcsColumn[] = Array.isArray(tbl.properties) ? tbl.properties : [];
   const tags: string[] = Array.isArray(tbl.tags) ? tbl.tags : [];
-  const customProps: any[] = Array.isArray(tbl.customProperties) ? tbl.customProperties : [];
+  const customProps: OdcsCustomProperty[] = Array.isArray(tbl.customProperties) ? tbl.customProperties : [];
 
-  const getCustom = (name: string): any => {
-    const cp = customProps.find((p: any) => String(p?.property || '').toLowerCase() === name.toLowerCase());
+  const getCustom = (name: string): OdcsCustomProperty['value'] => {
+    const cp = customProps.find((p) => String(p?.property || '').toLowerCase() === name.toLowerCase());
     return cp?.value;
   };
   const classification = getCustom('classification');
   const tableType = getCustom('table_type');
-  const upstream: string[] = Array.isArray(getCustom('upstream_tables')) ? getCustom('upstream_tables') : [];
-  const downstream: string[] = Array.isArray(getCustom('downstream_tables')) ? getCustom('downstream_tables') : [];
+  const upstreamValue = getCustom('upstream_tables');
+  const downstreamValue = getCustom('downstream_tables');
+  const upstream: string[] = Array.isArray(upstreamValue) ? upstreamValue : [];
+  const downstream: string[] = Array.isArray(downstreamValue) ? downstreamValue : [];
   const approverGroup = getCustom('approver_group');
   const ownerGroup = getCustom('owner_group');
 
@@ -1666,7 +1689,7 @@ function SchemaTableEntry({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {cols.map((c: any) => {
+                  {cols.map((c) => {
                     const colTags: string[] = Array.isArray(c.tags) ? c.tags : [];
                     return (
                       <tr key={c.id || c.name} className="hover:bg-gray-50/60">
@@ -1743,7 +1766,7 @@ function SectionHeading({
   );
 }
 
-function MetaRow({ label, value, mono, children }: { label: string; value?: any; mono?: boolean; children?: ReactNode }) {
+function MetaRow({ label, value, mono, children }: { label: string; value?: string | number | null; mono?: boolean; children?: ReactNode }) {
   return (
     <div className="flex justify-between items-center gap-3 py-2 px-3 bg-gray-50 rounded-lg border border-gray-100">
       <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">{label}</span>

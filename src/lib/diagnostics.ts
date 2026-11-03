@@ -10,6 +10,8 @@
  * never request/response bodies. Call `initDiagnostics()` once at app startup.
  */
 
+import { errorMessage } from './errors';
+
 export interface ConsoleEntry {
   level: string;
   message: string;
@@ -144,7 +146,7 @@ export function initDiagnostics(): void {
             method,
             url,
             status: 0,
-            status_text: err instanceof Error ? err.message : 'Network error',
+            status_text: errorMessage(err, 'Network error'),
             ts: new Date().toISOString(),
           },
           MAX_NETWORK,

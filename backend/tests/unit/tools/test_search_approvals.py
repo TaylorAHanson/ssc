@@ -10,9 +10,9 @@ from app.tools.self_service.search_approvals import search_approvals
 from tests.factories.request_factory import RequestFactory
 from tests.factories.approval_factory import ApprovalFactory
 
-# A Platform Admin sees every approval type, which keeps the filtering-behavior
+# A Super Admin sees every approval type, which keeps the filtering-behavior
 # tests below focused on the filter under test.
-ADMIN = {"_user_email": "admin@example.com", "_user_roles": "Platform Admin"}
+ADMIN = {"_user_email": "admin@example.com", "_user_roles": "Super Admin"}
 
 
 class TestSearchApprovalsTool:

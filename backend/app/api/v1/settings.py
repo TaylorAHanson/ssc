@@ -1,7 +1,7 @@
 """Admin runtime-settings API.
 
 Exposes the curated, change-on-the-fly configuration overrides backed by the
-``app_settings`` table. Platform Admin only. See ``core.settings_store`` for the
+``app_settings`` table. Needs ``settings.manage``. See ``core.settings_store`` for the
 field spec and how overrides are applied to the live process.
 """
 from typing import Any, Dict
@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.api.deps import require_role
+from app.api.deps import require_capability
 from app.models.user import User
 from app.core import settings_store
 
@@ -24,7 +24,7 @@ class SettingsUpdate(BaseModel):
 
 @router.get("")
 @router.get("/")
-def get_settings(user: User = Depends(require_role("Platform Admin"))):
+def get_settings(user: User = Depends(require_capability("settings.manage"))):
     """Return the editable settings spec + current values and read-only fields."""
     return settings_store.get_state()
 
@@ -34,7 +34,7 @@ def get_settings(user: User = Depends(require_role("Platform Admin"))):
 def update_settings(
     payload: SettingsUpdate,
     db: Session = Depends(get_db),
-    user: User = Depends(require_role("Platform Admin")),
+    user: User = Depends(require_capability("settings.manage")),
 ):
     """Apply and persist a batch of setting overrides (takes effect immediately)."""
     if not payload.changes:

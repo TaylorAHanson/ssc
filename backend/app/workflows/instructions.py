@@ -60,7 +60,7 @@ def _humanize(name: str) -> str:
 
 _GATE_DESCRIPTIONS = {
     "manager": "Manager approval",
-    "platform_admin": "Platform Admin approval",
+    "platform_admin": "Application Admin approval",
     "data_owner": "Data Owner approval",
     "training": "Training completion",
     "pr_merge": "Pull request merge",

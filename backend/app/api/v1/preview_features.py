@@ -23,7 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.api.deps import require_any_role
+from app.api.deps import require_capability
 from app.core.config import settings
 from app.core.feature_flags import is_feature_enabled
 from app.db import RequestModel
@@ -33,7 +33,7 @@ from app.db.session import get_db
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-_ADMIN_ROLES = ["platform_admin", "governance_admin"]
+_ADMIN_CAPABILITY = "preview_features.manage"
 _SCOPES = ("workspace", "account")
 
 # Strong references to sync tasks started from the API (asyncio keeps only weak ones).
@@ -262,7 +262,7 @@ def _load_feature(db: Session, feature_id: str) -> PreviewFeatureModel:
 def list_preview_features(
     include_archived: bool = Query(False),
     db: Session = Depends(get_db),
-    current_user=Depends(require_any_role(_ADMIN_ROLES)),
+    current_user=Depends(require_capability(_ADMIN_CAPABILITY)),
 ):
     """Every tracked preview (GA and retired ones only with include_archived)."""
     _require_feature()
@@ -320,7 +320,7 @@ def _rows(db: Session, feature: PreviewFeatureModel) -> List[PreviewFeatureTarge
 def create_manual_feature(
     payload: ManualFeatureCreate,
     db: Session = Depends(get_db),
-    current_user=Depends(require_any_role(_ADMIN_ROLES)),
+    current_user=Depends(require_capability(_ADMIN_CAPABILITY)),
 ):
     """Add a preview Databricks doesn't list yet. It's requested like any other one."""
     _require_feature()
@@ -344,7 +344,7 @@ def match_manual_feature(
     feature_id: str,
     payload: MatchRequest,
     db: Session = Depends(get_db),
-    current_user=Depends(require_any_role(_ADMIN_ROLES)),
+    current_user=Depends(require_capability(_ADMIN_CAPABILITY)),
 ):
     """Replace a hand-added feature with the synced one, carrying its requests and statuses over."""
     _require_feature()
@@ -370,7 +370,7 @@ def match_manual_feature(
 def remove_manual_feature(
     feature_id: str,
     db: Session = Depends(get_db),
-    current_user=Depends(require_any_role(_ADMIN_ROLES)),
+    current_user=Depends(require_capability(_ADMIN_CAPABILITY)),
 ):
     """Take a hand-added feature off the list. Its past requests keep their history."""
     _require_feature()
@@ -388,7 +388,7 @@ def remove_manual_feature(
 @router.get("/sync", response_model=SyncStatus)
 def get_sync_status(
     db: Session = Depends(get_db),
-    current_user=Depends(require_any_role(_ADMIN_ROLES)),
+    current_user=Depends(require_capability(_ADMIN_CAPABILITY)),
 ):
     _require_feature()
     return _sync_status(db)
@@ -397,7 +397,7 @@ def get_sync_status(
 @router.post("/sync", response_model=SyncStatus, status_code=202)
 async def start_sync(
     db: Session = Depends(get_db),
-    current_user=Depends(require_any_role(_ADMIN_ROLES)),
+    current_user=Depends(require_capability(_ADMIN_CAPABILITY)),
 ):
     """Start a sync now. It runs in the background; poll ``GET /sync`` for the result."""
     _require_feature()
@@ -424,7 +424,7 @@ def create_preview_request(
     feature_id: str,
     payload: PreviewRequestCreate,
     db: Session = Depends(get_db),
-    current_user=Depends(require_any_role(_ADMIN_ROLES)),
+    current_user=Depends(require_capability(_ADMIN_CAPABILITY)),
 ):
     """Open one request (one batch approval) covering every selected workspace."""
     _require_feature()
@@ -455,7 +455,7 @@ def update_preview_feature(
     feature_id: str,
     payload: PreviewFeatureUpdate,
     db: Session = Depends(get_db),
-    current_user=Depends(require_any_role(_ADMIN_ROLES)),
+    current_user=Depends(require_capability(_ADMIN_CAPABILITY)),
 ):
     """Admin overrides that later syncs keep: scope, docs link and verification probe.
 

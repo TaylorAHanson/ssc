@@ -6,13 +6,13 @@ import { useUserStore } from '../../../stores/userStore';
 import type { ChangeSet } from '../../../types/metadata';
 import { ErrorBanner, Notice, Skeleton, Toast, type ToastMessage } from '../../../components/rbac/ui';
 import { cn } from '../../../lib/utils';
-import { AdminPage } from '../../../components/admin/metadata/AdminPage';
+import { AdminPage, SyncHistoryPage } from '../../../components/admin/metadata/AdminPage';
 import { BrowsePage } from '../../../components/admin/metadata/BrowsePage';
 import { ChangeSetDrawer } from '../../../components/admin/metadata/ChangeSetDrawer';
 import { DatasetPage } from '../../../components/admin/metadata/DatasetPage';
 import { DatasetsPage } from '../../../components/admin/metadata/DatasetsPage';
 import { MetadataContext, type MetadataContextValue } from '../../../components/admin/metadata/context';
-import { errorMessage } from '../../../components/admin/metadata/format';
+import { errorMessage } from '../../../lib/errors';
 import { HistoryPage } from '../../../components/admin/metadata/HistoryPage';
 import { CircuitBreakerBanner } from '../../../components/admin/metadata/ModeBanner';
 import { ObjectPage } from '../../../components/admin/metadata/ObjectPage';
@@ -39,7 +39,12 @@ export function MetadataManager() {
   const setPanel = useCallback((p: Panel | null) => setOpened(p ? { panel: p, at: location.pathname } : null), [location.pathname]);
   const [toast, setToast] = useState<ToastMessage | null>(null);
 
-  const load = useCallback(() => Promise.all([getWhoAmI(), getConfig(), listKeys({ limit: 500 })]), []);
+  const load = useCallback(async () => {
+    const whoami = await getWhoAmI();
+    // Ops Admins may open sync history without browse rights; the key list needs them.
+    if (!whoami.can_browse && !whoami.can_view_runs) return [whoami, null, []] as const;
+    return [whoami, await getConfig(), whoami.can_browse ? await listKeys({ limit: 500 }) : []] as const;
+  }, []);
   const { data, error, reload } = useAsync(load, { keepPrevious: true, token: `${refreshToken}:${roleOverride ?? ''}` });
   const unsavedCount = useStagingStore((s) => s.order.filter((k) => s.targets[k] && hasEdits(s.targets[k])).length);
 
@@ -58,6 +63,7 @@ export function MetadataManager() {
   const ctx = useMemo<MetadataContextValue | null>(() => {
     if (!data) return null;
     const [whoami, config, keys] = data;
+    if (!config) return null;
     return {
       whoami,
       config,
@@ -74,17 +80,21 @@ export function MetadataManager() {
   }, [data, refreshToken, bumpRefresh, navigate, setPanel]);
 
   const onAdmin = location.pathname.startsWith(adminPath);
+  const denied = data && !data[1] ? data[0] : null;
+  const syncOnly = !!ctx && !ctx.isAdmin && !!ctx.whoami.can_view_runs;
   let body: ReactNode;
-  if (error && !ctx) {
+  if (error && !data) {
     body = <ErrorBanner message={errorMessage(error, 'Couldn’t load the Metadata Manager')} onRetry={reload} />;
+  } else if (denied) {
+    body = (
+      <Notice kind="warn" title="You can’t browse metadata here">
+        {denied.message ?? 'Ask a governance admin for access.'}
+      </Notice>
+    );
   } else if (!ctx) {
     body = <Skeleton rows={8} />;
   } else if (!ctx.whoami.can_browse) {
-    body = (
-      <Notice kind="warn" title="You can’t browse metadata here">
-        {ctx.whoami.message ?? 'Ask a governance admin for access.'}
-      </Notice>
-    );
+    body = <SyncHistoryPage />;
   } else {
     body = (
       <>
@@ -111,7 +121,10 @@ export function MetadataManager() {
           <Route path="datasets" element={<DatasetsPage />} />
           <Route path="datasets/:dataset" element={<DatasetPage key={location.pathname} />} />
           <Route path="history" element={<HistoryPage />} />
-          <Route path="admin" element={ctx.isAdmin ? <AdminPage /> : <Navigate to={METADATA_BASE} replace />} />
+          <Route
+            path="admin"
+            element={ctx.isAdmin ? <AdminPage /> : syncOnly ? <SyncHistoryPage /> : <Navigate to={METADATA_BASE} replace />}
+          />
           <Route path="*" element={<Navigate to={METADATA_BASE} replace />} />
         </Routes>
         <UnsavedBar />
@@ -134,10 +147,12 @@ export function MetadataManager() {
               Browse
             </NavItem>
             <NavItem to={historyPath}>History</NavItem>
-            {ctx.isAdmin && (
+            {ctx.isAdmin ? (
               <NavItem to={adminPath}>
                 <Settings2 className="h-4 w-4" /> Sync &amp; admin
               </NavItem>
+            ) : (
+              syncOnly && <NavItem to={adminPath}>Sync history</NavItem>
             )}
           </nav>
         )}

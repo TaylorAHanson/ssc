@@ -241,7 +241,7 @@ export function ApprovalRow({
                     </p>
                     <p className="text-sm text-gray-800 whitespace-pre-wrap">
                       {a.instructions?.trim() ||
-                        'No instructions were recorded on this task — ask a platform admin before marking it done.'}
+                        'No instructions were recorded on this task — ask an Application Admin before marking it done.'}
                     </p>
                   </div>
                 )}

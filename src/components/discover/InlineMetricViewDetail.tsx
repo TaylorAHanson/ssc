@@ -24,6 +24,7 @@ import { CopyLinkButton } from './CopyLinkButton';
 import { PinButton } from './PinButton';
 import { pinInputFromAsset } from '../../lib/usePinnedAssets';
 import { scrollContainerOf } from '../../hooks/useViewScroll';
+import { errorMessage } from '../../lib/errors';
 
 interface DashboardOrApp {
   id: string;
@@ -34,6 +35,7 @@ interface DashboardOrApp {
   views?: number;
   updated_at?: string;
   url?: string | null;
+  workspace_name?: string | null;
 }
 
 /** Render a raw measure value using the measure's YAML `format`, if any. */
@@ -120,13 +122,13 @@ export function InlineMetricViewDetail({
     api
       .getMetricViewDetail(asset.id)
       .catch(
-        (e: Error): MetricViewDetail => ({
+        (e: unknown): MetricViewDetail => ({
           available: false,
           reason: 'error',
           kpis: [],
           upstream_tables: [],
           values: {},
-          error: e.message,
+          error: errorMessage(e),
         }),
       )
       .then((result) => {
@@ -515,7 +517,9 @@ export function InlineMetricViewDetail({
                     ? ' — you may not have access to this metric view.'
                     : detail.error_kind === 'broken_dependency'
                       ? ' — one of its source tables no longer exists. Ask the owner to fix the definition.'
-                      : '.'}
+                      : detail.error_kind === 'schema_changed'
+                        ? ' — a column in one of its source tables changed type since the view was created. Ask the owner to recreate the metric view.'
+                        : '.'}
                 </p>
                 <details className="mt-1 text-slate-500">
                   <summary className="cursor-pointer select-none">Show error details</summary>
@@ -568,7 +572,9 @@ export function InlineMetricViewDetail({
                   </p>
                 </div>
                 <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
-                  <span>{dash.owner ? `Owner: ${dash.owner}` : ''}</span>
+                  <span>
+                    {dash.owner ? `Owner: ${dash.owner}` : dash.workspace_name ? `In ${dash.workspace_name}` : ''}
+                  </span>
                   {dash.url ? (
                     <a
                       href={dash.url}

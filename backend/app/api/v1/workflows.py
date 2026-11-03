@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-_WRITE_ROLES = ["Platform Admin", "Governance Admin"]
+_WRITE_CAPABILITY = "workflows.author"
 
 
 def _require_feature() -> None:
@@ -266,7 +266,7 @@ def create_workflow(
     *,
     db: Session = Depends(deps.get_db),
     body: WorkflowCreate,
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
     __: None = Depends(_require_authoring_unlocked),
 ) -> Any:
@@ -308,7 +308,7 @@ def update_workflow(
     workflow_id: str,
     db: Session = Depends(deps.get_db),
     body: WorkflowUpdate,
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
     __: None = Depends(_require_authoring_unlocked),
 ) -> Any:
@@ -361,7 +361,7 @@ def validate_spec(
     *,
     body: SpecValidateRequest,
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
 ) -> Any:
     """Author-time check of a workflow graph_spec (used by the editor)."""
@@ -379,7 +379,7 @@ async def generate_instructions_endpoint(
     *,
     body: GenerateInstructionsRequest,
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
 ) -> Any:
     """Author (or improve) the runtime playbook for a draft workflow.
@@ -421,7 +421,7 @@ async def generate_instructions_endpoint(
 @router.get("/meta/tools")
 def list_workflow_tools(
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
 ) -> Any:
     """Wireable V2 tools (name + side-effect class) for the workflow editor."""
@@ -435,7 +435,7 @@ def test_spec(
     *,
     body: SpecTestRequest,
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
 ) -> Any:
     """Dry-run a draft workflow against a sample request (no tools run, no DB writes).
@@ -464,7 +464,7 @@ def evaluate_spec_endpoint(
     *,
     body: SpecEvaluateRequest,
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
 ) -> Any:
     """Advisory evaluation of a workflow (risk + quality + instructions + findings).
@@ -503,7 +503,7 @@ def publish_workflow(
     *,
     workflow_id: str,
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
     __: None = Depends(_require_authoring_unlocked),
 ) -> Any:
@@ -525,7 +525,7 @@ def unpublish_workflow(
     *,
     workflow_id: str,
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
     __: None = Depends(_require_authoring_unlocked),
 ) -> Any:
@@ -553,7 +553,7 @@ def disable_workflow(
     *,
     workflow_id: str,
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
 ) -> Any:
     """Turn a workflow off (operational kill switch).
@@ -572,7 +572,7 @@ def enable_workflow(
     *,
     workflow_id: str,
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
 ) -> Any:
     """Turn a previously-disabled workflow back on (see :func:`disable_workflow`)."""
@@ -584,7 +584,7 @@ def delete_workflow(
     *,
     workflow_id: str,
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
     __: None = Depends(_require_authoring_unlocked),
 ) -> Any:
@@ -602,7 +602,7 @@ def delete_workflow(
 def list_workflow_versions(
     workflow_id: str,
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
 ) -> Any:
     """Snapshot history for a workflow (newest first).
@@ -621,7 +621,7 @@ def rollback_workflow(
     workflow_id: str,
     body: RollbackRequest,
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
     __: None = Depends(_require_authoring_unlocked),
 ) -> Any:
@@ -671,7 +671,7 @@ def list_workflow_tests(
     *,
     workflow_id: str,
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
 ) -> Any:
     """A workflow's test cases plus the latest run for each, and overall health."""
@@ -705,7 +705,7 @@ def create_workflow_test(
     workflow_id: str,
     body: WorkflowTestUpsert,
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
     __: None = Depends(_require_authoring_unlocked),
 ) -> Any:
@@ -736,7 +736,7 @@ def update_workflow_test(
     test_id: str,
     body: WorkflowTestUpsert,
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
     __: None = Depends(_require_authoring_unlocked),
 ) -> Any:
@@ -755,7 +755,7 @@ def delete_workflow_test(
     workflow_id: str,
     test_id: str,
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
     __: None = Depends(_require_authoring_unlocked),
 ) -> Any:
@@ -774,7 +774,7 @@ async def generate_workflow_tests(
     workflow_id: str,
     body: GenerateTestsRequest,
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
     __: None = Depends(_require_tests_enabled),
 ) -> Any:
@@ -811,7 +811,7 @@ def run_workflow_tests(
     workflow_id: str,
     body: RunTestsRequest,
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
     __: None = Depends(_require_tests_enabled),
 ) -> Any:
@@ -872,7 +872,7 @@ def get_workflow_test_run_group(
     workflow_id: str,
     group_id: str,
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
 ) -> Any:
     """Poll one run group. Transcripts are included so a verdict is reviewable."""
@@ -900,7 +900,7 @@ def export_workflows(
     ids: Optional[str] = None,
     published_only: bool = False,
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
 ) -> Any:
     """Export workflows as a portable, env-agnostic JSON bundle (keyed by workflow key)."""
@@ -913,7 +913,7 @@ def import_workflows(
     *,
     body: ImportRequest,
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
 ) -> Any:
     """Import a bundle into this environment (upsert by key); defaults to drafts.

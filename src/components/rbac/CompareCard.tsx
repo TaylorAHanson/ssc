@@ -6,7 +6,8 @@ import { Button } from '../ui/button';
 import { Card, CardContent } from '../ui/card';
 import { Badge, ErrorBanner } from './ui';
 import { useLoad } from './useLoad';
-import { errorMessage, loadSheets, plural } from './utils';
+import { loadSheets, plural } from './utils';
+import { errorMessage } from '../../lib/errors';
 
 const KIND_LABELS: Record<string, string> = {
   bom: 'Byte-order mark',

@@ -34,6 +34,7 @@ import type { ChecklistRuleRow } from './CertificationChecklist';
 import { catalogExplorerUrl } from '../../lib/databricksLinks';
 import { useBrandingStore } from '../../stores/brandingStore';
 import { formatPacific, parseUtc } from '../../lib/certificationDates';
+import { errorMessage } from '../../lib/errors';
 
 export type DrawerTab = 'overview' | 'tables' | 'checklist' | 'history';
 
@@ -628,7 +629,7 @@ export function DatasetCertificationDrawer({
     api
       .getCertificationDetail(datasetId)
       .then((detail) => !cancelled && setLoaded({ key: loadKey, detail, error: null }))
-      .catch((e: Error) => !cancelled && setLoaded({ key: loadKey, detail: null, error: e.message }));
+      .catch((e: unknown) => !cancelled && setLoaded({ key: loadKey, detail: null, error: errorMessage(e) }));
     return () => {
       cancelled = true;
     };

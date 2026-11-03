@@ -71,7 +71,7 @@ export function CircuitBreakerBanner({ action }: { action?: ReactNode }) {
     <Notice kind="error" title="Syncing paused itself">
       <p>
         A sync would have taken the tags or descriptions removed in the last hour over the safety limit, so it stopped before writing anything. Changes are
-        still saved here, but nothing reaches Unity Catalog until a Platform Admin reviews the removals and either applies them or clears the pause.
+        still saved here, but nothing reaches Unity Catalog until a Super Admin or Governance Admin reviews the removals and either applies them or clears the pause.
       </p>
       {action && <div className="mt-2">{action}</div>}
     </Notice>

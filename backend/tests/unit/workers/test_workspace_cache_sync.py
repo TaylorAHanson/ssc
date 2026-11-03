@@ -102,6 +102,18 @@ def test_one_sync_run_writes_assets_and_workspaces(session_factory, monkeypatch)
     assert len(_non_scope_tag_queries(provider)) == 2
 
 
+def test_empty_workspace_cache_is_filled_before_dashboard_lineage(session_factory, monkeypatch):
+    provider = _provider(monkeypatch)
+    monkeypatch.setitem(ASSET_ROW, "type", "METRIC_VIEW")
+
+    asyncio.run(sync_data_assets.sync_data_assets_task(force=True))
+
+    queries = _non_scope_tag_queries(provider)
+    first_ws = next(i for i, q in enumerate(queries) if "workspaces_latest" in q)
+    lineage = next(i for i, q in enumerate(queries) if "table_lineage" in q)
+    assert first_ws < lineage
+
+
 def test_asset_sync_failure_still_refreshes_workspaces(session_factory, monkeypatch):
     _provider(monkeypatch, assets_error=RuntimeError("information_schema exploded"))
 

@@ -93,7 +93,7 @@ def outside_message(catalogs: List[str]) -> str:
     names = f"{shown} and {more} more" if more > 0 else shown
     return (
         f"This deployment manages only catalogs matching {', '.join(patterns())}, so it can't change {names}. "
-        "Make the change in the deployment that manages them, or ask a Platform Admin to add them to "
+        "Make the change in the deployment that manages them, or ask an Application Admin to add them to "
         "Catalogs to reconcile."
     )
 

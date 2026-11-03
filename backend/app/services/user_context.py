@@ -35,6 +35,7 @@ from typing import Any, Callable, Dict, List, Optional, Set
 
 from sqlalchemy.orm import Session
 
+from app.core import capabilities
 from app.core.config import settings
 from app.core.feature_flags import is_feature_enabled
 from app.db.user_profile import UserProfileModel
@@ -62,21 +63,12 @@ def normalize_email(email: Optional[str]) -> str:
 # ``derivePersona`` so the agent's notion of the user's persona matches the one
 # the UI shows them. Lives here rather than in the agent router because the
 # router imports this module; the reverse would be a cycle.
-PERSONA_PRIORITY = [
-    "Platform Admin",
-    "Governance Admin",
-    "Security Admin",
-    "Finance Admin",
-]
+PERSONA_PRIORITY = list(capabilities.PERSONA_PRIORITY)
 
 
 def derive_persona(roles: Optional[List[str]]) -> str:
     """Collapse a user's roles to the single most significant persona."""
-    role_set = set(roles or [])
-    for persona in PERSONA_PRIORITY:
-        if persona in role_set:
-            return persona
-    return "User"
+    return capabilities.persona_for(roles)
 
 
 # ---------------------------------------------------------------------------
@@ -129,14 +121,13 @@ class UserIdentity:
 # ---------------------------------------------------------------------------
 def _build_identity(db: Session, identity: UserIdentity) -> Dict[str, Any]:
     """Who they are. Free — everything here was already resolved by auth."""
-    from app.services.approval_scope import is_platform_admin
-
     return {
         "email": identity.email,
         "display_name": identity.display_name or identity.email,
         "roles": identity.roles,
         "persona": derive_persona(identity.roles),
-        "is_platform_admin": is_platform_admin(identity.roles),
+        "is_super_admin": capabilities.is_super_admin(identity.roles),
+        "sees_all_requests": capabilities.has_capability(identity.roles, "requests.view_all"),
         # SCIM groups double as the app's entitlement list. Useful to the agent
         # for "am I in the group that owns X" reasoning.
         #

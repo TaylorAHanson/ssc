@@ -88,7 +88,7 @@ to pick a category. A repeat of the same report within a few minutes is
 recorded once.
 
 A question about feedback, such as how it works or who reads it, is answered
-and not filed. Platform Admins and Governance Admins read what has been sent in
+and not filed. Super, Application and Governance Admins read what has been sent in
 **Admin → Feedback**; if you ask the assistant where to see it, it points you
 there. Anyone else is told that the admins review it. The assistant can't read
 what has been filed, so it won't tell you the status of a report.
@@ -105,6 +105,15 @@ table name you gave, and for a change to a table or its data it points you to
 the owner and can help you draft the request. For a dashboard it gives you the
 next step in Dashboards first, without searching for data, and then offers to
 help you find a dataset to build it on.
+
+Some questions are better answered by Genie Code, which runs as you in your
+Databricks workspace and can explore the system tables freely: cost and usage
+analysis (such as spend by workspace last month), audit-log investigations
+(such as who dropped a table), access audits across all of Unity Catalog, and
+exploratory SQL or notebook work. When you ask one of these, the assistant says
+so and gives you a short prompt to paste into Genie Code. It can still check
+who has access to one specific catalog, schema, table, volume, function or
+model.
 
 Changing a table's tags or description is still done here, in the Metadata
 Manager, which is limited to data owners and governance. If you don't have

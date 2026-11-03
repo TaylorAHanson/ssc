@@ -1490,7 +1490,8 @@ def _split_assignee(approver: Optional[str]):
 
     An ``@``-bearing value is treated as a specific person; anything else is a
     group/role name. Returns (None, None) when no approver was resolved (the
-    approve endpoint then restricts the task to a platform-admin override).
+    approve endpoint then restricts the task to a Super Admin override, or to
+    Application Admins for a platform_admin gate or manual task).
     """
     if not approver or not isinstance(approver, str):
         return None, None
@@ -1564,7 +1565,7 @@ def _ensure_approval_task(db: Session, request: RequestModel, payload) -> None:
         db.commit()
         logger.info(
             f"[{request.id}] created pending {gtype} approval "
-            f"(assignee={assigned_email or assigned_role or 'platform-admin-only'})"
+            f"(assignee={assigned_email or assigned_role or 'admin-override-only'})"
         )
     except Exception as e:  # noqa: BLE001 - non-fatal; next tick retries
         logger.warning(f"[{request.id}] could not create approval task: {e}")

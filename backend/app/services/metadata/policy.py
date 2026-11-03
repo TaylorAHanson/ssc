@@ -87,6 +87,7 @@ def key_policies() -> List[KeyPolicy]:
             editor_groups=list(dict.fromkeys(_as_list(raw.get("editor_groups")))),
             sensitive=_as_bool(raw.get("sensitive")),
             required=_as_bool(raw.get("required")),
+            value_required=_as_bool(raw.get("value_required")),
             description=str(raw.get("description") or "").strip() or None,
         ))
     return out
@@ -149,9 +150,11 @@ def check_item(item: ChangeItem, *, governed: Optional[Dict[str, List[str]]] = N
 
     Only tag items are checked. Removals are checked only for exempt and
     required keys, so tags that no longer fit the policy can always be cleaned up.
-    A key-only tag (no value) is checked as the empty string against the
-    pattern and allowed values, but not against governed values (Unity Catalog
-    doesn't check those either).
+    A replace that drops a required key reaches here as an unset and is denied too.
+    A key-only or blank tag on a ``value_required`` key is denied outright;
+    otherwise it is checked as the empty string against the pattern and allowed
+    values, but not against governed values (Unity Catalog doesn't check those
+    either).
     """
     if item.field != "tag" or not item.key:
         return []
@@ -189,13 +192,17 @@ def check_item(item: ChangeItem, *, governed: Optional[Dict[str, List[str]]] = N
         if not applies_to(pol, item.securable_type):
             deny("not_applicable", f"'{key}' can only be set on {_where(pol.applies_to)}.")
         value = item.after if item.after is not None else ""
-        compiled = _compile(pol.pattern) if pol.pattern else None
-        if compiled is not None and not compiled.fullmatch(value):
+        if pol.value_required and not value.strip():
             hint = f" {pol.description}" if pol.description else ""
-            deny("pattern", f"'{value}' is not a valid value for '{key}'.{hint} It must match {pol.pattern}.")
-        if pol.allowed_values and value not in pol.allowed_values:
-            deny("not_allowed_value", f"'{value}' isn't an allowed value for '{key}'. Allowed values: "
-                                      f"{', '.join(pol.allowed_values)}.")
+            deny("value_required", f"'{key}' needs a value; it can't be added as a key-only or blank tag.{hint}")
+        else:
+            compiled = _compile(pol.pattern) if pol.pattern else None
+            if compiled is not None and not compiled.fullmatch(value):
+                hint = f" {pol.description}" if pol.description else ""
+                deny("pattern", f"'{value}' is not a valid value for '{key}'.{hint} It must match {pol.pattern}.")
+            if pol.allowed_values and value not in pol.allowed_values:
+                deny("not_allowed_value", f"'{value}' isn't an allowed value for '{key}'. Allowed values: "
+                                          f"{', '.join(pol.allowed_values)}.")
 
     allowed = _governed_values(governed, key)
     if allowed and item.after is not None and item.after not in allowed:

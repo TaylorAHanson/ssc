@@ -17,7 +17,7 @@ There are two ways in:
 {{brand_name}} doesn't issue API keys. A system calls it with a Databricks OAuth token:
 
 - **A service principal** (most pipelines) uses its own machine-to-machine token. It
-  needs **Can use** on the app, and a Platform Admin or Metadata Manager editor must
+  needs **Can use** on the app, and a Super Admin or Metadata Manager editor must
   register it under **Admin → Automation access** in the Metadata Manager.
 - **A person** (scripts, notebooks) uses their own token and gets exactly their own
   rights, as on the page.
@@ -160,7 +160,7 @@ A service principal can only notify names inside its scope.
 
 ## MCP tools
 
-Over MCP, {{brand_name}} publishes four tools, which a Platform Admin can switch off in
+Over MCP, {{brand_name}} publishes four tools, which a Super or Application Admin can switch off in
 the Tool Registry:
 
 | Tool | Does |

@@ -1,10 +1,12 @@
 """
 System API routes for configuration and schedules.
 """
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from datetime import datetime, timezone
 from pydantic import BaseModel
 from typing import Optional
+
+from app.api.deps import require_capability
 
 router = APIRouter()
 
@@ -35,7 +37,12 @@ def get_next_run(cron_expr: str) -> Optional[str]:
     except Exception:
         return None
 
-@router.get("/schedules", response_model=SystemSchedules)
+# The OmniGuard page shows the next scheduled run, so its viewers may read these too.
+@router.get(
+    "/schedules",
+    response_model=SystemSchedules,
+    dependencies=[Depends(require_capability("ops.health", "sentinel.view"))],
+)
 async def get_schedules():
     from app.core.config import settings
     return SystemSchedules(

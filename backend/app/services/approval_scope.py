@@ -10,42 +10,45 @@ now normalize their identity into plain strings and share the rules below.
 """
 from typing import Any, Iterable, List, Optional, Sequence
 
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 
+from app.core import capabilities
 from app.db import ApprovalModel
 
-# An approval is visible to a role either because it is addressed to that role
-# directly (``assigned_to_role``) or because the role owns that whole class of
-# approval. Platform Admin sees everything, mirroring ``User.has_role``.
-#
-# ``manual_task`` must stay in the Platform Admin list. A manual task is created
-# with whatever assignee the gate resolved, and a gate that names no approver
-# resolves to none at all — so without a role that owns the type, the row is
-# addressed to nobody, appears in nobody's inbox, and the request waits at the
-# gate forever. ``_authorize_approval_actor`` already grants platform admins the
-# break-glass action on an unassigned approval; this is the matching visibility
-# so they can find it.
+# Every approval type a role owns outright (sees in its inbox whoever it's addressed to).
+# Super Admin owns them all. The ``platform_admin`` type key is stored in workflow
+# JSON and on approval rows and is shown as "Application Admin"; it is not renamed.
+ALL_APPROVAL_TYPES = (
+    "platform_admin", "manager", "data_owner", "security",
+    "security_admin", "finance_admin", "governance_admin", "manual_task",
+)
+
 ROLE_APPROVAL_TYPES = {
-    "platform admin": (
-        "platform_admin", "manager", "data_owner", "security",
-        "security_admin", "finance_admin", "governance_admin", "manual_task",
-    ),
+    "super admin": ALL_APPROVAL_TYPES,
+    "application admin": ("platform_admin",),
     "governance admin": ("governance_admin",),
     "security admin": ("security", "security_admin"),
     "finance admin": ("finance_admin",),
 }
 
-PLATFORM_ADMIN = "platform admin"
+# ``manual_task`` with nobody on it. A gate that names no approver resolves to none
+# at all, so without a role that owns these the row is addressed to nobody, appears
+# in nobody's inbox, and the request waits at the gate forever. Application Admins
+# see (and may complete) them, as Platform Admins did; Super Admins see every manual
+# task via ALL_APPROVAL_TYPES.
+UNASSIGNED_TASK_TYPE = "manual_task"
+UNASSIGNED_TASK_CAPABILITY = "approvals.application"
 
 
 def normalize_role(role: Any) -> str:
     """Fold a role to the canonical lowercase, space-separated form.
 
-    ``Platform Admin``, ``platform_admin`` and ``PLATFORM ADMIN`` are the same
-    role; they arrive in all three spellings depending on whether the value came
-    from ``role_mappings``, an OPA input, or an injected tool kwarg.
+    ``Governance Admin``, ``governance_admin`` and ``GOVERNANCE ADMIN`` are the
+    same role; they arrive in all three spellings depending on whether the value
+    came from ``role_mappings``, an OPA input, or an injected tool kwarg. The old
+    name ``Platform Admin`` folds to ``application admin``.
     """
-    return str(role or "").strip().lower().replace("_", " ")
+    return capabilities.canonical_role(role).strip().lower().replace("_", " ")
 
 
 def parse_csv(value: Optional[str]) -> List[str]:
@@ -78,18 +81,33 @@ def in_group(entitlements: Optional[Iterable[Any]], group: Any) -> bool:
     return bool(wanted) and any(normalize_group(e) == wanted for e in (entitlements or []))
 
 
-def is_platform_admin(roles: Optional[Iterable[Any]]) -> bool:
-    return PLATFORM_ADMIN in normalize_roles(roles)
-
-
 def allowed_approval_types(roles: Optional[Iterable[Any]]) -> List[str]:
-    """Approval types the given roles may act on, deduplicated."""
+    """Approval types the given roles own outright, deduplicated."""
     out: List[str] = []
     for role in normalize_roles(roles):
         for approval_type in ROLE_APPROVAL_TYPES.get(role, ()):
             if approval_type not in out:
                 out.append(approval_type)
     return out
+
+
+def sees_unassigned_tasks(roles: Optional[Iterable[Any]]) -> bool:
+    return capabilities.has_capability(roles, UNASSIGNED_TASK_CAPABILITY)
+
+
+def is_unassigned_task(approval: Any) -> bool:
+    return (
+        getattr(approval, "approval_type", None) == UNASSIGNED_TASK_TYPE
+        and not getattr(approval, "assigned_to_email", None)
+        and not getattr(approval, "assigned_to_role", None)
+    )
+
+
+def type_visible(approval: Any, roles: Optional[Iterable[Any]]) -> bool:
+    """Whether the roles see ``approval`` by its type alone (not by assignment)."""
+    if getattr(approval, "approval_type", None) in allowed_approval_types(roles):
+        return True
+    return is_unassigned_task(approval) and sees_unassigned_tasks(roles)
 
 
 def approval_visibility_filter(
@@ -106,12 +124,20 @@ def approval_visibility_filter(
     Group names match case-insensitively, as ``in_group`` does for acting on the
     approval. The exact-match arm stays because SQLite's ``lower()`` folds ASCII only.
     """
+    roles = list(roles or [])
     groups = [str(e) for e in (entitlements or []) if e]
     folded = sorted({normalize_group(g) for g in groups if normalize_group(g)})
-    return or_(
+    arms = [
         ApprovalModel.assigned_to_email == email,
         ApprovalModel.delegated_to_email == email,
         ApprovalModel.assigned_to_role.in_(groups),
         func.lower(func.trim(ApprovalModel.assigned_to_role)).in_(folded),
         ApprovalModel.approval_type.in_(allowed_approval_types(roles)),
-    )
+    ]
+    if sees_unassigned_tasks(roles):
+        arms.append(and_(
+            ApprovalModel.approval_type == UNASSIGNED_TASK_TYPE,
+            or_(ApprovalModel.assigned_to_email.is_(None), ApprovalModel.assigned_to_email == ""),
+            or_(ApprovalModel.assigned_to_role.is_(None), ApprovalModel.assigned_to_role == ""),
+        ))
+    return or_(*arms)

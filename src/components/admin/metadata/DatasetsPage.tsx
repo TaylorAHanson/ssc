@@ -7,7 +7,8 @@ import { EmptyState, ErrorBanner, Skeleton } from '../../rbac/ui';
 import { DriftBadge } from './badges';
 import { BrowseSwitch } from './BrowseSwitch';
 import { useMetadata } from './context';
-import { errorMessage, plural } from './format';
+import { plural } from './format';
+import { errorMessage } from '../../../lib/errors';
 import { datasetPath } from './paths';
 import { useAsync } from './useAsync';
 

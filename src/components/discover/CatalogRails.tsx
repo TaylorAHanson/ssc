@@ -9,10 +9,12 @@
 import { useMemo, type ReactNode } from 'react';
 import { ChevronRight, Pin } from 'lucide-react';
 
-import { AssetCard, normalizeAssetType } from '../../lib/assetTypes';
+import { AssetCard } from '../../lib/assetTypes';
+import { normalizeAssetType } from '../../lib/assetTypeMeta';
 import { usePinnedItems, pinKey, type PinnedItem } from '../../lib/usePinnedItems';
 import { useUserStore } from '../../stores/userStore';
 import { dataAssetsResource, odpsResource } from '../../lib/catalogCache';
+import type { DataAsset, OdpsDocument } from '../../services/api';
 
 export type BrowseAllTarget = 'data_product' | 'dataset';
 
@@ -56,19 +58,19 @@ export function CatalogRails({
     [assets],
   );
 
-  const dpItem = (dp: any): PinnedItem => ({
+  const dpItem = (dp: OdpsDocument): PinnedItem => ({
     key: pinKey('data_product', dp.id),
     id: dp.id,
     type: 'data_product',
     title: dp.name,
-    subtitle: dp.description || 'Data product',
+    subtitle: 'Data product',
   });
 
-  const dsItem = (ds: any): PinnedItem => ({
+  const dsItem = (ds: DataAsset): PinnedItem => ({
     key: pinKey(ds.type, ds.id),
     id: ds.id,
     type: ds.type,
-    title: ds.table_name || ds.name,
+    title: ds.table_name,
     subtitle: ds.description,
     certified: ds.certified,
   });
@@ -118,7 +120,7 @@ export function CatalogRails({
               key={dp.id}
               type="data_product"
               title={dp.name}
-              subtitle={dp.description || 'Data product'}
+              subtitle="Data product"
               pinned={isPinned(item.key)}
               onTogglePin={() => togglePin(item)}
               onViewDetails={() => onViewDetails({ id: dp.id, type: 'data_product', title: dp.name })}
@@ -142,13 +144,13 @@ export function CatalogRails({
             <AssetCard
               key={ds.id}
               type={ds.type}
-              title={ds.table_name || ds.name}
+              title={ds.table_name}
               subtitle={ds.description}
               certified={ds.certified}
               pinned={isPinned(item.key)}
               onTogglePin={() => togglePin(item)}
               onViewDetails={() =>
-                onViewDetails({ id: ds.id, type: ds.type, title: ds.table_name || ds.name })
+                onViewDetails({ id: ds.id, type: ds.type, title: ds.table_name })
               }
             />
           );

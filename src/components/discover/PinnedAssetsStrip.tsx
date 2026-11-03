@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { ArrowLeftRight, Pin, X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { PinnedAsset } from '../../services/api';
-import { getAssetTypeMeta } from '../../lib/assetTypes';
+import { getAssetTypeMeta } from '../../lib/assetTypeMeta';
 import { useLegacyMappings } from '../../lib/catalogCache';
 import { LEGACY_DASHBOARD_PIN_TYPE, usePinnedAssets } from '../../lib/usePinnedAssets';
 

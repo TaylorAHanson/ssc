@@ -25,8 +25,8 @@ The approver group is a Databricks group, named exactly as it appears in
 Databricks. Its members approve requests of that type and can edit that type's
 rules directly. The **Approvers** line at the top of the page shows each type's
 group, with a pencil where you can edit that type and an eye where you can only
-view it. A type with no group shows **Not set** and falls back to Platform
-Admins, and Platform Admins can approve every type.
+view it. A type with no group shows **Not set** and its approvals fall back to
+Application Admins, who can approve every type, as can Super Admins.
 
 The group can be a workspace group or an account group, including one that
 isn't assigned to this workspace, as Unity Catalog grants often use. The dot
@@ -40,7 +40,7 @@ red); hover over it for the detail:
 - **Couldn't confirm:** the group isn't in this workspace, and the account's
   groups couldn't be checked. Check that the name matches the group exactly.
 - **Not found in Databricks:** no group in the workspace or the account has this
-  exact name, so only Platform Admins get these approvals until it's fixed. A
+  exact name, so only Application Admins get these approvals until it's fixed. A
   red warning under the line says so.
 
 If a member of an account group sees that type as **View only**, {{brand_name}}
@@ -54,7 +54,8 @@ three groups.
 
 ## Who can use the page
 
-- **Platform admins** can do everything, including importing the workbook.
+- **Super and Governance Admins** can do everything, including importing the
+  workbook.
 - **Members of an approver group** see every sheet and edit their own type's
   sheets.
 - **Viewer roles** (Governance Admin by default) see everything but can't
@@ -82,7 +83,7 @@ Each request then goes through three steps:
 1. **Prepare** works out the exact row changes and who approves.
 2. **Approve** waits for the approver group of the request's type. The approval
    card shows the prepared change, any linked requests, and who approves, such
-   as "UC securables approvers: `grp_uc_admins`", or "Platform Admins (no UC
+   as "UC securables approvers: `grp_uc_admins`", or "Application Admins (no UC
    securables group set)" when that type has no group.
 3. **Record** writes the approved change into the rules straight away. The
    request then completes and names the next scheduled export.
@@ -217,8 +218,8 @@ pipeline reads them without change.
 
 ## Import tab
 
-The workbook is imported once, to seed the rules. Only Platform Admins see this
-tab.
+The workbook is imported once, to seed the rules. Only Super and Governance
+Admins see this tab.
 
 1. Upload the workbook. The preview lists, per sheet, the rows found, the
    headers captured and any duplicate rows. Tabs that aren't managed sheets,

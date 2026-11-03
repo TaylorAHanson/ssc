@@ -44,8 +44,8 @@ def _no_identity() -> Dict[str, Any]:
 def _no_browse() -> Dict[str, Any]:
     return {"ok": False, "status": "forbidden", "status_code": 403,
             "error": "You don't have access to the Metadata Manager: it is limited to governance and data owners, "
-                     "and you don't own any objects in it, so I can't search or read metadata for you. Ask a "
-                     "Platform Admin to add one of your roles to the Metadata Manager's browse roles."}
+                     "and you don't own any objects in it, so I can't search or read metadata for you. Ask an "
+                     "Application Admin to add one of your roles to the Metadata Manager's browse roles."}
 
 
 def _error(exc: Exception) -> Dict[str, Any]:

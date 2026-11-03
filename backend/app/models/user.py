@@ -1,6 +1,8 @@
 from pydantic import BaseModel, ConfigDict
 from typing import Dict, List, Optional
 
+from app.core import capabilities
+
 class User(BaseModel):
     """
     Application-level User model derived from Identity Provider (SCIM) entitlements
@@ -27,17 +29,19 @@ class User(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     def has_role(self, role_name: str) -> bool:
-        """Check if user has a specific role. 'Platform Admin' has all roles.
+        """Check if user has a specific role. 'Super Admin' has all roles.
 
         Comparison is case-insensitive and treats underscores and spaces as
         equivalent, so callers may pass either the canonical name
         ("Governance Admin") or the snake_case form ("governance_admin") and
-        still match the role as stored. This avoids silent authorization gaps
-        where, e.g., a Governance Admin was denied because the call site used
-        an underscore that never matched the space-delimited stored role.
+        still match the role as stored. The old name 'Platform Admin' is read as
+        'Application Admin' on either side.
         """
-        def _norm(r: str) -> str:
-            return r.strip().lower().replace("_", " ")
+        return capabilities.has_role(self.roles, role_name)
 
-        normalized = {_norm(r) for r in self.roles}
-        return "platform admin" in normalized or _norm(role_name) in normalized
+    def can(self, capability_id: str) -> bool:
+        """Whether the user holds a capability from ``app.core.capabilities``."""
+        return capabilities.has_capability(self.roles, capability_id)
+
+    def capability_ids(self) -> List[str]:
+        return capabilities.capabilities_for(self.roles)

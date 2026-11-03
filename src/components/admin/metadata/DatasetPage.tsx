@@ -6,7 +6,8 @@ import { Button } from '../../ui/button';
 import { EmptyState, ErrorBanner, Pager, Skeleton } from '../../rbac/ui';
 import { useMetadata } from './context';
 import { EditManyDialog } from './EditManyDialog';
-import { errorMessage, plural } from './format';
+import { REQUIRED_TAG_TITLE, isRequiredTag, plural } from './format';
+import { errorMessage } from '../../../lib/errors';
 import { Breadcrumb } from './ObjectHeader';
 import { ObjectList } from './ObjectList';
 import { datasetsPath } from './paths';
@@ -152,8 +153,10 @@ function DatasetTags({ items, total }: { items: ObjectSummary[]; total: number }
     .sort((a, b) => Number(config.exempt_keys.includes(a.key)) - Number(config.exempt_keys.includes(b.key)) || a.key.localeCompare(b.key));
 
   const setOn = (on: TargetSeed[], key: string, value: string | null) => setTag(on.map((s) => s.key), key, value, on);
+  // Required tags stay on the tables they're required on.
+  const removableFrom = (key: string) => seeds.filter((s) => key in tagsOf(s) && !isRequiredTag(config, key, s.securableType));
   const removeFromAll = (key: string) => {
-    const on = seeds.filter((s) => key in tagsOf(s));
+    const on = removableFrom(key);
     unsetTag(on.map((s) => s.key), key, on);
   };
   const n = seeds.length;
@@ -175,10 +178,12 @@ function DatasetTags({ items, total }: { items: ObjectSummary[]; total: number }
             const exempt = config.exempt_keys.includes(key);
             const single = values.length === 1 ? values[0][0] : undefined;
             const missing = n - count;
+            const removable = exempt ? 0 : removableFrom(key).length;
+            const required = !exempt && removable < count;
             return (
               <li key={key} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2">
                 <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-                  <TagChip tagKey={key} value={single === undefined ? null : single || null} tone={exempt ? 'exempt' : 'default'} />
+                  <TagChip tagKey={key} value={single === undefined ? null : single || null} tone={exempt ? 'exempt' : 'default'} required={required} />
                   {single === undefined && (
                     <span className="text-xs text-gray-500" title={values.map(([v, c]) => `${v || '(no value)'}: ${c}`).join('\n')}>
                       {values.length} different values: {values.slice(0, SHOWN_VALUES).map(([v]) => v || '(no value)').join(', ')}
@@ -196,9 +201,21 @@ function DatasetTags({ items, total }: { items: ObjectSummary[]; total: number }
                         Add to the other {missing}
                       </Button>
                     )}
-                    <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => removeFromAll(key)}>
-                      Remove from all
-                    </Button>
+                    {removable > 0 ? (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 text-xs"
+                        onClick={() => removeFromAll(key)}
+                        title={required ? `Removes it from the ${removable} tables where it isn’t required.` : undefined}
+                      >
+                        {required ? `Remove where allowed (${removable})` : 'Remove from all'}
+                      </Button>
+                    ) : (
+                      <span className="text-xs text-gray-400" title={REQUIRED_TAG_TITLE}>
+                        Required
+                      </span>
+                    )}
                   </div>
                 )}
               </li>
@@ -208,7 +225,12 @@ function DatasetTags({ items, total }: { items: ObjectSummary[]; total: number }
       )}
       <div className="space-y-1 border-t border-gray-100 pt-3">
         <div className="text-sm font-medium text-gray-900">Add or change a tag on every table</div>
-        <AddTagForm compact submitLabel="Add to all" onAdd={(key, value) => setOn(seeds, key, value)} />
+        <AddTagForm
+          compact
+          submitLabel="Add to all"
+          securableTypes={[...new Set(seeds.map((s) => s.securableType))]}
+          onAdd={(key, value) => setOn(seeds, key, value)}
+        />
       </div>
     </section>
   );

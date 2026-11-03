@@ -138,6 +138,17 @@ def cached_by_host() -> Dict[str, Dict[str, Any]]:
     return {normalize_host(r["workspace_url"]): r for r in rows if r.get("workspace_url")}
 
 
+def cached_by_id() -> Dict[str, Dict[str, Any]]:
+    """Cached workspaces keyed by ``workspace_id`` (as text); ``{}`` when off or empty.
+
+    Blocking DB read: call it via ``asyncio.to_thread`` from async code.
+    """
+    if not enabled():
+        return {}
+    rows, _ = read_cached_workspaces()
+    return {str(r["workspace_id"]): r for r in rows if r.get("workspace_id")}
+
+
 def _replace_all(rows: List[CachedWorkspaceModel]) -> None:
     db = get_lakebase_session()
     try:

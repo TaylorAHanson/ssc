@@ -8,6 +8,8 @@ from app.db.session import get_db
 from app.db.request import RequestModel
 from sqlalchemy import or_
 
+from app.core.capabilities import has_capability
+
 class SearchRequestsInput(BaseModel):
     query: Optional[str] = Field(None, description="Search term to match against request title or ID (optional)")
     status: Optional[str] = Field(None, description="Filter by request status (e.g., 'pending', 'completed', 'failed') (optional)")
@@ -34,8 +36,8 @@ def search_requests(
         
         # Apply role-based filtering
         if _user_email and _user_roles is not None:
-            roles_list = [r.strip().lower() for r in _user_roles.split(",")]
-            if "platform admin" not in roles_list:
+            roles_list = [r.strip() for r in _user_roles.split(",") if r.strip()]
+            if not has_capability(roles_list, "requests.view_all"):
                 sql_query = sql_query.filter(RequestModel.requester_email == _user_email)
         
         # Filter by text query

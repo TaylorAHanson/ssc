@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from 'react';
 import { Card, CardContent } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import {
@@ -16,6 +16,7 @@ import {
   AcademyBadge, AcademyCatalogPanel, AcademyCoursePicker,
 } from '../../components/admin/training/AcademyCatalog';
 import { academyMeta } from '../../components/admin/training/academy';
+import { errorMessage } from '../../lib/errors';
 
 const inputClass = 'w-full border border-gray-300 rounded-md h-9 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:bg-gray-100 disabled:text-gray-500';
 const labelClass = 'text-[11px] font-bold text-gray-500 uppercase tracking-wider';
@@ -59,20 +60,24 @@ export function TrainingAdmin() {
       setLoading(true);
       const data = await adminListTrainingTracks();
       setTracks(data);
-      if (data.length && !activeTrackId) setActiveTrackId(data[0].id);
+      // Keep the selected track if it still exists (e.g. one just created);
+      // otherwise fall back to the first, as after deleting the selected one.
+      setActiveTrackId((current) => (data.some((t) => t.id === current) ? current : data[0]?.id ?? ''));
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load tracks');
+      setError(errorMessage(e, 'Failed to load tracks'));
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => { void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  // Mount-only: `load` is re-created every render, so the effect calls it through an effect event.
+  const loadOnMount = useEffectEvent(() => { void load(); });
+  useEffect(() => { loadOnMount(); }, []);
 
   const activeTrack = useMemo(() => tracks.find((t) => t.id === activeTrackId), [tracks, activeTrackId]);
 
   const flash = (msg: string) => { setNotice(msg); setTimeout(() => setNotice(null), 4000); };
-  const fail = (e: unknown) => setError(e instanceof Error ? e.message : 'Something went wrong');
+  const fail = (e: unknown) => setError(errorMessage(e));
 
   // --- Tracks ---
   const saveTrack = async () => {
@@ -189,7 +194,9 @@ export function TrainingAdmin() {
   };
 
   const toggleCourse = (id: string) => setExpandedCourse((prev) => {
-    const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next;
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
   });
 
   return (

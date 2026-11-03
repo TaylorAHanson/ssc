@@ -42,8 +42,8 @@ def _row(db):
 
 
 # ------------------------------------------------------------------ role gating
-def test_tool_declares_governance_admin():
-    assert draft_odcs_contract.required_role == "governance_admin"
+def test_tool_declares_the_governance_tools_capability():
+    assert draft_odcs_contract.required_capability == "governance.tools"
 
 
 def test_fresh_seed_restricts_tool_to_governance_admins(db_session):
@@ -56,7 +56,8 @@ def test_fresh_seed_restricts_tool_to_governance_admins(db_session):
     assert TOOL not in visible(_user("User"))
     assert TOOL not in visible(_user())
     assert TOOL in visible(_user("Governance Admin"))
-    assert TOOL in visible(_user("Platform Admin"))
+    assert TOOL in visible(_user("Super Admin"))
+    assert TOOL not in visible(_user("Platform Admin"))
 
 
 def test_existing_open_row_is_restricted_on_sync(db_session):
@@ -88,7 +89,7 @@ def test_admin_chosen_roles_are_kept(db_session):
 
 def test_other_role_gated_tools_keep_all_roles_choice(db_session):
     ToolRegistryService.sync_local_tools(db_session)
-    row = db_session.query(ToolRegistryModel).filter_by(tool_name="check_asset_quality").one()
+    row = db_session.query(ToolRegistryModel).filter_by(tool_name="lmws_probe_config").one()
     ToolRegistryService.update_tool(db_session, row.id, allowed_roles=[])
 
     ToolRegistryService.sync_local_tools(db_session)

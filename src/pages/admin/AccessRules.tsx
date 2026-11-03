@@ -8,7 +8,8 @@ import { RulesTab } from '../../components/rbac/RulesTab';
 import type { StagedChange } from '../../components/rbac/staging';
 import { ErrorBanner, Skeleton, Toast, type ToastMessage } from '../../components/rbac/ui';
 import { useLoad } from '../../components/rbac/useLoad';
-import { errorMessage, plural } from '../../components/rbac/utils';
+import { plural } from '../../components/rbac/utils';
+import { errorMessage } from '../../lib/errors';
 
 type Tab = 'rules' | 'history' | 'exports' | 'import';
 

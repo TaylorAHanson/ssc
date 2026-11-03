@@ -33,7 +33,8 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db.metadata import OBJECT_ACTIVE, MetadataObjectModel, MetadataObservedModel, MetadataTagModel
 from app.models.user import User
-from app.services.approval_scope import is_platform_admin, normalize_group, normalize_roles, parse_csv
+from app.core.capabilities import has_capability
+from app.services.approval_scope import normalize_group, normalize_roles, parse_csv
 from app.services.metadata import environments, policy, principals, scope
 from app.services.metadata import observed as observed_store
 from app.services.metadata.errors import NotFound
@@ -163,8 +164,8 @@ def _unique_groups(values: Iterable[Optional[str]], *, exclude: Optional[str] = 
 
 
 def _is_admin_roles(roles: Sequence[str]) -> bool:
-    editor_roles = set(normalize_roles(settings.METADATA_EDITOR_ROLES or []))
-    return is_platform_admin(roles) or bool(set(normalize_roles(roles)) & editor_roles)
+    """``metadata.admin``: Super Admin, plus every role in METADATA_EDITOR_ROLES."""
+    return has_capability(roles, "metadata.admin")
 
 
 def actor_from_user(db: Session, user: User) -> Actor:
@@ -209,7 +210,7 @@ def system_actor() -> Actor:
 
 
 def has_full_browse(actor: Actor) -> bool:
-    """Admins (Platform Admin and METADATA_EDITOR_ROLES), METADATA_BROWSE_ROLES, registered principals and the system.
+    """Admins (Super Admin and METADATA_EDITOR_ROLES), METADATA_BROWSE_ROLES, registered principals and the system.
 
     A blank METADATA_BROWSE_ROLES adds nobody: clearing the list can't open browsing to everyone.
     """
@@ -606,8 +607,9 @@ def decide(
     METADATA_UC_OWNER_IS_AUTHORITY is on; keys it lacks are read from the snapshot table.
     Approver groups: the owner groups, or the governance group when there are none
     or the item changes the owner key; the key's editor groups when the actor isn't
-    one; the governance group is added for sensitive items. Empty means
-    Platform Admins (the gate's approval then has no assignee).
+    one; the governance group is added for sensitive items. Empty means the gate's
+    approval has no assignee: Super Admins act on the owner step, and Application
+    Admins too on the governance step.
     """
     items = list(items)
     if not items:
@@ -716,7 +718,7 @@ def is_editable(db: Session, actor: Actor, key: ObjectKey) -> Tuple[bool, List[s
 
 NO_BROWSE_MESSAGE = (
     "The Metadata Manager is limited to governance and data owners, and you don't own any objects in it. "
-    "Ask a Platform Admin to add one of your roles to the Metadata Manager's browse roles, or ask an object's "
+    "Ask an Application Admin to add one of your roles to the Metadata Manager's browse roles, or ask an object's "
     "owners to add your group to its owner tag."
 )
 OWNED_ONLY_MESSAGE = "Showing only the objects you own."

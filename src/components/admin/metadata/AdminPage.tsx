@@ -10,6 +10,18 @@ import { PrincipalsTab } from './PrincipalsTab';
 import { Rollup } from './Rollup';
 import { RunsTab } from './RunsTab';
 
+/** Sync status and history alone, for those who may watch syncs but not administer the Metadata Manager (Ops Admins). */
+export function SyncHistoryPage() {
+  return (
+    <div className="space-y-4">
+      <SyncStatus />
+      <Rollup title="Sync history" hint="Every check of Unity Catalog, and what it wrote" defaultOpen>
+        <RunsTab />
+      </Rollup>
+    </div>
+  );
+}
+
 /** Admin-only: whether syncing works, what's out of sync, sync history, automation access and bulk onboarding. */
 export function AdminPage() {
   const { config } = useMetadata();

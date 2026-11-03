@@ -3,6 +3,7 @@ import { AlertTriangle, BellRing, CheckCircle2, Loader2, Send, X } from 'lucide-
 import { Button } from '../ui/button';
 import { api } from '../../services/api';
 import type { ContextReminderRun, ContextStaleDocument, ContextStalenessStatus } from '../../services/api';
+import { errorMessage } from '../../lib/errors';
 
 interface Props {
   onClose: () => void;
@@ -43,7 +44,7 @@ export function ContextStalenessPanel({ onClose, onOpenDocument }: Props) {
       setStatus(await api.getContextStaleness());
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load stale documents');
+      setError(errorMessage(e, 'Failed to load stale documents'));
     } finally {
       setLoading(false);
     }
@@ -71,7 +72,7 @@ export function ContextStalenessPanel({ onClose, onOpenDocument }: Props) {
       if (r.ok) setNotice('Test message posted. Check the Teams channel — it should mention you.');
       else setError(r.error || 'Teams did not accept the test message');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to send test message');
+      setError(errorMessage(e, 'Failed to send test message'));
     } finally {
       setBusy(null);
     }
@@ -91,7 +92,7 @@ export function ContextStalenessPanel({ onClose, onOpenDocument }: Props) {
       }
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to send reminders');
+      setError(errorMessage(e, 'Failed to send reminders'));
     } finally {
       setBusy(null);
     }

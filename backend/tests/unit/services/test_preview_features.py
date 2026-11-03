@@ -509,10 +509,16 @@ def test_approver_routing_uses_scope_settings(monkeypatch):
 class _User:
     def __init__(self, email, roles):
         self.email = email
-        self._roles = set(roles)
+        self.roles = list(roles)
+        self.entitlements = []
 
     def has_role(self, role):
-        return role in self._roles
+        from app.core.capabilities import has_role
+        return has_role(self.roles, role)
+
+    def can(self, capability_id):
+        from app.core.capabilities import has_capability
+        return has_capability(self.roles, capability_id)
 
 
 def test_pending_approvals_uses_approve_endpoint_rules(db_session):

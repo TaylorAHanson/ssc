@@ -3,7 +3,7 @@ import { Button } from '../../ui/button';
 import { Input } from '../../ui/input';
 import { Modal } from '../../rbac/ui';
 import { useMetadata } from './context';
-import { plural } from './format';
+import { isRequiredTag, plural } from './format';
 import { effectiveTags, useStagingStore, type TargetSeed } from './staging';
 import { AddTagForm } from './TagEditor';
 
@@ -19,11 +19,13 @@ export function EditManyDialog({ seeds, onClose }: { seeds: TargetSeed[]; onClos
   const [done, setDone] = useState<string[]>([]);
   const ids = useId();
   const keys = seeds.map((s) => s.key);
-  const existingKeys = [
-    ...new Set(seeds.flatMap((s) => Object.keys(targets[s.key] ? effectiveTags(targets[s.key]) : s.baseTags))),
-  ]
+  const tagsOf = (s: TargetSeed) => (targets[s.key] ? effectiveTags(targets[s.key]) : s.baseTags);
+  const existingKeys = [...new Set(seeds.flatMap((s) => Object.keys(tagsOf(s))))]
     .filter((k) => !config.exempt_keys.includes(k))
     .sort();
+  // A key required on any selected object that has it can't be removed from all of them.
+  const protectedKeys = new Set(existingKeys.filter((k) => seeds.some((s) => k in tagsOf(s) && isRequiredTag(config, k, s.securableType))));
+  const securableTypes = [...new Set(seeds.map((s) => s.securableType))];
   const record = (text: string) => setDone((d) => [...d, text]);
 
   const finish = () => {
@@ -44,6 +46,7 @@ export function EditManyDialog({ seeds, onClose }: { seeds: TargetSeed[]; onClos
           <AddTagForm
             compact
             submitLabel="Add to all"
+            securableTypes={securableTypes}
             onAdd={(k, v) => {
               setTag(keys, k, v, seeds);
               record(v === null ? `Add ${k}` : `Set ${k} = ${v}`);
@@ -58,8 +61,8 @@ export function EditManyDialog({ seeds, onClose }: { seeds: TargetSeed[]; onClos
             <select id={`${ids}-remove`} value={removeKey} onChange={(e) => setRemoveKey(e.target.value)} className="h-8 rounded-md border border-gray-300 bg-white px-2 text-xs">
               <option value="">Choose a tag</option>
               {existingKeys.map((k) => (
-                <option key={k} value={k}>
-                  {k}
+                <option key={k} value={k} disabled={protectedKeys.has(k)}>
+                  {protectedKeys.has(k) ? `${k} (required, can’t be removed)` : k}
                 </option>
               ))}
             </select>
@@ -77,6 +80,11 @@ export function EditManyDialog({ seeds, onClose }: { seeds: TargetSeed[]; onClos
               Remove from all
             </Button>
           </div>
+          {protectedKeys.size > 0 && (
+            <p className="text-xs text-gray-500">
+              Required tags can’t be removed. You can still change their value with Add or change a tag.
+            </p>
+          )}
         </div>
         <div className="space-y-1">
           <label htmlFor={`${ids}-comment`} className="text-sm font-medium text-gray-900">

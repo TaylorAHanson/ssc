@@ -64,6 +64,20 @@ def test_key_policies_parse_comma_strings_and_tolerant_booleans():
     assert pols["mv_only"].applies_to == ["materialized_view"]
     assert pols["col_note"].applies_to == ["column"] and pols["col_note"].required is True
     assert pols["steward"].editor_groups == ["stewards", "Data Office"] and pols["steward"].sensitive is False
+    assert not any(p.value_required for p in pols.values())
+
+
+def test_value_required_parses_tolerant_booleans_independently_of_required(monkeypatch):
+    monkeypatch.setattr(settings, "METADATA_KEY_POLICIES", [
+        {"key": "a", "value_required": "yes"},
+        {"key": "b", "value_required": True, "required": False},
+        {"key": "c", "value_required": "off", "required": True},
+    ])
+    pols = {p.key: p for p in policy.key_policies()}
+
+    assert pols["a"].value_required is True and pols["a"].required is False
+    assert pols["b"].value_required is True
+    assert pols["c"].value_required is False and pols["c"].required is True
 
 
 def test_policy_for_matches_keys_case_insensitively():
@@ -193,6 +207,41 @@ def test_removing_a_required_key_is_denied_where_it_applies():
     assert codes(policy.check_item(item("col_note", action="unset", before="x",
                                         securable_type="column", column="c"))) == ["required_key"]
     assert policy.check_item(item("approver_group", action="unset", before="g")) == []
+
+
+def test_a_required_key_can_still_be_given_a_new_value():
+    assert policy.check_item(item("dataset", "orders_v2", before="orders")) == []
+
+
+@pytest.mark.parametrize("after", [None, "", "   ", "\t"])
+def test_a_value_required_key_is_denied_without_a_value(monkeypatch, after):
+    monkeypatch.setattr(settings, "METADATA_KEY_POLICIES", [
+        {"key": "cost_center", "value_required": True, "pattern": "^[0-9]{4}$", "description": "Finance code."},
+    ])
+
+    found = policy.check_item(item("cost_center", after))
+
+    # Only the one clear message: the pattern isn't also reported against the blank value.
+    assert codes(found) == ["value_required"]
+    assert found[0].severity == "deny"
+    assert "'cost_center' needs a value" in found[0].message and "Finance code." in found[0].message
+
+
+def test_a_value_required_key_with_a_value_is_checked_as_usual(monkeypatch):
+    monkeypatch.setattr(settings, "METADATA_KEY_POLICIES", [
+        {"key": "cost_center", "value_required": True, "pattern": "^[0-9]{4}$"},
+    ])
+
+    assert policy.check_item(item("cost_center", "1234")) == []
+    assert codes(policy.check_item(item("cost_center", "12"))) == ["pattern"]
+    # Removing it is fine unless it's also required.
+    assert policy.check_item(item("cost_center", action="unset", before="1234")) == []
+
+
+def test_required_does_not_imply_value_required():
+    # dataset is required (can't be removed) but a key-only tag is judged by its pattern, not refused as blank.
+    assert "value_required" not in codes(policy.check_item(item("dataset", None)))
+    assert policy.check_item(item("col_note", None, securable_type="column", column="c")) == []
 
 
 def test_several_findings_are_collected():

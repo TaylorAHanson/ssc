@@ -203,11 +203,11 @@ def test_prepare_routes_to_the_type_group_and_stores_the_change(db):
     assert db.get(RequestModel, "req-1").title.startswith("Access change: grant USE_SCHEMA;SELECT")
 
 
-def test_prepare_without_a_group_falls_back_to_platform_admins(db):
+def test_prepare_without_a_group_falls_back_to_application_admins(db):
     agent_request(db, "req-ws", ws_item())
     result = run_prepare(db, "req-ws")
     assert result["approvers"] == [] and result["approver_group"] is None
-    assert "No approver group set — Platform Admins approve." in result["report_markdown"]
+    assert "No approver group set — Application Admins approve." in result["report_markdown"]
 
 
 def test_prepare_refuses_more_than_one_type(db):
@@ -407,14 +407,14 @@ def test_a_change_prepared_before_the_rename_is_still_recorded(db):
     assert rq.record_step("req-old")["recorded_rows"] == 1
 
 
-def test_the_approval_card_names_the_types_group_or_platform_admins(db):
+def test_the_approval_card_names_the_types_group_or_application_admins(db):
     agent_request(db, "req-1", item())
     run_prepare(db, "req-1")
     ctx = db.get(RequestModel, "req-1").state_context
     assert rq.approver_label(ctx, "uc-approvers") == "UC securables approvers: uc-approvers"
-    assert rq.approver_label(ctx, None) == "Platform Admins (no UC securables group set)"
-    assert rq.approver_label({"plane": "workspace"}, None) == "Platform Admins (no Workspace securables group set)"
-    assert rq.approver_label({}, None) == "Platform Admins"
+    assert rq.approver_label(ctx, None) == "Application Admins (no UC securables group set)"
+    assert rq.approver_label({"plane": "workspace"}, None) == "Application Admins (no Workspace securables group set)"
+    assert rq.approver_label({}, None) == "Application Admins"
 
 
 # --- Two-person rule: direct edits filed as requests -----------------------------------
@@ -558,7 +558,7 @@ def test_revert_is_filed_prepared_and_recorded_after_a_second_approval(db):
     assert db.query(RbacChangeSetModel).count() == 2
 
 
-def test_a_revert_across_types_goes_to_platform_admins(db):
+def test_a_revert_across_types_goes_to_application_admins(db):
     uc = seed(db, position=1)
     ws = seed(db, WS_DEV, position=1, kind="workspace", catalog="", schema="", workspace="ws-dev",
               principals="g_ws", privileges="USER")
@@ -573,7 +573,7 @@ def test_a_revert_across_types_goes_to_platform_admins(db):
 
     result = rq.prepare_step(request_id)
     assert result["approvers"] == [] and result["approver_group"] is None
-    assert "Approvers: Platform Admins, because this revert changes" in result["report_markdown"]
+    assert "Approvers: Application Admins, because this revert changes" in result["report_markdown"]
     assert stored_change(db, request_id)["planes"] == ["uc", "workspace"]
 
 
@@ -647,7 +647,7 @@ def test_preview_splits_a_mixed_ask_and_says_how_to_file_it(db):
     ws, uc = preview["proposals"]
     assert (ws["plane"], ws["approver_group"], ws["approver_fallback"]) == ("workspace", None, True)
     assert uc["approver_group"] == "uc-approvers"
-    assert "No approver group set — Platform Admins approve." in ws["report_markdown"]
+    assert "No approver group set — Application Admins approve." in ws["report_markdown"]
     assert "UC securables: filed alongside this one" in ws["report_markdown"]
     # Prerequisites are re-added when the request is prepared, so they aren't submitted.
     assert [i["securable_type"] for i in uc["submit_items"]] == ["schema"]

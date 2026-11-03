@@ -6,7 +6,7 @@ import { useRequestStore } from '../stores/requestStore';
 import { useVisibleInterval } from '../hooks/useVisibleInterval';
 import { Button } from './ui/button';
 import { formatDate, parseUtcDate } from '../lib/requestDates';
-import type { Request } from '../types';
+import type { Request, State } from '../types';
 
 const formatDuration = (startDate: string) => {
   if (!startDate) return '';
@@ -19,6 +19,9 @@ const formatDuration = (startDate: string) => {
   }
   return `${hours} hours ago`;
 };
+
+/** A step-log fact value as text; facts are loosely-typed JSON. */
+const factText = (value: unknown): string => (value === null || value === undefined ? '' : String(value));
 
 function TrainingAction({ requestId }: { requestId: string }) {
   const completeTraining = useRequestStore((state) => state.completeTraining);
@@ -83,7 +86,7 @@ export function RequestStateList({ request }: { request: Request }) {
   useVisibleInterval(fetchRequests, 5000, isActive);
 
   // Collect all states to display
-  let steps: { id: string; name: string; status: string; type?: string; typeLabel?: string | null; order: number; completedAt?: string; facts?: { type: string; timestamp: string; data: Record<string, string> }[] }[] = [];
+  let steps: { id: string; name: string; status: string; type?: string; typeLabel?: string | null; order: number; completedAt?: string; facts?: State['facts'] }[] = [];
 
 
   // Use the new linear states structure
@@ -285,7 +288,8 @@ export function RequestStateList({ request }: { request: Request }) {
               {/* Approver(s) for this human gate (data_owner / manager / admin).
                   Surfaced so the requester can see who must approve — and who
                   approved/rejected. Falls back to a clear message when no
-                  specific owner was resolved (then any Platform Admin can act). */}
+                  specific owner was resolved (then an Application Admin acts on an
+                  Application Admin gate, and a Super Admin on any other). */}
               {isApprovalStep && (
                 <div className="ml-14 mt-3 space-y-2">
                   <p className="text-[10px] uppercase tracking-wider text-gray-400 font-bold mb-1">
@@ -304,7 +308,7 @@ export function RequestStateList({ request }: { request: Request }) {
                               <Circle className="w-4 h-4 text-gray-300" />
                             )}
                             <span className="font-medium text-gray-700">
-                              {approval.assignedToEmail || approval.approverLabel || approval.assignedToRole || 'Any Platform Admin'}
+                              {approval.assignedToEmail || approval.approverLabel || approval.assignedToRole || (approval.approvalType === 'platform_admin' ? 'Any Application Admin' : 'Any Super Admin')}
                             </span>
                           </div>
                           <span className={`text-xs font-medium ${
@@ -312,8 +316,8 @@ export function RequestStateList({ request }: { request: Request }) {
                             approval.status === 'rejected' ? 'text-alert' :
                             'text-gray-500'
                           }`}>
-                            {approval.status === 'approved' ? `Approved by ${approval.approvedBy || approval.assignedToEmail || approval.assignedToRole || 'Platform Admin'}` :
-                             approval.status === 'rejected' ? `Rejected by ${approval.rejectedBy || approval.assignedToEmail || approval.assignedToRole || 'Platform Admin'}` :
+                            {approval.status === 'approved' ? `Approved by ${approval.approvedBy || approval.assignedToEmail || approval.assignedToRole || 'an admin'}` :
+                             approval.status === 'rejected' ? `Rejected by ${approval.rejectedBy || approval.assignedToEmail || approval.assignedToRole || 'an admin'}` :
                              'Pending'}
                           </span>
                         </div>
@@ -322,10 +326,12 @@ export function RequestStateList({ request }: { request: Request }) {
                   ) : (
                     <div className="bg-white border border-gray-200 rounded p-2 text-sm italic text-gray-500">
                       {step.type === 'manager'
-                        ? 'No manager was resolved for this request — pending review by a Platform Admin.'
+                        ? 'No manager was resolved for this request — pending review by a Super Admin.'
                         : step.type === 'data_owner'
-                        ? 'No data owner was resolved for the requested asset — pending review by a Platform Admin.'
-                        : 'No approver was resolved — pending review by a Platform Admin.'}
+                        ? 'No data owner was resolved for the requested asset — pending review by a Super Admin.'
+                        : step.type === 'platform_admin'
+                        ? 'Pending review by an Application Admin.'
+                        : 'No approver was resolved — pending review by a Super Admin.'}
                     </div>
                   )}
                 </div>
@@ -352,7 +358,7 @@ export function RequestStateList({ request }: { request: Request }) {
                                 <Circle className="w-4 h-4 text-gray-300" />
                               )}
                               <span className="font-medium text-gray-700">
-                                {task.assignedToEmail || task.assignedToRole || 'Any Platform Admin'}
+                                {task.assignedToEmail || task.assignedToRole || 'Any Application Admin'}
                               </span>
                             </div>
                             <span className={`text-xs font-medium ${
@@ -360,8 +366,8 @@ export function RequestStateList({ request }: { request: Request }) {
                               task.status === 'rejected' ? 'text-alert' :
                               'text-gray-500'
                             }`}>
-                              {task.status === 'approved' ? `Marked done by ${task.approvedBy || task.assignedToEmail || task.assignedToRole || 'Platform Admin'}` :
-                               task.status === 'rejected' ? `Couldn't be completed by ${task.rejectedBy || task.assignedToEmail || task.assignedToRole || 'Platform Admin'}` :
+                              {task.status === 'approved' ? `Marked done by ${task.approvedBy || task.assignedToEmail || task.assignedToRole || 'an admin'}` :
+                               task.status === 'rejected' ? `Couldn't be completed by ${task.rejectedBy || task.assignedToEmail || task.assignedToRole || 'an admin'}` :
                                task.dueAt ? `Waiting — due ${formatDate(task.dueAt)}` : 'Waiting'}
                             </span>
                           </div>
@@ -406,23 +412,23 @@ export function RequestStateList({ request }: { request: Request }) {
                                 {fact.type === 'rbac_exported' ? 'Exported for Terraform' : fact.type.replace(/_/g, ' ')}
                               </span>
                               {fact.type === 'rbac_exported' ? (
-                                <>: <span>{(fact.data.files as unknown as string[] | undefined)?.join(', ')}</span></>
+                                <>: <span>{Array.isArray(fact.data.files) ? fact.data.files.map(factText).join(', ') : ''}</span></>
                               ) : fact.type === 'repo_created' ? (
-                                <>: <a href={fact.data.repo_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
-                                  {fact.data.repo_name}
+                                <>: <a href={factText(fact.data.repo_url)} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+                                  {factText(fact.data.repo_name)}
                                 </a></>
                               ) : fact.type === 'workspace_created' ? (
-                                <>: <span className="font-mono bg-gray-100 px-1 rounded">{fact.data.workspace_url}</span></>
+                                <>: <span className="font-mono bg-gray-100 px-1 rounded">{factText(fact.data.workspace_url)}</span></>
                               ) : fact.type === 'approval_received' ? (
-                                <>: <span>Approved by <span className="font-medium">{fact.data.approved_by || fact.data.actor}</span></span></>
+                                <>: <span>Approved by <span className="font-medium">{factText(fact.data.approved_by || fact.data.actor)}</span></span></>
                               ) : fact.type === 'provisioning_failed' ? (
-                                <>: <span className="text-red-600 font-medium">Failed: {fact.data.error}</span></>
+                                <>: <span className="text-red-600 font-medium">Failed: {factText(fact.data.error)}</span></>
                               ) : fact.type === 'request_rejected' ? (
                                 <>
-                                  : <span className="text-red-600 font-medium">Rejected by {fact.data.rejected_by}</span>
-                                  {fact.data.rejection_note && (
+                                  : <span className="text-red-600 font-medium">Rejected by {factText(fact.data.rejected_by)}</span>
+                                  {Boolean(fact.data.rejection_note) && (
                                     <div className="mt-1 p-2 bg-red-50 border border-red-100 rounded text-red-800 italic">
-                                      "{fact.data.rejection_note}"
+                                      "{factText(fact.data.rejection_note)}"
                                     </div>
                                   )}
                                 </>

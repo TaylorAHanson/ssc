@@ -4,6 +4,7 @@ import { api } from '../services/api';
 import type { RequestGraph } from '../services/api';
 import { useVisibleInterval } from '../hooks/useVisibleInterval';
 import { WorkflowGraphPreview } from './admin/WorkflowGraphPreview';
+import { errorMessage } from '../lib/errors';
 
 interface Props {
   requestId: string;
@@ -33,7 +34,7 @@ export function RequestGraphView({ requestId, pollMs = 5000 }: Props) {
       setGraph(g);
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load workflow graph');
+      setError(errorMessage(e, 'Failed to load workflow graph'));
     } finally {
       setLoading(false);
     }

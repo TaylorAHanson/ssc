@@ -3,7 +3,7 @@
 This module turns a curated subset of configuration into "change-on-the-fly"
 settings backed by the ``app_settings`` table. The design goals:
 
-* **Service, not codebase.** A Platform Admin edits these in the UI; no code
+* **Service, not codebase.** An Application Admin edits these in the UI; no code
   edit, file sync, or redeploy is required for them to take effect.
 * **DB overrides layered over deploy-time defaults.** databricks.yml env vars
   and the in-code defaults (default_config.py) stay as the *defaults*; a DB row
@@ -200,7 +200,7 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "help": "On (recommended) = before the agent submits a request it looks for open or recently finished "
              "requests of the same workflow for the same resource, by this user or anyone else. If it finds "
              "one it shows it and only submits once the user says to go ahead anyway. Other people's "
-             "requests are described without their ID or requester unless the user is a Platform Admin. "
+             "requests are described without their ID or requester unless the user can see every request. "
              "Off = requests are submitted without the check."},
     {"group": "Agent", "section": "Duplicate requests", "key": "DUPLICATE_CHECK_LOOKBACK_DAYS",
      "label": "Finished-request lookback (days)", "type": "int", "min": 0,
@@ -628,31 +628,37 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
     {"group": "Metadata Manager", "section": "Permissions", "key": "METADATA_EDITOR_ROLES",
      "label": "Editor roles", "type": "string_list", "add_label": "Add role",
      "requires": ["features.metadata_v2"],
-     "help": "App roles, besides Platform Admin, that may edit every object. Their sensitive changes still need "
+     "help": "App roles, besides Super Admin, that may edit every object. Their sensitive changes still need "
              "approval."},
     {"group": "Metadata Manager", "section": "Permissions", "key": "METADATA_BROWSE_ROLES",
      "label": "Browse roles", "type": "string_list", "add_label": "Add role",
      "requires": ["features.metadata_v2"],
-     "help": "App roles that may search and view every object's tags and descriptions. Platform Admins and "
+     "help": "App roles that may search and view every object's tags and descriptions. Super Admins and "
              "editor roles always can. Anyone else sees only the objects they own (by owner tag, or Unity Catalog "
              "owner when that counts); with nothing owned, they can't open it. Blank = admins and editor roles "
              "only."},
     {"group": "Metadata Manager", "section": "Permissions", "key": "METADATA_GOVERNANCE_APPROVER_GROUP",
      "label": "Governance approver group", "type": "string", "requires": ["features.metadata_v2"],
      "help": "Exact display name of the Databricks group that approves sensitive changes and changes to objects "
-             "with no owner tag. Blank = Platform Admins only."},
+             "with no owner tag. Blank = no group: Super Admins approve (and Application Admins the sensitive-change step)."},
     {"group": "Metadata Manager", "section": "Tag policy", "key": "METADATA_KEY_MODE",
      "label": "Allowed keys", "type": "select", "options": ["open", "known_only"],
      "requires": ["features.metadata_v2"],
-     "help": "Open (default) = any key may be set. Known only = only keys listed below."},
+     "help": "Open (default) = any key may be set; the key field accepts free text and suggests keys already in "
+             "use. Known only = only keys listed under Key policies may be set, and the key field becomes a "
+             "dropdown of those keys (only the ones that apply to the object being edited). Tags already on an "
+             "object with other keys can still be removed."},
     {"group": "Metadata Manager", "section": "Tag policy", "key": "METADATA_KEY_POLICIES",
      "label": "Key policies", "type": "collection", "unique": "key", "add_label": "Add key",
      "requires": ["features.metadata_v2"],
      "help": "Rules per tag key, checked on every preview and save. Applies to: comma-separated catalog, schema, "
              "table, column (blank = all). Allowed values: comma-separated (blank = any). Pattern: a regular "
              "expression the whole value must match. Editor groups: comma-separated; when set, only those groups "
-             "and admins may change the key. Sensitive: every change to the key needs approval. Required: "
-             "objects of the listed kinds are flagged when the key is missing.",
+             "and admins may change the key. Sensitive: every change to the key needs approval. Required: once "
+             "set on an object of the listed kinds, the tag can't be removed (its value can still be changed); "
+             "it's marked with a shield in the editor. It doesn't add the tag to objects that lack it. Value required: "
+             "the tag can't be added or saved without a value. The two are independent: turn both on for a tag "
+             "that must always carry a value.",
      "columns": [
          {"key": "key", "label": "Key", "type": "string", "required": True, "placeholder": "classification"},
          {"key": "applies_to", "label": "Applies to", "type": "string", "placeholder": "table, column"},
@@ -660,7 +666,10 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
          {"key": "pattern", "label": "Pattern", "type": "string", "placeholder": "^[a-z_]+$"},
          {"key": "editor_groups", "label": "Editor groups", "type": "string", "placeholder": "data-stewards"},
          {"key": "sensitive", "label": "Sensitive", "type": "bool"},
-         {"key": "required", "label": "Required", "type": "bool"},
+         {"key": "required", "label": "Required", "type": "bool",
+          "help": "Can't be removed once set"},
+         {"key": "value_required", "label": "Value required", "type": "bool",
+          "help": "A blank or key-only value is refused"},
          {"key": "description", "label": "Description", "type": "string"},
      ]},
     {"group": "Metadata Manager", "section": "Tag policy", "key": "METADATA_CLASSIFICATION_KEY",
@@ -715,6 +724,32 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "label": "Minimum justification length (approvals)", "type": "int", "min": 0,
      "requires": ["features.metadata_v2"],
      "help": "Characters required in the justification of a change that needs approval."},
+    {"group": "Metadata Manager", "section": "AI descriptions", "key": "METADATA_AI_DESCRIPTIONS",
+     "label": "AI-generated descriptions", "type": "bool", "requires": ["features.metadata_v2"],
+     "help": "On = a table's page offers AI generate, which drafts descriptions for the table and its columns "
+             "with the model set below. The model is sent the catalog, schema and table names, the table type "
+             "and description, each column's name, data type and description, and the tag keys and values on "
+             "the table and its columns. It is never sent row data or sample values. Suggestions are only "
+             "staged as unsaved edits: nothing is saved until the person reviews and saves them, and they go "
+             "through the same approval rules as a typed edit. Off hides the buttons and refuses the API call."},
+    {"group": "Metadata Manager", "section": "AI descriptions", "key": "METADATA_AI_DESCRIPTION_ENDPOINT",
+     "label": "Description model", "type": "string", "requires": ["features.metadata_v2"],
+     "help": "The model that writes the suggestions: an AI Gateway model when the gateway is configured, "
+             "otherwise a serving endpoint name. Blank = the assistant's model."},
+    {"group": "Metadata Manager", "section": "AI descriptions", "key": "METADATA_AI_DESCRIPTION_MAX_COLUMNS",
+     "label": "Max columns per request", "type": "int", "min": 1, "max": 2000,
+     "requires": ["features.metadata_v2"],
+     "help": "The most columns one AI generate click describes. Columns past this are listed as skipped; "
+             "click again after saving to describe the rest. Default 200."},
+    {"group": "Metadata Manager", "section": "AI descriptions", "key": "METADATA_AI_DESCRIPTION_BATCH_SIZE",
+     "label": "Columns per model call", "type": "int", "min": 1, "max": 200,
+     "requires": ["features.metadata_v2"],
+     "help": "A wide table is described in several model calls of this many columns, run a few at a time. "
+             "Lower it if the model cuts its answer short. Default 50."},
+    {"group": "Metadata Manager", "section": "AI descriptions", "key": "METADATA_AI_DESCRIPTION_GUIDANCE",
+     "label": "House style", "type": "textarea", "requires": ["features.metadata_v2"],
+     "help": "Optional style notes added to the model's instructions, such as 'Use British spelling' or "
+             "'Start with a noun phrase, no trailing full stop'. Blank = concise plain-English descriptions."},
 
     # ===================================================================
     # Control Tower
@@ -844,12 +879,12 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
     {"group": "Preview Features", "section": "Approvals", "key": "PREVIEW_FEATURE_WORKSPACE_APPROVER_EMAIL",
      "label": "Workspace preview approvers", "type": "string", "requires": ["features.preview_features"],
      "help": "Who is emailed, and assigned the approval, when someone requests a workspace-level preview. "
-             "Comma-separate addresses (a distribution list is fine). Blank = no email; Platform Admins "
+             "Comma-separate addresses (a distribution list is fine). Blank = no email; Application Admins "
              "still see it in Pending Approvals. Takes effect on the next request."},
     {"group": "Preview Features", "section": "Approvals", "key": "PREVIEW_FEATURE_ACCOUNT_APPROVER_EMAIL",
      "label": "Account preview approvers", "type": "string", "requires": ["features.preview_features"],
      "help": "Who is emailed, and assigned the approval, when someone requests an account-level preview. "
-             "Comma-separate addresses (a distribution list is fine). Blank = no email; Platform Admins "
+             "Comma-separate addresses (a distribution list is fine). Blank = no email; Application Admins "
              "still see it in Pending Approvals. Takes effect on the next request."},
 
     # --- Access Rules ----------------------------------------------------
@@ -914,20 +949,20 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "label": "UC securables approver group", "type": "string",
      "help": "Exact display name of the Databricks group that approves requests for UC securables (catalogs, "
              "schemas, tables, views, volumes, functions) and edits those rows directly. Add approvers to this "
-             "group directly; membership through a nested group may not be recognised. Blank = Platform Admins "
-             "only. Takes effect on the next request."},
+             "group directly; membership through a nested group may not be recognised. Blank = Application Admins "
+             "approve and only Governance Admins edit. Takes effect on the next request."},
     {"group": "Access Rules", "section": "Approvers & access", "key": "RBAC_METASTORE_APPROVER_GROUP",
      "label": "Metastore approver group", "type": "string",
      "help": "Exact display name of the Databricks group that approves requests for metastore-level objects "
              "(connections, external locations, storage credentials) and edits the metastore sheet directly. "
              "Add approvers to this group directly; membership through a nested group may not be recognised. "
-             "Blank = Platform Admins only."},
+             "Blank = Application Admins approve and only Governance Admins edit."},
     {"group": "Access Rules", "section": "Approvers & access", "key": "RBAC_WS_APPROVER_GROUP",
      "label": "Workspace securables approver group", "type": "string",
      "help": "Exact display name of the Databricks group that approves requests for workspace assignments, "
              "entitlements and other workspace securables, and edits those rows directly. Add approvers to this "
-             "group directly; membership through a nested group may not be recognised. Blank = Platform Admins "
-             "only."},
+             "group directly; membership through a nested group may not be recognised. Blank = Application Admins "
+             "approve and only Governance Admins edit."},
     {"group": "Access Rules", "section": "Approvers & access", "key": "RBAC_VIEWER_ROLES",
      "label": "Viewer roles", "type": "string_list", "add_label": "Add role",
      "help": "App roles that can see every sheet, its history and its exports without editing."},
@@ -945,7 +980,7 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "add_label": "Add securable type",
      "help": "The only privileges a request or direct edit can add, per securable type (comma-separated). A "
              "type with no row can't be granted anything new, and a privilege Databricks adds later can't be "
-             "granted until a Platform Admin adds it here. The Access Rules grid offers these as its choices. "
+             "granted until an Application Admin adds it here. The Access Rules grid offers these as its choices. "
              "Removing privileges is always allowed, and existing rows are left as they are, even where they "
              "hold a privilege that isn't listed.",
      "columns": [
@@ -995,7 +1030,7 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
              "Applies to the next preview."},
     {"group": "Access Rules", "section": "Import", "key": "RBAC_ALLOW_RESET",
      "label": "Allow reset and re-import", "type": "bool",
-     "help": "On = a Platform Admin can replace every rule with a fresh workbook import. That discards every "
+     "help": "On = a Governance Admin can replace every rule with a fresh workbook import. That discards every "
              "change made in the app since the seed import (it can be reverted from History). Keep off in "
              "production."},
 

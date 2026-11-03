@@ -13,6 +13,7 @@ import {
 import type { ReportSubscription, ReportSubscriptionCreate, ExecutionSummary, PromptDef } from '../types';
 import { format } from 'date-fns';
 import cronstrue from 'cronstrue';
+import { errorMessage } from '../lib/errors';
 
 export function AdminReports() {
     const [subscriptions, setSubscriptions] = useState<ReportSubscription[]>([]);
@@ -103,7 +104,7 @@ export function AdminReports() {
             setShowForm(false);
             await loadData();
         } catch (err) {
-            setError(err instanceof Error ? err.message : 'Failed to save subscription');
+            setError(errorMessage(err, 'Failed to save subscription'));
         } finally {
             setIsSaving(false);
         }

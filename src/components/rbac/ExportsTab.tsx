@@ -13,7 +13,8 @@ import { CompareCard } from './CompareCard';
 import { Badge, CopyButton, EmptyState, ErrorBanner, SectionTitle, Skeleton, Spinner, type Tone, type ToastMessage } from './ui';
 import { useLoad } from './useLoad';
 import { useResizableColumns } from './useResizableColumns';
-import { CELL, SETTINGS_PATH, TEXT_CELL, errorMessage, formatBytes, formatTime, plural, relativeTime } from './utils';
+import { CELL, SETTINGS_PATH, TEXT_CELL, formatBytes, formatTime, plural, relativeTime } from './utils';
+import { errorMessage } from '../../lib/errors';
 
 const loadExports = () => api.getRbacExports();
 

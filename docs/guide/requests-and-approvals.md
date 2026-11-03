@@ -2,7 +2,7 @@
 
 When you ask the assistant for access or a resource, it becomes a **request**.
 Some requests run straight away. Others need an **approval** first, for
-example from a data owner or a platform admin, or a **task** that a person
+example from a data owner or an Application Admin, or a **task** that a person
 completes by hand. This page covers both sides: following your own requests,
 and acting on the ones assigned to you.
 
@@ -15,8 +15,8 @@ these tabs:
   if something can be assigned to you, and its badge shows how many items are
   waiting.
 - **My requests** lists the requests you've made.
-- **All requests** lists everyone's requests. Only platform admins see this
-  tab.
+- **All requests** lists everyone's requests. Only Super, Application and Ops
+  Admins see this tab.
 
 ## Make a request
 
@@ -108,14 +108,14 @@ Click a row to expand it. The expanded row shows:
 - **Reject** stops it. You must give a reason, which the requester sees.
 - **View full details** in the expanded row opens the same details window the
   requester sees, including the live **Workflow** diagram. Only the requester
-  and platform admins can open a request's full history. Other approvers see
+  and Super, Application and Ops Admins can open a request's full history. Other approvers see
   the request's parameters and reports in the expanded row instead.
 
 If a decision can't be saved, the window stays open and says what went wrong,
 so you can try again.
 
-Platform admins also see **Edit & Restart** in the expanded row of platform
-approvals. It changes the request's parameters, replaces the current approval
+Super and Application Admins also see **Edit & Restart** in the expanded row
+of Application Admin approvals. It changes the request's parameters, replaces the current approval
 and restarts the planning step with the new values. Access rule changes don't
 offer it: what gets approved must be exactly what was asked for, so to change
 one, reject it and file a new one.
@@ -139,7 +139,7 @@ anything that search or a filter hides is left alone.
 Some approvals go to a Databricks group rather than a role. Access rule
 changes, for example, go to the approver group for their type of rule, and the
 row says which, such as "UC securables approvers: `grp_uc_admins`". When that
-type has no group, it says Platform Admins approve. If you're in that group,
+type has no group, it says Application Admins approve. If you're in that group,
 you see them here.
 
 ### Manual tasks

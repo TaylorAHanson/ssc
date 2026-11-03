@@ -182,9 +182,11 @@ def test_tools_for_surface_role_gated(db_session):
     gov = {r.tool_name for r in ToolRegistryService.tools_for_surface(db_session, "main_agent", _user("Governance Admin"))}
     assert "admin_tool" in gov
 
-    # Platform Admin is a super-role and passes every gate.
-    plat = {r.tool_name for r in ToolRegistryService.tools_for_surface(db_session, "main_agent", _user("Platform Admin"))}
-    assert "admin_tool" in plat
+    # Super Admin is the only super-role; the old Platform Admin name is Application Admin.
+    sup = {r.tool_name for r in ToolRegistryService.tools_for_surface(db_session, "main_agent", _user("Super Admin"))}
+    assert "admin_tool" in sup
+    app_admin = {r.tool_name for r in ToolRegistryService.tools_for_surface(db_session, "main_agent", _user("Platform Admin"))}
+    assert "admin_tool" not in app_admin
 
 
 def test_disabled_master_switch_hides_tool(db_session):

@@ -9,7 +9,7 @@ from app.db import ApprovalModel, RequestModel
 from app.services.approval_scope import approval_visibility_filter, parse_csv
 
 class SearchApprovalsInput(BaseModel):
-    approval_type: Optional[str] = Field(None, description="Filter by approval type: 'manager', 'data_owner', or 'platform_admin' (optional)")
+    approval_type: Optional[str] = Field(None, description="Filter by approval type: 'manager', 'data_owner', or 'platform_admin' (an Application Admin approval) (optional)")
     status: str = Field("pending", description="Filter by approval status (default: 'pending') (optional)")
     request_id: Optional[str] = Field(None, description="Filter by a specific request ID (optional)")
     limit: int = Field(5, description="Maximum number of results to return (default: 5)")

@@ -12,7 +12,7 @@ Layering (lowest precedence first):
   1. These defaults.
   2. Environment variables / databricks.yml (for the scalar ``Settings`` fields).
   3. Database overrides applied at startup by ``settings_store.load_overrides``
-     (what a Platform Admin edits live under Admin -> Settings).
+     (what an Application Admin edits live under Admin -> Settings).
 
 ``config.py`` deep-copies this dict into the process-wide ``_yaml_config`` so the
 settings store can mutate the live copy in place without touching these
@@ -110,7 +110,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "client_events": True,
     },
 
-    # Who to contact for day-to-day help. Blank by default; a Platform Admin sets it
+    # Who to contact for day-to-day help. Blank by default; an Application Admin sets it
     # under Admin -> Settings -> Links & Embedded Apps. Shown in Discover (Team &
     # Support) and given to the assistant so it can answer "who do I contact?".
     "support": {
@@ -120,7 +120,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "notes": "",
     },
 
-    # Site-wide banner. Deploy-time defaults; a Platform Admin edits these live
+    # Site-wide banner. Deploy-time defaults; an Application Admin edits these live
     # under Admin -> Settings -> Appearance (persisted as DB overrides).
     "banner": {
         "active": False,
@@ -219,15 +219,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "check_github_repo": True,
         "check_github_user": True,
         "request_github_access": True,
-        "check_orphaned_assets": True,
         "does_service_principal_exist": True,
         "get_workflow_instructions": True,
         "evaluate_policy": True,
         "execute_workflow": True,
         "get_catalog_list": True,
-        "get_cost_summary": True,
-        "get_forecasted_spend": True,
-        "get_resource_efficiency_metrics": True,
         "get_schema_list": True,
         "get_table_list": True,
         "get_volume_list": True,
@@ -259,7 +255,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "check_duplicate_requests": True,
         "group_lookup": True,
         "member_lookup": True,
-        # Platform-admin diagnostics for the N2K-aware LMWS membership endpoints.
+        # Application/Ops Admin diagnostics for the N2K-aware LMWS membership endpoints.
         # The LMWS secret scope and the gateway network path only exist in the
         # app runtime, so these tools are the only way to exercise the endpoints
         # — hence enabled. The add probe is admin-only and defaults to dry_run.
@@ -273,13 +269,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         # into the prompt; this is the agent's escape hatch for a truncated list
         # or a forced refresh.
         "get_user_context": True,
-        "check_tagging_compliance": True,
-        "check_object_permissions": True,
         "check_provisioning_status": True,
-        "audit_user_access": True,
-        "search_audit_logs": True,
-        "check_overprovisioned_users": True,
-        "check_asset_quality": True,
         "find_owner": True,
         "check_training_status": True,
         # Training and community links; offered only while those pages are on.
@@ -571,7 +561,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         # How long each exported file is kept for download. 0 = forever.
         "export_archive_days": 90,
         # Databricks group display names. Members approve requests of that
-        # type and edit its rows. Blank = Platform Admins only.
+        # type and edit its rows. Blank = Application Admins approve.
         "uc_approver_group": "",
         "metastore_approver_group": "",
         "ws_approver_group": "",
@@ -719,9 +709,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "owner_tag_key": "data_owner",
         # Also treat the object's Unity Catalog owner as an editor.
         "uc_owner_is_authority": False,
-        # Roles (besides Platform Admin) that may edit every object.
+        # Roles (besides Super Admin) that may edit every object (the metadata.admin capability).
         "editor_roles": ["Governance Admin"],
-        # Roles that may browse every object, besides Platform Admin and editor_roles. Blank adds nobody.
+        # Roles that may browse every object, besides Super Admin and editor_roles. Blank adds nobody.
         # Everyone else sees only the objects they own (owner tag, or UC owner when that counts).
         "browse_roles": ["Governance Admin"],
         # open = any key; known_only = only keys with a policy row below.
@@ -730,25 +720,31 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         # column (blank = all). allowed_values: comma-separated (blank = any).
         # editor_groups: comma-separated; when set, only those groups (and
         # admins) may change the key. sensitive: changes need approval.
+        # required: can't be removed where it applies. value_required: can't be
+        # set without a value. The two are independent.
         "key_policies": [
             {"key": "dataset", "applies_to": "table", "allowed_values": "",
              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$", "editor_groups": "", "sensitive": False,
-             "required": False, "description": "Logical dataset this object belongs to."},
+             "required": False, "value_required": False,
+             "description": "Logical dataset this object belongs to."},
             {"key": "data_owner", "applies_to": "catalog, schema, table", "allowed_values": "",
              "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._@,-]{0,255}$", "editor_groups": "", "sensitive": True,
-             "required": False, "description": "Group(s) accountable for the data; members may edit its tags."},
+             "required": False, "value_required": False,
+             "description": "Group(s) accountable for the data; members may edit its tags."},
             {"key": "approver_group", "applies_to": "table", "allowed_values": "",
              "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._@-]{0,127}$", "editor_groups": "", "sensitive": True,
-             "required": False, "description": "Group that approves access requests for this dataset."},
+             "required": False, "value_required": False,
+             "description": "Group that approves access requests for this dataset."},
             {"key": "access_group", "applies_to": "table", "allowed_values": "",
              "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._@-]{0,127}$", "editor_groups": "", "sensitive": True,
-             "required": False, "description": "Group granted access once a request is approved."},
+             "required": False, "value_required": False,
+             "description": "Group granted access once a request is approved."},
             {"key": "reliability_window", "applies_to": "table", "allowed_values": "",
              "pattern": "^[0-9]+(m|h|d|w)$", "editor_groups": "", "sensitive": False,
-             "required": False, "description": "Freshness commitment, e.g. 24h or 7d."},
+             "required": False, "value_required": False, "description": "Freshness commitment, e.g. 24h or 7d."},
             {"key": "classification", "applies_to": "", "allowed_values": "public, internal, confidential, restricted",
              "pattern": "", "editor_groups": "", "sensitive": False,
-             "required": False, "description": "Sensitivity classification."},
+             "required": False, "value_required": False, "description": "Sensitivity classification."},
         ],
         # Lowering this key along the ordered levels (least to most sensitive),
         # or removing it, needs approval.
@@ -779,6 +775,19 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         # runs the governance gate on sensitive changes. Blank = Platform and
         # Governance Admins.
         "governance_approver_group": "",
+        # "AI generate" on the object page drafts descriptions with the app's own
+        # model (Unity Catalog's AI comments have no public API). Only names,
+        # types, existing descriptions and tags are sent, never row data, and
+        # suggestions are staged as unsaved edits for review.
+        "ai_descriptions": True,
+        # Blank = the assistant's model (AI Gateway model or serving endpoint).
+        "ai_description_endpoint": "",
+        # Most columns one request describes; a wider table is described in parts.
+        "ai_description_max_columns": 200,
+        # Columns per model call; a request is split into calls of this size.
+        "ai_description_batch_size": 50,
+        # House style appended to the instructions, e.g. "British spelling".
+        "ai_description_guidance": "",
     },
 
     # Web lookup config for the search_databricks_docs / fetch_doc_page tools.

@@ -63,6 +63,8 @@ interface LinkItem {
   updated_at?: string;
   url?: string | null;
   thumbnail_url?: string | null;
+  /** Set when the item lives in a workspace other than this one. */
+  workspace_name?: string | null;
 }
 
 /** ISO / lineage timestamps as a short date; anything unparseable is shown as-is. */
@@ -124,7 +126,10 @@ function LinkCard({
           <p className="mb-4 text-[11px] text-slate-400 italic">No description.</p>
         )}
       </div>
-      <div className="pt-3 border-t border-slate-100 flex items-center justify-end">
+      <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
+        <span className="text-[11px] text-slate-400 truncate">
+          {item.workspace_name ? `In ${item.workspace_name}` : ''}
+        </span>
         {item.url ? (
           <a href={item.url} target="_blank" rel="noopener noreferrer" className={`inline-flex items-center gap-1 text-xs font-semibold ${t.link}`}>
             <span>{openLabel}</span>
@@ -161,6 +166,7 @@ interface DomainFullViewProps {
     views?: number;
     updated_at?: string;
     url?: string | null;
+    workspace_name?: string | null;
   }>;
   apps?: Array<{
     id: string;

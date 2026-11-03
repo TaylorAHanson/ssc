@@ -210,7 +210,7 @@ class AccessProposal(BaseModel):
 
     plane: Plane
     approver_group: Optional[str] = None
-    # No group configured for this type: Platform Admins approve.
+    # No group configured for this type: Application Admins approve.
     approver_fallback: bool = False
     # Normalized items for this plane, including added prerequisites. This is the
     # request's ``items`` parameter, and what the record step intersects with.

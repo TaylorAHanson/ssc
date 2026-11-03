@@ -9,12 +9,13 @@ import type {
   ChangeSource,
   DriftEntry,
   ItemDecision,
-  KeyInfo,
+  KeyPolicy,
   MetadataConfig,
   ObjectSummary,
   SecurableType,
   Tags,
 } from '../../../types/metadata';
+import { RELATION_TYPES } from '../../../types/metadata';
 
 // Naive UTC datetimes (no zone suffix) are read as UTC.
 export const parseUtc = (value: string): Date => parseISO(/Z|[+-]\d{2}:?\d{2}$/.test(value) ? value : `${value}Z`);
@@ -32,10 +33,6 @@ export function relativeTime(value: string | null | undefined): string {
 }
 
 export const plural = (n: number, one: string, many = `${one}s`): string => `${n.toLocaleString()} ${n === 1 ? one : many}`;
-
-export function errorMessage(e: unknown, fallback = 'Something went wrong'): string {
-  return e instanceof Error && e.message ? e.message : fallback;
-}
 
 export const TYPE_LABELS: Record<SecurableType, string> = {
   catalog: 'Catalog',
@@ -286,15 +283,48 @@ export function newIdempotencyKey(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
 }
 
+/** The key's policy, matched case-insensitively as the server does. */
+export function policyFor(config: MetadataConfig, key: string): KeyPolicy | undefined {
+  const wanted = key.trim().toLowerCase();
+  return wanted ? config.key_policies.find((p) => p.key.toLowerCase() === wanted) : undefined;
+}
+
+/** Mirrors the server's applies_to: blank = everything; `table` or `relation` = any table-like type. */
+export function policyApplies(policy: KeyPolicy, type: SecurableType): boolean {
+  if (!policy.applies_to.length) return true;
+  return policy.applies_to.includes(type) || (RELATION_TYPES.includes(type) && policy.applies_to.some((k) => k === 'table' || k === 'relation'));
+}
+
+/** A required tag can't be removed from an object of this type (the server refuses it); its value can change. */
+export function isRequiredTag(config: MetadataConfig, key: string, type: SecurableType): boolean {
+  const policy = policyFor(config, key);
+  return !!policy?.required && policyApplies(policy, type);
+}
+
+export const REQUIRED_TAG_TITLE = 'Required tag: it can’t be removed. To change its value, use Add tag with the same key.';
+
+const isExemptKey = (config: MetadataConfig, key: string): boolean => config.exempt_keys.includes(key.trim().toLowerCase());
+
+/**
+ * The keys that may be set on every object of these types when only known keys are allowed: exactly
+ * what the server accepts (policy keys that apply, minus exempt keys). No types = every policy key.
+ */
+export function settableKeys(config: MetadataConfig, types: SecurableType[] = []): KeyPolicy[] {
+  return config.key_policies
+    .filter((p) => !isExemptKey(config, p.key) && types.every((t) => policyApplies(p, t)))
+    .sort((a, b) => a.key.localeCompare(b.key));
+}
+
 /** Client-side checks that mirror the key policies; the server re-checks on preview. */
-export function tagProblem(key: string, value: string | null, config: MetadataConfig, keys: KeyInfo[]): string | null {
+export function tagProblem(key: string, value: string | null, config: MetadataConfig): string | null {
   if (!key) return 'Enter a tag key.';
   if (/\s/.test(key)) return 'Tag keys can’t contain spaces.';
-  if (config.exempt_keys.includes(key)) return `${key} is managed outside this tool and can’t be edited here.`;
-  if (config.key_mode === 'known_only' && !keys.some((k) => k.key === key) && !config.key_policies.some((p) => p.key === key)) {
-    return `${key} isn’t a known key. Ask an admin to add a policy for it first.`;
+  if (isExemptKey(config, key)) return `${key} is managed outside this tool and can’t be edited here.`;
+  const policy = policyFor(config, key);
+  if (config.key_mode === 'known_only' && !policy) {
+    return `${key} isn’t one of the allowed tag keys. Ask an admin to add a key policy for it first.`;
   }
-  const policy = config.key_policies.find((p) => p.key === key);
+  if (policy?.value_required && !value?.trim()) return `A value is required for ${key}.`;
   if (policy?.allowed_values.length && (value === null || !policy.allowed_values.includes(value))) {
     return `${key} must be one of: ${policy.allowed_values.join(', ')}.`;
   }

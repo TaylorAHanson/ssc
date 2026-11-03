@@ -54,10 +54,11 @@ without access sees "You don't have access".
 - **`SCAN_CATALOGS`** limits the Discover catalog and data contracts.
   **`METADATA_RECONCILE_CATALOGS`** limits Metadata Manager. When blank, every catalog
   the SP can see is included, except `system` and `samples`.
-- **`METADATA_BROWSE_ROLES`** (default Governance Admin), plus Platform Admins and
+- **`METADATA_BROWSE_ROLES`** (default Governance Admin), plus Super Admins and
   `METADATA_EDITOR_ROLES`, see every Metadata Manager object. Other users see only the
   objects they own, on the page and through the assistant and MCP tools, and users who
-  own nothing see nothing. Blank adds nobody. Sync runs are governance-only.
+  own nothing see nothing. Blank adds nobody. Sync runs, including the tag statements each
+  run planned, are visible to those who see every object and to Ops Admins.
 - **`DISCOVER_HIDDEN_TAG_KEYS`** hides tagged assets from Discover and assistant search.
   It is a tidiness control, not access control: it doesn't cover contracts, Metadata
   Manager or `find_owner`.

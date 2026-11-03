@@ -1,6 +1,6 @@
 # Workflows, tools and knowledge
 
-The Control Tower pages let platform and governance admins decide what the
+The Control Tower pages let Super, Application and Governance Admins decide what the
 assistant can do, which approvals each request needs, and what the assistant
 knows. None of it needs code or a redeploy.
 
@@ -77,6 +77,15 @@ can use. For each tool you choose:
 - which roles may use it;
 - whose identity it runs as: the app's own service principal, or the person
   making the request.
+
+Governance Admins see the registry read-only; changing it, syncing tools and
+adding MCP sources need the Super or Application Admin role.
+
+Three tools always keep a role restriction, because they read data as the app
+or make requests from the app's own network: contract drafting, data product
+drafting and the URL reachability check. If one is set to all roles, the next
+sync restricts it to its default roles again. You can still choose different
+roles for them.
 
 **Sync Local Tools** refreshes the list with the tools built into
 {{brand_name}}. You can also connect tools from other servers.

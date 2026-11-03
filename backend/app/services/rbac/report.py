@@ -27,7 +27,7 @@ from app.services.rbac import cells, layout
 # Each section lists at most this many entries; the rest are counted.
 MAX_ENTRIES = 40
 
-NO_GROUP = "No approver group set — Platform Admins approve."
+NO_GROUP = "No approver group set — Application Admins approve."
 
 # (request id, or None for a sibling not filed yet; plane)
 Sibling = Tuple[Optional[str], str]
@@ -268,7 +268,7 @@ def render_revert_report(
 ) -> str:
     """Markdown for a revert held for a second approval (the two-person rule).
 
-    A revert spanning more than one type has no single approver group, so it goes to Platform Admins.
+    A revert spanning more than one type has no single approver group, so it goes to Application Admins.
     """
     warnings = [f for f in preview.findings if f.severity == "warn"]
     denies = [f for f in preview.findings if f.severity == "deny"]
@@ -278,7 +278,7 @@ def render_revert_report(
         who = approver_line(approver_group)
     else:
         kinds = " and ".join(plane_label(p) for p in planes)
-        who = f"Approvers: Platform Admins, because this revert changes {safe_text(kinds, 120)} rules."
+        who = f"Approvers: Application Admins, because this revert changes {safe_text(kinds, 120)} rules."
     lines = [
         f"**{safe_text(label, 60)} revert (second approval)**",
         "",
@@ -313,6 +313,6 @@ def proposal_summary(proposal: AccessProposal) -> str:
     if blocked:
         parts.append(f"{blocked} blocked")
     group = proposal.approver_group
-    who = f"members of {group}" if group else "Platform Admins (no approver group set)"
+    who = f"members of {group}" if group else "Application Admins (no approver group set)"
     state = "Blocked by policy" if proposal.blocked else "Approvers: " + who
     return f"{plane_label(proposal.plane)}: {', '.join(parts)}. {state}."

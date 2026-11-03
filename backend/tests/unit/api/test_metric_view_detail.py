@@ -145,6 +145,15 @@ def test_view_with_a_dropped_source_is_a_broken_dependency():
     assert out["error_kind"] == "broken_dependency"
 
 
+def test_source_column_type_change_is_schema_changed():
+    msg = ('SQL execution failed with state FAILED: [CANNOT_UP_CAST_DATATYPE] Cannot up cast '
+           'lateralAliasReference(__mv_src_c__s__mv_Row ID) from "BIGINT" to "INT". SQLSTATE: 42846')
+    assert _classify_uc_error(msg) == "schema_changed"
+    out = _run(_asset(), FakeProvider(_describe(), RuntimeError(msg)))
+    assert out["available"] and len(out["kpis"]) == 2
+    assert out["error_kind"] == "schema_changed"
+
+
 def test_definition_is_cached_per_viewer():
     provider = FakeProvider(_describe(), {"rows": [{}]})
     _run(_asset(), provider, viewer="alice@x.com")

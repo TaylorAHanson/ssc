@@ -23,7 +23,10 @@ export const AGING_DAYS = 3;
 export const STALE_DAYS = 7;
 
 export const ROLE_LABELS: Record<string, string> = {
-  platform_admin: 'Platform Admin',
+  // The gate type key keeps the old role name; Application Admins act on it.
+  platform_admin: 'Application Admin',
+  application_admin: 'Application Admin',
+  super_admin: 'Super Admin',
   data_owner: 'Data Owner',
   manager: 'Manager',
   governance_admin: 'Governance Admin',

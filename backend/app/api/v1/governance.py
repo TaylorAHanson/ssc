@@ -2,7 +2,7 @@
 Governance API routes: on-demand Enforcement Sentinel digest.
 
 The daily digest is normally sent on an anchored schedule (see
-``ENFORCEMENT_DIGEST_HOUR_LOCAL``). These endpoints let a Platform/Governance
+``ENFORCEMENT_DIGEST_HOUR_LOCAL``). These endpoints let a Governance
 Admin preview that schedule and send the current digest to an arbitrary
 recipient on demand — useful for testing the layout or sharing a snapshot
 without waiting for the scheduled send.
@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user
+from app.api.deps import ensure_capability, get_current_user
 from app.core.config import settings
 from app.db import RequestModel
 from app.db.session import get_db
@@ -29,8 +29,7 @@ router = APIRouter()
 
 
 def _require_governance_admin(user: User) -> None:
-    if not user.has_role("Platform Admin") and not user.has_role("Governance Admin"):
-        raise HTTPException(status_code=403, detail="Not authorized to manage governance digests")
+    ensure_capability(user, "governance.control_tower")
 
 
 def _latest_completed_run(db: Session) -> Optional[RequestModel]:
@@ -165,13 +164,13 @@ def delete_sentinel_run(
 ):
     """Delete ONE Enforcement Sentinel run (and its findings), whatever its state.
 
-    Platform Admin only. This is the targeted way to unstick a run: unlike the
+    Needs ``ops.sentinel_runs``. This is the targeted way to unstick a run: unlike the
     bulk purge it ignores ``keep_last`` and lock liveness, so it also removes a
     run that is wedged in progress. A scan still executing on a worker notices
     its row is gone at its next phase boundary, stops, and discards its results,
     which frees the one-scan-at-a-time slot for the next run.
     """
-    if not current_user.has_role("Platform Admin"):
+    if not current_user.can("ops.sentinel_runs"):
         raise HTTPException(status_code=403, detail="Not authorized to delete OmniGuard runs")
 
     run = (
@@ -226,7 +225,7 @@ def purge_sentinel_runs(
 ):
     """Delete old and/or hung Enforcement Sentinel runs (and their findings).
 
-    Platform Admin only. What gets cleared:
+    Needs ``ops.sentinel_runs``. What gets cleared:
 
     * **Old history** — keeps the most recent ``keep_last`` *terminal* runs and
       deletes older terminal ones (sheds history that slows the runs list).
@@ -246,7 +245,7 @@ def purge_sentinel_runs(
     sink the whole purge; any runs that still can't be deleted are reported back
     in ``failed`` rather than failing the request.
     """
-    if not current_user.has_role("Platform Admin"):
+    if not current_user.can("ops.sentinel_runs"):
         raise HTTPException(status_code=403, detail="Not authorized to purge OmniGuard runs")
 
     keep_last = max(0, body.keep_last)

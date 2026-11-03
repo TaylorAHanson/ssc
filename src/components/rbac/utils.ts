@@ -107,10 +107,6 @@ export function formatBytes(bytes: number): string {
 
 export const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
 
-export function errorMessage(e: unknown, fallback = 'Something went wrong'): string {
-  return e instanceof Error && e.message ? e.message : fallback;
-}
-
 export interface RbacConflictDetail {
   message: string;
   rule_id: string;

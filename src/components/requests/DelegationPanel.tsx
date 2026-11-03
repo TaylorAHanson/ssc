@@ -5,6 +5,7 @@ import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { useRequestStore } from '../../stores/requestStore';
 import type { Delegation } from '../../types';
+import { errorMessage } from '../../lib/errors';
 
 /** One line per delegation, in either direction. */
 export function DelegationStrips({ incoming }: { incoming: Delegation[] }) {
@@ -68,7 +69,7 @@ export function DelegationForm({ onClose }: { onClose: () => void }) {
       });
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to add delegation');
+      setError(errorMessage(e, 'Failed to add delegation'));
     } finally {
       setSaving(false);
     }

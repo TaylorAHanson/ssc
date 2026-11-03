@@ -3,6 +3,7 @@ import { getRequestSummaries } from '../../../services/api';
 import { useVisibleInterval } from '../../../hooks/useVisibleInterval';
 import type { Request } from '../../../types';
 import { AUTOMATED_REQUEST_TYPES, DAY_MS } from './requestMetrics';
+import { errorMessage } from '../../../lib/errors';
 
 const PAGE_LIMIT = 1000;
 const REFRESH_MS = 60_000;
@@ -51,7 +52,7 @@ export function useDashboardRequests(days: number | null) {
                 rows: prev?.rows ?? [],
                 fetchedAt: prev?.fetchedAt ?? fetchedAt,
                 truncated: prev?.truncated ?? false,
-                error: err instanceof Error ? err.message : String(err),
+                error: errorMessage(err, 'Failed to load requests'),
             }));
         }
     }, [days]);

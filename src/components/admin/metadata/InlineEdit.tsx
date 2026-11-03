@@ -1,9 +1,11 @@
 import { useState } from 'react';
-import { Pencil, Plus, Undo2 } from 'lucide-react';
+import { Loader2, Pencil, Plus, Sparkles, Undo2 } from 'lucide-react';
 import { Button } from '../../ui/button';
 import { Textarea } from '../../ui/textarea';
 import { cn } from '../../../lib/utils';
+import { AI_NOTE, useAiPending } from './aiSuggest';
 import { useMetadata } from './context';
+import { REQUIRED_TAG_TITLE, isRequiredTag } from './format';
 import { Popover } from './Popover';
 import { effectiveComment, useStagingStore, type StagedTarget, type TargetSeed } from './staging';
 import { AddTagForm } from './TagEditor';
@@ -31,6 +33,7 @@ export function TagsField({ seed, readOnly, compact }: { seed: TargetSeed; readO
       {keys.length === 0 && readOnly && <li className="text-xs text-gray-400">No tags</li>}
       {keys.map((k) => {
         const exempt = config.exempt_keys.includes(k);
+        const required = !exempt && isRequiredTag(config, k, seed.securableType);
         const removed = target.unset.includes(k);
         const added = k in target.set && !(k in target.baseTags);
         const changed = k in target.set && k in target.baseTags;
@@ -40,8 +43,15 @@ export function TagsField({ seed, readOnly, compact }: { seed: TargetSeed; readO
               tagKey={k}
               value={k in target.set ? target.set[k] : target.baseTags[k]}
               tone={exempt ? 'exempt' : removed ? 'removed' : added ? 'added' : changed ? 'changed' : 'default'}
-              title={exempt ? `${k} is managed by another tool, so it can't be changed here.` : changed ? `Was ${k}=${target.baseTags[k] ?? '(no value)'}` : undefined}
-              onRemove={!readOnly && !exempt && !removed ? () => unsetTag([seed.key], k, [seed]) : undefined}
+              required={required}
+              title={
+                exempt
+                  ? `${k} is managed by another tool, so it can't be changed here.`
+                  : changed
+                    ? `Was ${k}=${target.baseTags[k] ?? '(no value)'}${required ? `. ${REQUIRED_TAG_TITLE}` : ''}`
+                    : undefined
+              }
+              onRemove={!readOnly && !exempt && !required && !removed ? () => unsetTag([seed.key], k, [seed]) : undefined}
             />
             {(removed || added || changed) && (
               <button type="button" onClick={() => undoField(seed.key, k)} className="text-gray-400 hover:text-gray-700" aria-label={`Undo the change to ${k}`} title="Undo">
@@ -66,6 +76,7 @@ export function TagsField({ seed, readOnly, compact }: { seed: TargetSeed; readO
             {(close) => (
               <AddTagForm
                 compact
+                securableTypes={[seed.securableType]}
                 onAdd={(k, v) => {
                   setTag([seed.key], k, v, [seed]);
                   close();
@@ -79,13 +90,15 @@ export function TagsField({ seed, readOnly, compact }: { seed: TargetSeed; readO
   );
 }
 
-/** The description as text, edited in place; the change stays unsaved until reviewed. */
-export function DescriptionField({ seed, readOnly, compact }: { seed: TargetSeed; readOnly?: boolean; compact?: boolean }) {
+/** The description as text, edited in place; the change stays unsaved until reviewed. `onSuggest` adds an AI suggest button. */
+export function DescriptionField({ seed, readOnly, compact, onSuggest }: { seed: TargetSeed; readOnly?: boolean; compact?: boolean; onSuggest?: () => void }) {
   const target = useTarget(seed);
   const setComment = useStagingStore((s) => s.setComment);
   const undoField = useStagingStore((s) => s.undoField);
+  const suggesting = useAiPending((s) => !!s.pending[seed.key]);
   const [draft, setDraft] = useState<string | null>(null);
   const value = effectiveComment(target);
+  const aiSuggested = !!target.comment?.ai;
 
   if (draft !== null) {
     const done = () => {
@@ -122,16 +135,35 @@ export function DescriptionField({ seed, readOnly, compact }: { seed: TargetSeed
 
   return (
     <div className="group flex items-start gap-1.5">
-      <p
-        className={cn(
-          'whitespace-pre-wrap text-sm',
-          value ? 'text-gray-700' : 'text-gray-400',
-          target.comment && 'rounded bg-amber-50 px-1 ring-1 ring-amber-200',
-          compact && 'line-clamp-2',
+      <div className="min-w-0">
+        <p
+          className={cn(
+            'whitespace-pre-wrap text-sm',
+            value ? 'text-gray-700' : 'text-gray-400',
+            target.comment && (aiSuggested ? 'rounded bg-violet-50 px-1 ring-1 ring-violet-200' : 'rounded bg-amber-50 px-1 ring-1 ring-amber-200'),
+            compact && 'line-clamp-2',
+          )}
+        >
+          {suggesting && !value ? 'Writing a suggestion…' : value || (readOnly ? 'No description' : 'No description yet')}
+        </p>
+        {aiSuggested && (
+          <span className="mt-1 inline-flex items-center gap-1 rounded border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-xs text-violet-800" title={AI_NOTE}>
+            <Sparkles className="h-3 w-3" aria-hidden="true" /> AI suggestion
+          </span>
         )}
-      >
-        {value || (readOnly ? 'No description' : 'No description yet')}
-      </p>
+      </div>
+      {!readOnly && onSuggest && (
+        <button
+          type="button"
+          onClick={onSuggest}
+          disabled={suggesting}
+          className="mt-0.5 shrink-0 text-gray-400 hover:text-violet-700 disabled:cursor-wait"
+          aria-label={value ? 'Suggest a new description with AI' : 'Suggest a description with AI'}
+          title={suggesting ? 'Writing a suggestion…' : value ? 'Suggest a new description with AI' : 'Suggest a description with AI'}
+        >
+          {suggesting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+        </button>
+      )}
       {!readOnly && (
         <button
           type="button"

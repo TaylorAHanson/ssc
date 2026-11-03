@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { getBranding } from '../services/api';
 import type { CommunityLinksConfig } from '../services/api';
-import type { UserPersona } from '../types';
+import { errorMessage } from '../lib/errors';
 
 /** A config-driven, iframe-embedded app surfaced in the sidebar. */
 export interface EmbeddedApp {
@@ -11,7 +11,8 @@ export interface EmbeddedApp {
     icon: string;
     group: string;
     description: string;
-    allowedPersonas?: UserPersona[];
+    /** Role names allowed to see the app (the old name Platform Admin still matches). */
+    allowedPersonas?: string[];
 }
 
 export interface SupportContact {
@@ -110,7 +111,7 @@ export const useBrandingStore = create<BrandingState>((set) => ({
                         group: a.group || 'Build & Customize',
                         description: a.description || '',
                         allowedPersonas: Array.isArray(a.allowed_personas) && a.allowed_personas.length
-                            ? (a.allowed_personas as UserPersona[])
+                            ? (a.allowed_personas as string[])
                             : undefined,
                     })),
                 genieFullExperienceUrl: (branding as { genie_full_experience_url?: string }).genie_full_experience_url || '',
@@ -150,7 +151,7 @@ export const useBrandingStore = create<BrandingState>((set) => ({
             }
         } catch (error) {
             set({
-                error: error instanceof Error ? error.message : 'Failed to fetch branding',
+                error: errorMessage(error, 'Failed to fetch branding'),
                 isLoading: false,
                 hasLoaded: true,
             });

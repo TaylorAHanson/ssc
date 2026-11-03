@@ -152,6 +152,17 @@ def test_empty_cache_reads_as_nothing(session_factory):
     assert workspace_cache.read_cached_workspaces() == ([], None)
     assert workspace_cache.is_empty()
     assert workspace_cache.cached_by_host() == {}
+    assert workspace_cache.cached_by_id() == {}
+
+
+def test_cached_by_id_keys_on_the_workspace_id_text_and_respects_the_switch(session_factory, monkeypatch):
+    _refresh(_provider([_ws(7, "finance-prod", "https://f"), _ws("8", "sales", "https://s")]))
+
+    by_id = workspace_cache.cached_by_id()
+    assert set(by_id) == {"7", "8"}
+    assert by_id["7"]["workspace_name"] == "finance-prod"
+    monkeypatch.setattr(settings, "WORKSPACE_CACHE_ENABLED", False)
+    assert workspace_cache.cached_by_id() == {}
 
 
 def test_freshness_follows_the_max_age_setting(session_factory, monkeypatch):

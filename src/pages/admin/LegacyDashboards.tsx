@@ -15,6 +15,7 @@ import type { DataAsset, LegacyMapping, LegacyMappingImportResult, LegacyMapping
 import { legacyMappingsResource, useMetricViews } from '../../lib/catalogCache';
 import { LegacyStatusBadge } from '../../components/discover/LegacyMappingTable';
 import { LEGACY_STATUSES, legacyMatches, prettyMetricViewName } from '../../components/discover/legacyMappings';
+import { errorMessage } from '../../lib/errors';
 
 const EMPTY: LegacyMappingInput = { dashboard: '', metric_view: '', status: 'Active', owner: '', description: '', url: '' };
 
@@ -129,7 +130,7 @@ export function LegacyDashboards() {
       setMappings(await getLegacyMappings({ include_hidden: true }));
       setLoadError(null);
     } catch (e) {
-      setLoadError(e instanceof Error ? e.message : 'Failed to load mappings');
+      setLoadError(errorMessage(e, 'Failed to load mappings'));
     } finally {
       setIsLoading(false);
     }
@@ -190,7 +191,7 @@ export function LegacyDashboards() {
       await load();
       refreshDiscover();
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : 'Failed to save');
+      setFormError(errorMessage(err, 'Failed to save'));
     } finally {
       setSaving(false);
     }
@@ -205,7 +206,7 @@ export function LegacyDashboards() {
       await load();
       refreshDiscover();
     } catch (err) {
-      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Failed to delete' });
+      setMessage({ type: 'error', text: errorMessage(err, 'Failed to delete') });
     }
   };
 
@@ -220,7 +221,7 @@ export function LegacyDashboards() {
       await load();
       refreshDiscover();
     } catch (err) {
-      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Import failed' });
+      setMessage({ type: 'error', text: errorMessage(err, 'Import failed') });
     } finally {
       setImporting(false);
     }

@@ -8,7 +8,8 @@ import { Badge, EmptyState, ErrorBanner, Pager, Skeleton } from '../../rbac/ui';
 import { cn } from '../../../lib/utils';
 import { ActorTypeBadge, SourceBadge } from './badges';
 import { useMetadata } from './context';
-import { SOURCE_LABELS, changeSetCounts, errorMessage, formatTime, plural, relativeTime } from './format';
+import { SOURCE_LABELS, changeSetCounts, formatTime, plural, relativeTime } from './format';
+import { errorMessage } from '../../../lib/errors';
 import { Popover } from './Popover';
 import { useAsync, useDebounced } from './useAsync';
 

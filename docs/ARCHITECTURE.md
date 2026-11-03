@@ -394,7 +394,7 @@ Tool *availability* is data-driven, not hardcoded. A single DB-backed catalog
   execution tools a given workflow may call; the column is the global "may be used in workflows
   at all" gate. The authoring tool picker (`available_tools(db)`) reflects this column, while
   `get_tool`/`has_tool` resolve from the code catalog so already-published specs never break.
-- **Per-tool gating.** Each row also carries `allowed_roles` (empty = all roles; Platform Admin
+- **Per-tool gating.** Each row also carries `allowed_roles` (empty = all roles; Super Admin
   always passes), `identity_mode` (`sp` | `obo`), `exposed_via_mcp` (publish over the in-app
   `/mcp` MCP server for external agents/apps; `get_external_tools()` reads this, seeded from the
   code-declared `external=True` attribute), and `enabled` (master switch).
@@ -408,8 +408,8 @@ Tool *availability* is data-driven, not hardcoded. A single DB-backed catalog
   (UC enforces the user's grants); `"sp"` runs as the app Service Principal. The
   `RemoteMcpTool` adapter honors this per tool.
 - **Surfaces:** admin UI at `/governance/tool-registry` (under the Admin nav group), API at
-  `/api/v1/tool-registry` (per-tool gating writes require Platform/Governance Admin; MCP source
-  management + discovery require Platform Admin), gated by the `tool_registry` feature flag.
+  `/api/v1/tool-registry` (reads need `tools.registry.view`; every write, sync and MCP source
+  change needs `tools.registry.manage`, see `app/core/capabilities.py`), gated by the `tool_registry` feature flag.
 
 > Note: the MLflow `SelfServiceResponsesAgent` (Model Serving) path is not yet registry-aware — it
 > still uses the full `AGENT_TOOLS` set. Wiring serving-time scoping through the registry is a

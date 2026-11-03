@@ -6,7 +6,7 @@ import { Textarea } from '../../ui/textarea';
 import { Notice } from '../../rbac/ui';
 import { isPattern, parseSheet, parseTagList, patternOp, patternProblem } from './bulk';
 import { useMetadata } from './context';
-import { TYPE_LABELS, envForCatalog, plural, tagProblem } from './format';
+import { TYPE_LABELS, envForCatalog, isRequiredTag, plural, settableKeys, tagProblem } from './format';
 import { ReviewDialog } from './ReviewDialog';
 import { useReviewFlow } from './useReviewFlow';
 
@@ -32,7 +32,7 @@ const selectClass = 'h-10 w-full rounded-md border border-gray-300 bg-white px-3
  * from a spreadsheet. Both go through the normal preview, approval routing and submit.
  */
 export function BulkEditDialog({ onClose, initialPattern = '' }: { onClose: () => void; initialPattern?: string }) {
-  const { config, keys, bumpRefresh } = useMetadata();
+  const { config, bumpRefresh } = useMetadata();
   const id = useId();
   const [mode, setMode] = useState<Mode>('pattern');
   const [pattern, setPattern] = useState(initialPattern);
@@ -50,13 +50,31 @@ export function BulkEditDialog({ onClose, initialPattern = '' }: { onClose: () =
     submit: (r, idempotencyKey) => submitChange(r, { idempotencyKey }),
   });
 
-  const relationLevel = pattern.trim().split('.').length === 3 && !column.trim();
+  const parts = pattern.trim().split('.').length;
+  const relationLevel = parts === 3 && !column.trim();
+  // The kinds of object the pattern can match, for required tags and the allowed keys.
+  const targetTypes: SecurableType[] = !pattern.trim()
+    ? []
+    : column.trim()
+      ? ['column']
+      : parts === 1
+        ? ['catalog']
+        : parts === 2
+          ? ['schema']
+          : type
+            ? [type]
+            : RELATION_TYPES;
   const tagList = parseTagList(tagText);
   const tagIssue =
     tagList.error ??
     (action === 'set_tags'
-      ? Object.entries(tagList.tags).map(([k, v]) => tagProblem(k, v, config, keys)).find(Boolean) ?? null
-      : null);
+      ? Object.entries(tagList.tags).map(([k, v]) => tagProblem(k, v, config)).find(Boolean) ?? null
+      : action === 'unset_tags'
+        ? Object.keys(tagList.tags)
+            .map((k) => (targetTypes.some((t) => isRequiredTag(config, k, t)) ? `${k} is a required tag, so it can’t be removed. You can change its value instead.` : null))
+            .find(Boolean) ?? null
+        : null);
+  const allowedKeys = config.key_mode === 'known_only' ? settableKeys(config, targetTypes).map((p) => p.key) : null;
   const patternIssue = pattern.trim() ? patternProblem(pattern, column) : null;
   const parsed = mode === 'sheet' ? parseSheet(sheet) : null;
 
@@ -225,8 +243,10 @@ export function BulkEditDialog({ onClose, initialPattern = '' }: { onClose: () =
                 <p id={`${id}-tags-help`} className={tagIssue ? 'mt-1 text-xs text-red-700' : 'mt-1 text-xs text-gray-500'}>
                   {tagIssue ??
                     (action === 'set_tags'
-                      ? 'Separate tags with ;. A key without = is a key-only tag. Other tags on these objects are left alone.'
-                      : 'Separate keys with ;.')}
+                      ? `Separate tags with ;. A key without = is a key-only tag. Other tags on these objects are left alone.${
+                          allowedKeys ? ` Allowed keys: ${allowedKeys.join(', ') || 'none for these objects'}.` : ''
+                        }`
+                      : 'Separate keys with ;. Required tags can’t be removed.')}
                 </p>
               </div>
             )}

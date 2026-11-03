@@ -10,11 +10,12 @@ Admin screens appear in two sidebar sections, depending on your role:
 
 | Section | Pages | Who sees it |
 | --- | --- | --- |
-| Watch Tower | **Data Certification (ODCS)**, **Data Products (ODPS)**, **Allowlist**, **OmniGuard** | Platform admins and governance admins |
-| Watch Tower | **Metadata Manager** | Platform admins, governance admins and the **Browse roles** see every object. Data owners see and edit only the objects they own. |
-| Watch Tower | **Access Rules** | Platform admins, viewer roles and members of the access rule approver groups |
-| Control Tower | **Admin** | Platform admins |
-| Control Tower | **Context Catalog**, **Workflow Studio**, **Tool Registry**, **Preview Features**, **Training Studio** | Platform admins and governance admins |
+| Watch Tower | **Data Certification (ODCS)**, **Data Products (ODPS)**, **Allowlist** | Super admins and governance admins |
+| Watch Tower | **OmniGuard** | Super, governance and ops admins. Only governance admins start scans, send digests and run enforcement; ops and application admins clear old or stuck runs. |
+| Watch Tower | **Metadata Manager** | Super and application admins, governance admins and the **Browse roles** see every object. Data owners see and edit only the objects they own. |
+| Watch Tower | **Access Rules** | Super and governance admins, viewer roles and members of the access rule approver groups |
+| Control Tower | **Admin** | Super and application admins. Governance admins see only its **Feedback** tab. |
+| Control Tower | **Context Catalog**, **Workflow Studio**, **Tool Registry**, **Preview Features**, **Training Studio** | Super, application and governance admins. Governance admins see the Tool Registry read-only. |
 
 Roles come from the groups people belong to. See
 [Roles & Access](settings-and-access.md#roles--access) to change who gets

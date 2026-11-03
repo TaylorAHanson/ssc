@@ -109,7 +109,7 @@ cases:
       permission on the schema), and then offers to start an access request. It does
       not guess from group names alone and does not describe the check in terms of
       tokens or hosts.
-    expect_tools: [[check_resource_access, check_object_permissions, run_sql]]
+    expect_tools: [[check_resource_access, run_sql]]
 
   - id: bu-access-check-readable
     name: Do I have access, and I do
@@ -119,7 +119,7 @@ cases:
     expected: >
       Verifies with the user's own identity and tells them plainly whether they can
       read it. If they can, it does not tell them to request access.
-    expect_tools: [[check_resource_access, check_object_permissions, run_sql]]
+    expect_tools: [[check_resource_access, run_sql]]
 
   # Whichever access workflows are published, asking for access must not bluff: no
   # claim of a submission before the user has given what is needed and said yes, and
@@ -234,7 +234,7 @@ cases:
     expected: >
       Looks up the access rules or grants for the table and names the groups that
       can read it, from the tool results. If it cannot see them it says so.
-    expect_tools: [[find_access, check_object_permissions, get_metadata]]
+    expect_tools: [[find_access, check_resource_access, get_metadata]]
 
   - id: bu-columns
     name: Column names and descriptions
@@ -268,7 +268,7 @@ cases:
       confirms write access it says it cannot confirm it and that the owner can,
       rather than telling the user they cannot write. It does not tell someone who
       can read the table that they need access.
-    expect_tools: [[check_resource_access, check_object_permissions, run_sql]]
+    expect_tools: [[check_resource_access, run_sql]]
     forbid_tools: [execute_workflow, submit_metadata_change]
 
   - id: bu-role-explainer

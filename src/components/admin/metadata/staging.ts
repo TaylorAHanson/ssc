@@ -28,8 +28,8 @@ export interface StagedTarget {
   baseCommentVersion: number | null;
   set: Tags;
   unset: string[];
-  /** Absent = unchanged; `{value: null}` clears the description. */
-  comment?: { value: string | null };
+  /** Absent = unchanged; `{value: null}` clears the description. `ai` = an AI suggestion nobody has edited yet. */
+  comment?: { value: string | null; ai?: boolean };
 }
 
 export type TargetSeed = Omit<StagedTarget, 'set' | 'unset' | 'comment'>;
@@ -144,6 +144,8 @@ interface StagingState {
   setTag: (keys: string[], tagKey: string, value: string | null, seeds?: TargetSeed[]) => void;
   unsetTag: (keys: string[], tagKey: string, seeds?: TargetSeed[]) => void;
   setComment: (keys: string[], value: string | null, seeds?: TargetSeed[]) => void;
+  /** Stages AI-suggested descriptions as ordinary edits, marked `ai` until someone edits them. */
+  stageSuggestions: (suggestions: { seed: TargetSeed; value: string }[]) => void;
   /** Drops the staged edit for one tag (or the description when tagKey is null). */
   undoField: (key: string, tagKey: string | null) => void;
   remove: (key: string) => void;
@@ -215,6 +217,17 @@ export const useStagingStore = create<StagingState>((set) => ({
         const t = targets[k];
         if (!t) return;
         targets[k] = { ...t, comment: normalized === t.baseComment ? undefined : { value: normalized } };
+      });
+      return { targets, order };
+    }),
+  stageSuggestions: (suggestions) =>
+    set((state) => {
+      const { targets, order } = withTargets(state, suggestions.map((s) => s.seed));
+      suggestions.forEach(({ seed, value }) => {
+        const t = targets[seed.key];
+        const text = value.trim();
+        if (!t || !text || text === t.baseComment) return;
+        targets[seed.key] = { ...t, comment: { value: text, ai: true } };
       });
       return { targets, order };
     }),

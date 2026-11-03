@@ -54,7 +54,7 @@ Code defaults for those settings live in `backend/app/core/default_config.py`. D
 ### Step 3.1: Customize the application (Admin → Settings)
 
 1. Deploy the app (or run locally with `./dev.sh`).
-2. Sign in as a **Platform Admin**.
+2. Sign in as a **Super Admin** or **Application Admin**.
 3. Open **Control Tower → Admin → Settings**.
 4. Settings are grouped like the sidebar. Start with **General → Appearance** (branding, colors, system banner) and **General → Features & Navigation** (turn capabilities on or off and choose which sidebar pages show), then adjust **Learn & Share → Links & Embedded Apps**, **Watch Tower → Target Workspaces**, **General → Notifications**, and the other pages as needed. Settings for a capability that is switched off are collapsed under **Inactive settings**.
 

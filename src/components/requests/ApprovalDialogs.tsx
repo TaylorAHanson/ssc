@@ -7,6 +7,7 @@ import { StepReportPanel } from '../StepReportPanel';
 import { useRequestStore } from '../../stores/requestStore';
 import { api, type BulkApproveResult } from '../../services/api';
 import { BULK_APPROVE_MAX, workflowLabel, type InboxApproval } from './rows';
+import { errorMessage } from '../../lib/errors';
 
 export type ApprovalDialogAction = 'approve' | 'reject' | 'edit';
 
@@ -71,7 +72,7 @@ export function ApprovalActionDialog({
       }
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'That did not go through. Try again.');
+      setError(errorMessage(e, 'That did not go through. Try again.'));
     } finally {
       setIsProcessing(false);
     }
@@ -250,7 +251,7 @@ export function BulkApproveDialog({
       setStage('results');
       await onDone();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'The approvals could not be sent.');
+      setError(errorMessage(e, 'The approvals could not be sent.'));
     } finally {
       setProcessing(false);
     }

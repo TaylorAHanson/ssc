@@ -293,7 +293,7 @@ async def test_blank_browse_roles_adds_nobody(session, users, reads, monkeypatch
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("roles", ["Platform Admin", "Governance Admin"])
+@pytest.mark.parametrize("roles", ["Super Admin", "Governance Admin"])
 @pytest.mark.parametrize("tool_fn, args", READ_CALLS)
 async def test_admins_and_editor_roles_always_read_everything(session, users, reads, monkeypatch, tool_fn, args,
                                                               roles):
@@ -303,6 +303,18 @@ async def test_admins_and_editor_roles_always_read_everything(session, users, re
 
     assert out["ok"] is True
     assert all(s is None or s.full for s in reads.scopes)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_fn, args", READ_CALLS)
+async def test_an_application_admin_is_not_a_metadata_admin(session, users, reads, monkeypatch, tool_fn, args):
+    monkeypatch.setattr(settings, "METADATA_BROWSE_ROLES", [])
+    monkeypatch.setattr(settings, "METADATA_EDITOR_ROLES", ["Governance Admin"])
+
+    out = await tool_fn.execute(**args, **{**OUTSIDER, "_user_roles": "Application Admin"})
+
+    assert out["status"] == "forbidden"
+    assert reads == []
 
 
 @pytest.mark.asyncio

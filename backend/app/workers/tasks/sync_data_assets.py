@@ -210,6 +210,118 @@ def derive_metric_view_enrichments(asset_type: str, view_definition: str | None)
 _LINEAGE_BATCH = 500
 
 
+def _workspaces_by_id() -> dict[str, dict]:
+    from app.services import workspace_cache
+
+    try:
+        return workspace_cache.cached_by_id()
+    except Exception as e:  # noqa: BLE001 - names/links are an enrichment
+        logger.warning("Could not read the workspace cache to place lineage dashboards: %s", e)
+        return {}
+
+
+def _target_workspace_hosts() -> dict[str, str]:
+    """Configured target workspaces' hosts, keyed by normalized host."""
+    from app.core.workspaces import get_target_workspace_info
+    from app.services.workspace_cache import normalize_host
+
+    return {normalize_host(i.host): i.host for i in get_target_workspace_info(enrich=False) if i.host}
+
+
+def _target_workspace_client(host: str):
+    """A client for a configured target workspace, as its own service principal; None without credentials."""
+    from app.core.workspaces import get_workspace_config
+    from app.providers.databricks.client import DatabricksProvider
+
+    cfg = get_workspace_config(host)
+    if cfg is None or not (cfg.token or (cfg.client_id and cfg.client_secret)):
+        return None
+    return DatabricksProvider(
+        host=cfg.host, token=cfg.token, client_id=cfg.client_id, client_secret=cfg.client_secret,
+    ).client
+
+
+async def _remote_dashboard_names(by_workspace: dict[str, list[str]], workspaces: dict[str, dict]) -> dict[str, str]:
+    """Display names of dashboards in other workspaces that are configured target workspaces.
+
+    One ``lakeview.get`` per dashboard, as that workspace's service principal. A
+    workspace that isn't configured is skipped; any failure leaves its dashboards
+    unnamed and never fails the sync.
+    """
+    from databricks.sdk.errors import NotFound, PermissionDenied
+    from app.services.workspace_cache import normalize_host
+
+    try:
+        targets = _target_workspace_hosts()
+    except Exception as e:  # noqa: BLE001 - names are an enrichment
+        logger.debug("Could not read target workspaces to name lineage dashboards: %s", e)
+        return {}
+
+    names: dict[str, str] = {}
+    asked = failed = 0
+    for workspace_id, dash_ids in by_workspace.items():
+        target = targets.get(normalize_host((workspaces.get(workspace_id) or {}).get("workspace_url")))
+        if not target:
+            continue
+        asked += len(dash_ids)
+        try:
+            client = await asyncio.to_thread(_target_workspace_client, target)
+            if client is None:
+                continue
+            for dash_id in dash_ids:
+                try:
+                    d = await asyncio.to_thread(client.lakeview.get, dash_id)
+                except (NotFound, PermissionDenied) as e:
+                    logger.debug("Dashboard %s not readable in %s: %s", dash_id, target, e)
+                    continue
+                if getattr(d, "display_name", None):
+                    names[dash_id] = d.display_name
+        except Exception as e:  # noqa: BLE001 - e.g. unreachable host or bad credentials
+            failed += 1
+            logger.debug("Could not name lineage dashboards in %s: %s", target, e)
+    if asked:
+        logger.info(
+            "Named %d of %d lineage dashboard(s) in other configured workspaces (%d workspace(s) failed).",
+            len(names), asked, failed,
+        )
+    return names
+
+
+def _workspace_base_url(url: str | None) -> str:
+    url = (url or "").strip().rstrip("/")
+    if url and not url.lower().startswith(("https://", "http://")):
+        url = f"https://{url}"
+    return url
+
+
+def _other_workspace_dashboard(dash_id: str, workspace_id: str, ws: dict | None, name: str | None) -> dict:
+    """Name, description and link for a dashboard the home workspace's listing doesn't show.
+
+    The link opens it in its own workspace; whether it loads is down to the
+    viewer's access there. Without the workspace in the cache there's no link.
+    """
+    ws_name = (ws or {}).get("workspace_name")
+    base = _workspace_base_url((ws or {}).get("workspace_url"))
+    status = str((ws or {}).get("status") or "RUNNING").upper()
+    url = None
+    if base and status == "RUNNING":
+        url = f"{base}/dashboardsv3/{dash_id}/published"
+        if workspace_id.isdigit():
+            url += f"?o={workspace_id}"
+    if ws_name:
+        description = f"Lives in the {ws_name} workspace."
+        if not name and url:
+            description += " Open it there to see its name."
+    else:
+        description = "Lives in another workspace, so its name and link aren't available here."
+    return {
+        "name": name or (f"Dashboard in {ws_name}" if ws_name else "Dashboard in another workspace"),
+        "description": description,
+        "url": url,
+        "workspace_name": ws_name,
+    }
+
+
 async def _fetch_downstream_dashboards(provider, fqns: list[str]) -> dict[str, list[dict]]:
     """Dashboards that read each metric view, from ``system.access.table_lineage``.
 
@@ -218,10 +330,12 @@ async def _fetch_downstream_dashboards(provider, fqns: list[str]) -> dict[str, l
     rate-limited: each call retried until the SDK's 2-minute deadline and the
     blocked threads stalled the rest of the poller. See docs/METRIC_VIEW_LINEAGE.md.
 
-    Names come from the home workspace's Lakeview dashboards; a dashboard that
-    lineage reports but this workspace can't see (e.g. it lives in another
-    workspace) is still listed, labelled by id, with no link. If the sync identity
-    can't read the system table, every view gets no dashboards and the sync goes on.
+    Names come from the home workspace's Lakeview dashboards. A dashboard this
+    workspace can't see (e.g. it lives in another workspace) is placed through the
+    cached account workspace list: it links into its own workspace and, when that
+    workspace is a configured target, is named from there; otherwise it gets a
+    "Dashboard in <workspace>" title. If the sync identity can't read the system
+    table, every view gets no dashboards and the sync goes on.
     """
     from app.tools.sql_safety import quote_literal
 
@@ -261,17 +375,40 @@ async def _fetch_downstream_dashboards(provider, fqns: list[str]) -> dict[str, l
         known = {}
     host = (provider.client.config.host or "").rstrip("/")
 
+    def _workspace_id(row) -> str:
+        return str(row.get("workspace_id") or "")
+
+    unseen: dict[str, list[str]] = {}
+    for row in rows:
+        dash_id = row.get("entity_id")
+        if dash_id and dash_id not in known:
+            ids = unseen.setdefault(_workspace_id(row), [])
+            if dash_id not in ids:
+                ids.append(dash_id)
+    workspaces = await asyncio.to_thread(_workspaces_by_id) if unseen else {}
+    remote_names = await _remote_dashboard_names(unseen, workspaces) if unseen else {}
+
     for row in sorted(rows, key=lambda r: str(r.get("last_read") or ""), reverse=True):
         fqn, dash_id = row.get("source_table_full_name"), row.get("entity_id")
         if fqn not in out or not dash_id or any(d["id"] == dash_id for d in out[fqn]):
             continue
+        workspace_id = _workspace_id(row)
         d = known.get(dash_id)
+        if d:
+            entry = {
+                "name": d.display_name,
+                "description": None,
+                "url": f"{host}/dashboardsv3/{dash_id}/published" if host else None,
+            }
+        else:
+            entry = _other_workspace_dashboard(
+                dash_id, workspace_id, workspaces.get(workspace_id), remote_names.get(dash_id),
+            )
         out[fqn].append({
             "id": dash_id,
-            "name": d.display_name if d else f"Dashboard {dash_id}",
             "type": "dashboard",
-            "description": None if d else f"In workspace {row.get('workspace_id')}, not visible from this one",
-            "url": f"{host}/dashboardsv3/{dash_id}/published" if d and host else None,
+            **entry,
+            "workspace_id": workspace_id or None,
             "updated_at": row.get("last_read"),
         })
     return out
@@ -517,6 +654,10 @@ async def sync_data_assets_task(force: bool = False):
             f"{r.get('catalog')}.{r.get('schema')}.{r.get('table_name')}"
             for r in rows if is_metric_view(r.get("type"))
         ]
+        # Dashboards in other workspaces are placed via the workspace cache, which
+        # is otherwise refreshed after this sync; fill it first on a fresh install.
+        if metric_view_fqns and await asyncio.to_thread(_workspace_cache_needs_warm):
+            await _refresh_workspace_cache(provider)
         dashboards_by_mv = (
             await _fetch_downstream_dashboards(provider, metric_view_fqns)
             if metric_view_fqns else {}

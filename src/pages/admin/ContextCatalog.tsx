@@ -37,6 +37,7 @@ import type {
 import { ImportContextCatalogModal } from '../../components/admin/ImportContextCatalogModal';
 import { ContextStalenessPanel } from '../../components/admin/ContextStalenessPanel';
 import { ContextCatalogGitPanel } from '../../components/admin/ContextCatalogGitPanel';
+import { errorMessage } from '../../lib/errors';
 
 const inputClass =
   'w-full border border-gray-300 rounded-md h-10 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-accent';
@@ -208,7 +209,7 @@ export function ContextCatalog() {
         setSelectedId(list[0].id);
       }
     } catch (e) {
-      setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Failed to load domains' });
+      setMessage({ type: 'error', text: errorMessage(e, 'Failed to load domains') });
     } finally {
       setIsLoadingDomains(false);
     }
@@ -235,7 +236,7 @@ export function ContextCatalog() {
         if (mounted) setDetail(d);
       } catch (e) {
         if (mounted)
-          setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Failed to load domain' });
+          setMessage({ type: 'error', text: errorMessage(e, 'Failed to load domain') });
       } finally {
         if (mounted) setIsLoadingDetail(false);
       }
@@ -391,7 +392,7 @@ export function ContextCatalog() {
       }
       setShowDomainForm(false);
     } catch (e) {
-      setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Failed to save domain' });
+      setMessage({ type: 'error', text: errorMessage(e, 'Failed to save domain') });
     } finally {
       setIsSavingDomain(false);
     }
@@ -412,7 +413,7 @@ export function ContextCatalog() {
       setDetail(null);
       await loadDomains(null);
     } catch (e) {
-      setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Failed to delete domain' });
+      setMessage({ type: 'error', text: errorMessage(e, 'Failed to delete domain') });
     }
   };
 
@@ -451,7 +452,7 @@ export function ContextCatalog() {
       docBaselineRef.current = docSnapshot(form);
       setEditorTick((t) => t + 1);
     } catch (e) {
-      setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Failed to open document' });
+      setMessage({ type: 'error', text: errorMessage(e, 'Failed to open document') });
     }
   };
 
@@ -487,7 +488,7 @@ export function ContextCatalog() {
       setMessage({ type: 'success', text: `Marked "${updated.title}" reviewed` });
       if (selectedId) setDetail(await api.getContextDomain(selectedId));
     } catch (e) {
-      setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Failed to mark reviewed' });
+      setMessage({ type: 'error', text: errorMessage(e, 'Failed to mark reviewed') });
     } finally {
       setIsMarkingReviewed(false);
     }
@@ -528,7 +529,7 @@ export function ContextCatalog() {
       setDocForm(null);
       await refreshDetail();
     } catch (e) {
-      setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Failed to save document' });
+      setMessage({ type: 'error', text: errorMessage(e, 'Failed to save document') });
     } finally {
       setIsSavingDoc(false);
     }
@@ -541,7 +542,7 @@ export function ContextCatalog() {
       setMessage({ type: 'success', text: 'Document deleted' });
       await refreshDetail();
     } catch (e) {
-      setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Failed to delete document' });
+      setMessage({ type: 'error', text: errorMessage(e, 'Failed to delete document') });
     }
   };
 
@@ -556,7 +557,7 @@ export function ContextCatalog() {
       setMessage({ type: 'success', text: `Uploaded "${file.name}"` });
       await refreshDetail();
     } catch (err) {
-      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Upload failed' });
+      setMessage({ type: 'error', text: errorMessage(err, 'Upload failed') });
     } finally {
       setIsUploading(false);
     }
@@ -577,7 +578,7 @@ export function ContextCatalog() {
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
-      setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Failed to export catalog' });
+      setMessage({ type: 'error', text: errorMessage(e, 'Failed to export catalog') });
     }
   };
 
@@ -601,7 +602,7 @@ export function ContextCatalog() {
       const res = await api.searchContextCatalog(searchQuery.trim());
       setSearchResults(res.results);
     } catch (e) {
-      setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Search failed' });
+      setMessage({ type: 'error', text: errorMessage(e, 'Search failed') });
     } finally {
       setIsSearching(false);
     }

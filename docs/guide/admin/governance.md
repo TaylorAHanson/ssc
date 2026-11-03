@@ -1,7 +1,8 @@
 # Governance tools
 
-The **Watch Tower** section of the sidebar holds the governance tools. Platform
-admins and governance admins can use them. For the policy model behind these
+The **Watch Tower** section of the sidebar holds the governance tools. Super
+Admins and Governance Admins can use them; Ops Admins can also open
+OmniGuard to watch its runs. For the policy model behind these
 tools, see the [Governance operating guide](../../GOVERNANCE.md).
 
 ## OmniGuard
@@ -17,7 +18,12 @@ tools, see the [Governance operating guide](../../GOVERNANCE.md).
 - **Email Digest** emails a summary of the findings.
 - **Run History** lists past scans with how many violations each found. The
   bin icon on a row deletes that run, which also stops a scan that's still in
-  progress. **Clear old runs** removes older history in bulk.
+  progress. **Clear old runs** removes older history in bulk. Both are for
+  Super, Application and Ops Admins.
+
+Ops Admins see the runs and their reports, but not **Run Scan**, **Email
+Digest**, **Advanced options** or the enforcement actions, which need the
+Governance Admin role.
 
 Open a run to see its report. **Violations** lists one row per resource and
 policy; **Checklist** itemizes every rule that failed. Tabs above the list

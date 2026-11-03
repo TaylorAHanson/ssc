@@ -24,8 +24,8 @@ def get_delegations(
     """Get all delegations, optionally filtered by delegator or delegatee."""
     query = db.query(DelegationModel)
     
-    # Non-admins can only see their own delegations
-    if not current_user.has_role("platform_admin"):
+    # Without delegations.view_all a caller only sees their own delegations
+    if not current_user.can("delegations.view_all"):
         query = query.filter(
             (DelegationModel.delegator_email == current_user.email) | 
             (DelegationModel.delegatee_email == current_user.email)
@@ -98,7 +98,7 @@ def delete_delegation(
         raise HTTPException(status_code=404, detail="Delegation not found")
     
     # Check permission
-    if not current_user.has_role("platform_admin") and delegation.delegator_email != current_user.email:
+    if not current_user.can("delegations.view_all") and delegation.delegator_email != current_user.email:
         raise HTTPException(status_code=403, detail="Not authorized to delete this delegation")
     
     db.delete(delegation)

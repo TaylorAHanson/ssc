@@ -1,6 +1,6 @@
 # Platform Administration Guide
 
-This guide is for **Platform Admins** and **Governance Admins** who own and operate the platform day to day. It focuses on the thing you'll do most: **authoring, testing, shipping, and governing no-code workflows** — plus the operational tooling around them (versioning, environment promotion, live monitoring, and governance posture).
+This guide is for **Application Admins** (formerly Platform Admins) and **Governance Admins** who own and operate the platform day to day. It focuses on the thing you'll do most: **authoring, testing, shipping, and governing no-code workflows** — plus the operational tooling around them (versioning, environment promotion, live monitoring, and governance posture).
 
 For deployment see the [Platform Setup Guide](./PLATFORM_SETUP.md); for the policy/governance model see [Governance](./GOVERNANCE.md); for the system internals see [Architecture](./ARCHITECTURE.md).
 
@@ -262,9 +262,9 @@ SHADOW mode (the local default) logs policy decisions but does **not** block. Se
 
 | Capability | Who |
 | :--- | :--- |
-| Author/validate/preview/save/publish workflows (editor **and** agent tools) | **Platform Admin**, **Governance Admin** |
+| Author/validate/preview/save/publish workflows (editor **and** agent tools) | **Super Admin**, **Application Admin**, **Governance Admin** |
 | Edit OPA `.rego` governance policies | Governance Admin (file-based; see [Governance](./GOVERNANCE.md)) |
-| Run/operate Enforcement Sentinels, data certification | Governance Admin |
+| Run/operate Enforcement Sentinels, data certification | Governance Admin (Ops Admins can view runs and clear stuck ones) |
 | Use self-service workflows (request access, provisioning, etc.) | All users |
 
 Role scoping is enforced at the chat endpoint: tools tagged for admins are filtered out of every non-admin's tool set, so non-admins can neither see nor call the authoring tools.

@@ -52,6 +52,8 @@ class PingUrlInput(BaseModel):
     args_schema=PingUrlInput,
     feature_flag="core",
     friendly_label="Pinging URL...",
+    # Makes the app request any URL from its own network position.
+    required_capability="platform.probe",
 )
 async def ping_url(url: str, method: str = "GET", timeout_seconds: float = 10,
                    verify_tls: bool = True) -> Dict[str, Any]:

@@ -1,9 +1,13 @@
-import { useEffect, useState } from 'react';
-import { useUserStore } from '../../stores/userStore';
+import { useCallback, useEffect, useState } from 'react';
+import { useCan, useUserStore } from '../../stores/userStore';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Loader2, Shield, Edit2, Trash2, Plus, Info } from 'lucide-react';
-import type { RoleMapping } from '../../types';
+import { ROLE_PRIORITY } from '../../types';
+import type { CapabilityGrid, RoleMapping } from '../../types';
+import { userService } from '../../services/userService';
+import { RoleCapabilityGrid } from './RoleCapabilityGrid';
+import { errorMessage } from '../../lib/errors';
 
 export const Users = () => {
     const { roleMappings, isLoading, error, fetchRoleMappings, createRoleMapping, updateRoleMapping, deleteRoleMapping } = useUserStore();
@@ -12,17 +16,30 @@ export const Users = () => {
     const [newMapping, setNewMapping] = useState({ external_role: '', internal_role: 'User' });
     const [isSaving, setIsSaving] = useState(false);
 
-    const availableRoles = [
-        { id: 'Platform Admin', name: 'Platform Admin', description: 'Full access to all system features and settings.' },
-        { id: 'Governance Admin', name: 'Governance Admin', description: 'Can manage data policies, view audit logs, and oversee compliance.' },
-        { id: 'Security Admin', name: 'Security Admin', description: 'Manages security settings, access controls, and security audits.' },
-        { id: 'Finance Admin', name: 'Finance Admin', description: 'Can view cost data, manage budgets, and handle billing.' },
-        { id: 'User', name: 'User', description: 'Standard user access to self-service features.' }
-    ];
+    const [grid, setGrid] = useState<CapabilityGrid | null>(null);
+    const [gridError, setGridError] = useState<string | null>(null);
+    // Application Admins see this page read-only; only Super Admins change mappings.
+    const canManageFromProfile = useCan('roles.manage');
+    const canManage = grid ? grid.can_manage_roles : canManageFromProfile;
+
+    // Role names and descriptions come from the backend registry; the names alone until it loads.
+    const availableRoles = grid
+        ? grid.roles.map((r) => ({ id: r.label, name: r.label, description: r.description }))
+        : ROLE_PRIORITY.map((r) => ({ id: r, name: r, description: '' }));
+
+    const loadGrid = useCallback(async () => {
+        try {
+            setGrid(await userService.getCapabilityGrid());
+            setGridError(null);
+        } catch (err) {
+            setGridError(errorMessage(err, 'Failed to load role capabilities'));
+        }
+    }, []);
 
     useEffect(() => {
         fetchRoleMappings();
-    }, [fetchRoleMappings]);
+        void loadGrid();
+    }, [fetchRoleMappings, loadGrid]);
 
     const handleEditClick = (mapping: RoleMapping) => {
         setEditingMapping(mapping);
@@ -31,6 +48,7 @@ export const Users = () => {
     const handleDeleteClick = async (id: number) => {
         if (confirm('Are you sure you want to delete this role mapping?')) {
             await deleteRoleMapping(id);
+            void loadGrid();
         }
     };
 
@@ -40,6 +58,7 @@ export const Users = () => {
         try {
             await updateRoleMapping(editingMapping.id, editingMapping.external_role, editingMapping.internal_role);
             setEditingMapping(null);
+            void loadGrid();
         } catch (err) {
             console.error("Failed to save role mapping", err);
         } finally {
@@ -54,6 +73,7 @@ export const Users = () => {
             await createRoleMapping(newMapping.external_role, newMapping.internal_role);
             setShowAddModal(false);
             setNewMapping({ external_role: '', internal_role: 'User' });
+            void loadGrid();
         } catch (err) {
             console.error("Failed to add role mapping", err);
         } finally {
@@ -75,14 +95,19 @@ export const Users = () => {
                 <div>
                     <h2 className="text-2xl font-bold tracking-tight text-gray-900">Role Mappings</h2>
                     <p className="text-gray-500">Map external SCIM identities (groups, roles, or users) to internal application roles.</p>
+                    {!canManage && (
+                        <p className="text-sm text-gray-500 mt-1">Read-only: only a Super Admin can change role mappings.</p>
+                    )}
                 </div>
-                <Button
-                    onClick={() => setShowAddModal(true)}
-                    className="bg-primary text-white hover:opacity-90 transition-opacity"
-                >
-                    <Plus className="w-4 h-4 mr-2" />
-                    Add Mapping
-                </Button>
+                {canManage && (
+                    <Button
+                        onClick={() => setShowAddModal(true)}
+                        className="bg-primary text-white hover:opacity-90 transition-opacity"
+                    >
+                        <Plus className="w-4 h-4 mr-2" />
+                        Add Mapping
+                    </Button>
+                )}
             </div>
 
             {error && (
@@ -102,7 +127,7 @@ export const Users = () => {
                                 <tr>
                                     <th className="px-6 py-3 font-medium">External Identity (SCIM)</th>
                                     <th className="px-6 py-3 font-medium">Internal Role</th>
-                                    <th className="px-6 py-3 font-medium text-right">Actions</th>
+                                    {canManage && <th className="px-6 py-3 font-medium text-right">Actions</th>}
                                 </tr>
                             </thead>
                             <tbody>
@@ -123,19 +148,21 @@ export const Users = () => {
                                                 </div>
                                             </div>
                                         </td>
-                                        <td className="px-6 py-4 text-right">
-                                            <Button variant="ghost" size="sm" onClick={() => handleEditClick(mapping)}>
-                                                <Edit2 className="w-4 h-4 mr-1" /> Edit
-                                            </Button>
-                                            <Button variant="ghost" size="sm" className="text-red-600 hover:text-red-700 hover:bg-red-50" onClick={() => handleDeleteClick(mapping.id)}>
-                                                <Trash2 className="w-4 h-4 mr-1" /> Delete
-                                            </Button>
-                                        </td>
+                                        {canManage && (
+                                            <td className="px-6 py-4 text-right">
+                                                <Button variant="ghost" size="sm" onClick={() => handleEditClick(mapping)}>
+                                                    <Edit2 className="w-4 h-4 mr-1" /> Edit
+                                                </Button>
+                                                <Button variant="ghost" size="sm" className="text-red-600 hover:text-red-700 hover:bg-red-50" onClick={() => handleDeleteClick(mapping.id)}>
+                                                    <Trash2 className="w-4 h-4 mr-1" /> Delete
+                                                </Button>
+                                            </td>
+                                        )}
                                     </tr>
                                 ))}
                                 {roleMappings.length === 0 && (
                                     <tr>
-                                        <td colSpan={3} className="px-6 py-8 text-center text-gray-500">
+                                        <td colSpan={canManage ? 3 : 2} className="px-6 py-8 text-center text-gray-500">
                                             No role mappings found.
                                         </td>
                                     </tr>
@@ -145,6 +172,49 @@ export const Users = () => {
                     </div>
                 </CardContent>
             </Card>
+
+            {gridError && (
+                <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg">
+                    Couldn't load what each role can do: {gridError}
+                </div>
+            )}
+
+            {grid && (
+                <Card>
+                    <CardHeader>
+                        <CardTitle>Roles</CardTitle>
+                        <p className="text-sm text-gray-500">Each role and the identities mapped to it.</p>
+                    </CardHeader>
+                    <CardContent>
+                        <ul className="divide-y divide-gray-100">
+                            {grid.roles.map((role) => (
+                                <li key={role.key} className="py-3 flex flex-col gap-1 md:flex-row md:items-start md:gap-6">
+                                    <div className="md:w-1/2">
+                                        <div className="font-medium text-gray-900">{role.label}</div>
+                                        <div className="text-xs text-gray-500">{role.description}</div>
+                                    </div>
+                                    <div className="md:w-1/2 flex flex-wrap gap-1">
+                                        {role.mapped_identities.length ? (
+                                            role.mapped_identities.map((identity) => (
+                                                <span
+                                                    key={identity}
+                                                    className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-gray-100 text-gray-700 border border-gray-200"
+                                                >
+                                                    {identity}
+                                                </span>
+                                            ))
+                                        ) : (
+                                            <span className="text-xs text-gray-400">No identities mapped</span>
+                                        )}
+                                    </div>
+                                </li>
+                            ))}
+                        </ul>
+                    </CardContent>
+                </Card>
+            )}
+
+            {grid && <RoleCapabilityGrid grid={grid} />}
 
             {/* Edit Mapping Modal */}
             {editingMapping && (

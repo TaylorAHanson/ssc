@@ -8,7 +8,7 @@
  * the key so the pinned rail can render without re-fetching the source list.
  */
 import { useCallback, useEffect, useState } from 'react';
-import { normalizeAssetType } from './assetTypes';
+import { normalizeAssetType } from './assetTypeMeta';
 
 export interface PinnedItem {
   /** Stable identity: `${normalizedType}:${id}`. */

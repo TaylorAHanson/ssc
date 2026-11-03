@@ -84,7 +84,7 @@ Summarize in one short block and ask for a yes:
 - Their justification.
 - What happens next: workspace-level and account-level previews have separate
   approval gates. If an approver email is configured for that scope, they are
-  notified; otherwise it waits in Pending Approvals for a Platform Admin. After
+  notified; otherwise it waits in Pending Approvals for an Application Admin. After
   approval, workspace previews are switched automatically and checked; account
   previews (or any workspace where the automatic change fails) go to a person
   to implement in the account console or workspace settings.

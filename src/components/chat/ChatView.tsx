@@ -46,6 +46,7 @@ import { VegaLiteChart } from './VegaLiteChart';
 import { datasetFromGenieResult, findLastDataset, parseToolChart } from './toolChart';
 import { renderMarkdownSafe } from '../../lib/markdown';
 import type { ChartEncoding, Dataset } from '../../lib/charting';
+import { errorMessage } from '../../lib/errors';
 
 export interface ChatModeOption {
     /** Mode id passed back to onModeChange and forwarded to the runner. */
@@ -226,22 +227,21 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
     // is torn down explicitly via the Stop / New Chat control or superseded when
     // the next turn starts. Persistence is handled by the store's setMessages.
 
-    // Per-second tick to drive the elapsed-time label inside running
-    // tool pills. The label is computed at render time as
-    // ``Date.now() - msg.startedAt``, so without a periodic re-render
-    // the counter would freeze at "0s" until some other state change
-    // (a tool_result, a new pill, the next message) happened to
+    // Per-second clock for the elapsed-time label inside running tool
+    // pills, computed as ``nowMs - msg.startedAt``. Without a periodic
+    // update the counter would freeze at "0s" until some other state
+    // change (a tool_result, a new pill, the next message) happened to
     // re-render the row. We mount the timer only while at least one
     // pill is actively ``running``; pending-poll pills already have
     // their own per-second tick from ``usePendingPoll``.
-    const [, setNowTick] = useState(0);
+    const [nowMs, setNowMs] = useState(() => Date.now());
     const hasRunningPill = useMemo(
         () => messages.some((m) => m.kind === 'tool' && m.status === 'running'),
         [messages],
     );
     useEffect(() => {
         if (!hasRunningPill) return;
-        const id = window.setInterval(() => setNowTick((n) => n + 1), 1000);
+        const id = window.setInterval(() => setNowMs(Date.now()), 1000);
         return () => window.clearInterval(id);
     }, [hasRunningPill]);
 
@@ -609,7 +609,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                     },
                 ]);
             } else {
-                failRunningTools(err instanceof Error ? err.message : String(err));
+                failRunningTools(errorMessage(err, 'Unknown error'));
                 setMessages((prev) => [
                     ...prev,
                     {
@@ -617,7 +617,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                         id: `${Date.now()}-err`,
                         timestamp: new Date().toISOString(),
                         content: `<em>I hit an error talking to the agent. ${escapeHtml(
-                            err instanceof Error ? err.message : String(err),
+                            errorMessage(err, 'Unknown error'),
                         )}</em>`,
                     },
                 ]);
@@ -1037,19 +1037,16 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
     // navigation state and to wire its rich discovery cards into the
     // streaming pipeline. Refs intentionally stay narrow; if more
     // surfaces grow needs, prefer adding focused props before
-    // expanding this handle.
-    useImperativeHandle(
-        ref,
-        () => ({
-            submitQuery: (text: string) => {
-                const trimmed = text.trim();
-                if (!trimmed || isStreaming || pendingPoll) return;
-                setDraft('');
-                void submitTurn(trimmed);
-            },
-        }),
-        [isStreaming, pendingPoll],
-    );
+    // expanding this handle. Rebuilt every render (no deps) so it always
+    // calls the current `submitTurn`, which closes over this render's state.
+    useImperativeHandle(ref, () => ({
+        submitQuery: (text: string) => {
+            const trimmed = text.trim();
+            if (!trimmed || isStreaming || pendingPoll) return;
+            setDraft('');
+            void submitTurn(trimmed);
+        },
+    }));
 
     const handleClear = () => {
         // Aborts any in-flight turn, clears the internals, resets the reactive
@@ -1227,7 +1224,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                         compact. The most recent step is always shown;
                         earlier steps reveal on demand. */}
                     <div ref={messageListRef} className="flex-1 overflow-y-auto space-y-4 pr-2 custom-scrollbar">
-                        {renderMessages(messages, pollElapsedLabel, pendingPoll?.tool_call_id)}
+                        {renderMessages(messages, nowMs, pollElapsedLabel, pendingPoll?.tool_call_id)}
 
                         <NextStepSuggestions suggestions={nextSteps} onSelect={handleNextStep} />
 
@@ -1353,10 +1350,13 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
 
 function MessageRow({
     msg,
+    nowMs,
     pollElapsedLabel,
     activePollToolCallId,
 }: {
     msg: DisplayMessage;
+    /** Current time from the parent's per-second clock. */
+    nowMs: number;
     pollElapsedLabel?: string;
     /**
      * `tool_call_id` of the pending poll that owns the live elapsed
@@ -1408,12 +1408,12 @@ function MessageRow({
             isLivePending && pollElapsedLabel
                 ? pollElapsedLabel
                 : msg.status === 'running' && msg.startedAt
-                    ? formatElapsed(Date.now() - msg.startedAt)
+                    ? formatElapsed(nowMs - msg.startedAt)
                     : msg.status === 'pending' && msg.startedAt
                         ? // Stale pending pill (its poll was superseded
                           // before settling) — show its own frozen-ish
                           // elapsed instead of the new turn's clock.
-                          formatElapsed(Date.now() - msg.startedAt)
+                          formatElapsed(nowMs - msg.startedAt)
                         : (msg.status === 'success' || msg.status === 'error') &&
                             msg.startedAt && msg.completedAt
                             ? // Settled pill — keep the total runtime
@@ -1501,6 +1501,7 @@ function MessageRow({
  */
 function renderMessages(
     messages: DisplayMessage[],
+    nowMs: number,
     pollElapsedLabel?: string,
     activePollToolCallId?: string,
 ): React.ReactNode {
@@ -1516,6 +1517,7 @@ function renderMessages(
                 <ToolCallGroup
                     key={`group-${group[0].id}`}
                     items={group}
+                    nowMs={nowMs}
                     pollElapsedLabel={pollElapsedLabel}
                     activePollToolCallId={activePollToolCallId}
                 />,
@@ -1526,6 +1528,7 @@ function renderMessages(
             <MessageRow
                 key={m.id}
                 msg={m}
+                nowMs={nowMs}
                 pollElapsedLabel={pollElapsedLabel}
                 activePollToolCallId={activePollToolCallId}
             />,
@@ -1543,10 +1546,12 @@ function renderMessages(
  */
 function ToolCallGroup({
     items,
+    nowMs,
     pollElapsedLabel,
     activePollToolCallId,
 }: {
     items: Extract<DisplayMessage, { kind: 'tool' }>[];
+    nowMs: number;
     pollElapsedLabel?: string;
     activePollToolCallId?: string;
 }) {
@@ -1556,6 +1561,7 @@ function ToolCallGroup({
         return (
             <MessageRow
                 msg={items[0]}
+                nowMs={nowMs}
                 pollElapsedLabel={pollElapsedLabel}
                 activePollToolCallId={activePollToolCallId}
             />
@@ -1578,12 +1584,14 @@ function ToolCallGroup({
                     <MessageRow
                         key={m.id}
                         msg={m}
+                        nowMs={nowMs}
                         pollElapsedLabel={pollElapsedLabel}
                         activePollToolCallId={activePollToolCallId}
                     />
                 ))}
             <MessageRow
                 msg={last}
+                nowMs={nowMs}
                 pollElapsedLabel={pollElapsedLabel}
                 activePollToolCallId={activePollToolCallId}
             />

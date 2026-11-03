@@ -6,7 +6,8 @@ import { Button } from '../../ui/button';
 import { EmptyState, ErrorBanner, Modal, Notice, Pager, Skeleton } from '../../rbac/ui';
 import { RunStatusBadge } from './badges';
 import { useMetadata } from './context';
-import { errorMessage, formatTime, limitedSchemas, plural, relativeTime } from './format';
+import { formatTime, limitedSchemas, plural, relativeTime } from './format';
+import { errorMessage } from '../../../lib/errors';
 import { CircuitBreakerBanner } from './ModeBanner';
 import { useAsync } from './useAsync';
 
@@ -20,9 +21,10 @@ const TRIGGER_LABELS: Record<string, string> = {
   notify: 'Asked to check',
 };
 
-/** Sync history: what each check read, planned and wrote; admins can start or resume one. */
+/** Sync history: what each check read, planned and wrote; admins and Ops can start one, some admins resume one. */
 export function RunsTab() {
-  const { config, isAdmin, refreshToken, bumpRefresh, notify, openRun } = useMetadata();
+  const { config, refreshToken, bumpRefresh, notify, openRun } = useMetadata();
+  const canRun = !!config.can_run_sync;
   const [page, setPage] = useState(1);
   const [busy, setBusy] = useState<RunRequest['kind'] | 'resume' | 'clear' | null>(null);
   const [confirmResume, setConfirmResume] = useState(false);
@@ -91,7 +93,7 @@ export function RunsTab() {
     <div className="space-y-3">
       <CircuitBreakerBanner
         action={
-          isAdmin &&
+          canRun &&
           pausedId && (
             <Button size="sm" variant="outline" className="gap-1.5 bg-white" onClick={() => setConfirmResume(true)}>
               <ShieldAlert className="h-3.5 w-3.5" /> {config.can_resume_sync ? 'Review and resume' : 'Review the paused sync'}
@@ -99,7 +101,7 @@ export function RunsTab() {
           )
         }
       />
-      {isAdmin && (
+      {canRun && (
         <div className="flex flex-wrap items-center gap-2">
           <Button
             size="sm"
@@ -220,7 +222,7 @@ export function RunsTab() {
             <strong>Clear without applying</strong> lifts the pause and writes nothing. Fix what caused the removals first (for example, undo the change
             set, or use “Keep Unity Catalog’s values” under Out of sync), or the next check pauses again.
           </p>
-          {!config.can_resume_sync && <p className="text-sm text-gray-700">Only a Platform Admin can apply or clear a paused sync.</p>}
+          {!config.can_resume_sync && <p className="text-sm text-gray-700">Only a Super Admin or Governance Admin can apply or clear a paused sync.</p>}
           <Button
             size="sm"
             variant="ghost"

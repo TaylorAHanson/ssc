@@ -27,6 +27,7 @@ import type {
   TargetWorkspace,
 } from '../../services/api';
 import { useVisibleInterval } from '../../hooks/useVisibleInterval';
+import { errorMessage } from '../../lib/errors';
 
 const ACCOUNT_TARGET = '__account__';
 const LAST_VISIT_KEY = 'preview-features-last-visit';
@@ -324,7 +325,7 @@ function RequestDialog({ feature, action, workspaces, onClose, onDone }: Request
         requestId: res.request_id,
       });
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Request failed');
+      setError(errorMessage(e, 'Request failed'));
     } finally {
       setSubmitting(false);
     }
@@ -487,7 +488,7 @@ function ApproveDialog({
       await api.approveRequest(r.requestId);
       onDone({ text: `Approved ${feature.display_name} for ${r.targets.join(', ')}.`, requestId: r.requestId });
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Approval failed');
+      setError(errorMessage(e, 'Approval failed'));
     } finally {
       setBusy(null);
     }
@@ -599,7 +600,7 @@ function AddFeatureDialog({ defaultScope, onClose, onDone }: {
         docs_link: docsLink.trim() || undefined,
       }));
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not add the feature');
+      setError(errorMessage(e, 'Could not add the feature'));
     } finally {
       setSubmitting(false);
     }
@@ -704,7 +705,7 @@ function MatchDialog({ feature, features, onClose, onDone }: {
         requestId: res.request_ids.length === 1 ? res.request_ids[0] : undefined,
       });
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Match failed');
+      setError(errorMessage(e, 'Match failed'));
     } finally {
       setSubmitting(false);
     }
@@ -886,7 +887,7 @@ function FeatureDetails({
     try {
       onSaved(await api.updatePreviewFeature(feature.id, body));
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Save failed');
+      setError(errorMessage(e, 'Save failed'));
     } finally {
       setSaving(false);
     }
@@ -899,7 +900,7 @@ function FeatureDetails({
       await api.removePreviewFeature(feature.id);
       onRemoved(feature);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Remove failed');
+      setError(errorMessage(e, 'Remove failed'));
       setSaving(false);
     }
   };
@@ -1053,7 +1054,7 @@ export function PreviewFeatures() {
       setData(await api.getPreviewFeatures());
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load preview features');
+      setError(errorMessage(e, 'Failed to load preview features'));
     } finally {
       setLoading(false);
     }
@@ -1077,7 +1078,7 @@ export function PreviewFeatures() {
       const s = await api.startPreviewSync();
       setData((d) => (d ? { ...d, sync: s } : d));
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to start sync');
+      setError(errorMessage(e, 'Failed to start sync'));
     }
   };
 

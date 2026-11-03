@@ -8,27 +8,31 @@ resolves identically everywhere.
 from app.services.approval_scope import (
     allowed_approval_types,
     approval_visibility_filter,
-    is_platform_admin,
     normalize_role,
     parse_csv,
 )
 
 
 def test_role_spellings_normalize_to_the_same_role():
-    for spelling in ("Platform Admin", "platform_admin", "PLATFORM ADMIN", " Platform admin "):
-        assert normalize_role(spelling) == "platform admin"
-        assert is_platform_admin([spelling]) is True
+    for spelling in ("Platform Admin", "platform_admin", "PLATFORM ADMIN", " Platform admin ",
+                     "Application Admin", "application_admin"):
+        assert normalize_role(spelling) == "application admin"
 
 
-def test_platform_admin_sees_every_approval_type():
-    types = allowed_approval_types(["Platform Admin"])
+def test_super_admin_sees_every_approval_type():
+    types = allowed_approval_types(["Super Admin"])
     assert set(types) == {
         "platform_admin", "manager", "data_owner", "security",
         "security_admin", "finance_admin", "governance_admin", "manual_task",
     }
 
 
-def test_an_unassigned_manual_task_is_still_visible_to_a_platform_admin(db_session):
+def test_application_admin_sees_only_application_admin_steps():
+    assert allowed_approval_types(["Application Admin"]) == ["platform_admin"]
+    assert allowed_approval_types(["Platform Admin"]) == ["platform_admin"]
+
+
+def test_an_unassigned_manual_task_is_still_visible_to_an_application_admin(db_session):
     """A manual_task gate that names no approver creates a row assigned to nobody.
 
     With no role owning the type, such a row appeared in NO inbox, so the request
@@ -56,6 +60,7 @@ def test_an_unassigned_manual_task_is_still_visible_to_a_platform_admin(db_sessi
         ).all()
 
     assert [a.id for a in visible_to(["Platform Admin"])] == [orphan.id]
+    assert [a.id for a in visible_to(["Super Admin"])] == [orphan.id]
     # Still scoped: it is not dumped into every admin's inbox.
     assert visible_to(["Finance Admin"]) == []
     assert visible_to([]) == []

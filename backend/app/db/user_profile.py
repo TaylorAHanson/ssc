@@ -36,7 +36,7 @@ class UserProfileModel(Base):
     email: str = Column(String, primary_key=True, comment="Lowercased user email")
 
     display_name: Optional[str] = Column(String, nullable=True, comment="Full name from the IdP")
-    persona: Optional[str] = Column(String, nullable=True, comment="Derived persona, e.g. Platform Admin")
+    persona: Optional[str] = Column(String, nullable=True, comment="Derived persona, e.g. Application Admin")
 
     roles: Optional[list] = Column(JSON, nullable=True, comment="Internal app roles from role_mappings")
     entitlements: Optional[list] = Column(JSON, nullable=True, comment="SCIM groups / account roles")

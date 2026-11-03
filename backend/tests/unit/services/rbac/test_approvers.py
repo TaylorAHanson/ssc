@@ -28,7 +28,7 @@ def _settings(monkeypatch):
     monkeypatch.setattr(settings, "RBAC_UC_APPROVER_GROUP", f"  {UC_GROUP}  ")
     monkeypatch.setattr(settings, "RBAC_METASTORE_APPROVER_GROUP", MS_GROUP)
     monkeypatch.setattr(settings, "RBAC_WS_APPROVER_GROUP", WS_GROUP)
-    monkeypatch.setattr(settings, "RBAC_VIEWER_ROLES", ["Governance Admin"])
+    monkeypatch.setattr(settings, "RBAC_VIEWER_ROLES", ["Finance Admin"])
     monkeypatch.setattr(settings, "RBAC_ALLOW_RESET", False)
     approvers._group_cache.clear()
     yield
@@ -102,11 +102,11 @@ def test_setting_changes_apply_without_restart(monkeypatch):
 @pytest.mark.parametrize("plane, group, label", [
     ("uc", UC_GROUP, f"UC securables approvers: {UC_GROUP}"),
     ("uc_metastore", MS_GROUP, f"UC metastore approvers: {MS_GROUP}"),
-    ("workspace", None, "Platform Admins (no Workspace securables group set)"),
+    ("workspace", None, "Application Admins (no Workspace securables group set)"),
     (None, "grp_x", "Access rule approvers: grp_x"),
-    (None, None, "Platform Admins"),
+    (None, None, "Application Admins"),
 ])
-def test_approval_label_names_the_types_group_or_the_platform_admin_fallback(plane, group, label):
+def test_approval_label_names_the_types_group_or_the_application_admin_fallback(plane, group, label):
     assert approvers.approval_label(plane, group) == label
 
 
@@ -132,10 +132,20 @@ def test_an_app_role_with_the_groups_name_is_not_membership():
 # --- can_edit / editable_planes / can_view -----------------------------------
 
 
-def test_platform_admin_edits_every_plane():
-    admin = _user(roles=["Platform Admin"])
+def test_governance_admin_edits_every_plane():
+    admin = _user(roles=["governance_admin"])
     assert approvers.editable_planes(admin) == ["uc", "uc_metastore", "workspace"]
     assert approvers.can_view(admin) is True
+
+
+def test_super_admin_edits_every_plane():
+    assert approvers.editable_planes(_user(roles=["Super Admin"])) == ["uc", "uc_metastore", "workspace"]
+
+
+def test_application_admin_neither_views_nor_edits_unless_a_viewer_role():
+    app_admin = _user(roles=["Platform Admin"])
+    assert approvers.can_view(app_admin) is False
+    assert approvers.editable_planes(app_admin) == []
 
 
 def test_group_member_edits_only_their_plane_but_views_all():
@@ -152,7 +162,7 @@ def test_editable_planes_follow_planes_order():
 
 
 def test_viewer_role_views_but_edits_nothing():
-    viewer = _user(roles=["governance_admin"])
+    viewer = _user(roles=["finance_admin"])
     assert approvers.can_view(viewer) is True
     assert approvers.editable_planes(viewer) == []
 
@@ -163,11 +173,12 @@ def test_plain_user_can_neither_view_nor_edit():
     assert approvers.editable_planes(user) == []
 
 
-def test_unset_group_falls_back_to_platform_admin(monkeypatch):
+def test_unset_group_leaves_editing_to_rules_admins(monkeypatch):
     monkeypatch.setattr(settings, "RBAC_METASTORE_APPROVER_GROUP", "")
     member = _user(groups=[UC_GROUP])
     assert approvers.can_edit(member, "uc_metastore") is False
-    assert approvers.can_edit(_user(roles=["Platform Admin"]), "uc_metastore") is True
+    assert approvers.can_edit(_user(roles=["Governance Admin"]), "uc_metastore") is True
+    assert approvers.can_edit(_user(roles=["Application Admin"]), "uc_metastore") is False
 
 
 def test_require_view_and_edit_raise_plain_messages():
@@ -286,12 +297,12 @@ def test_an_account_only_group_member_can_edit_its_type(fake_sdk, monkeypatch):
 
 def test_permissions_unknown_when_lookup_fails(fake_sdk):
     fake_sdk["groups"] = _FakeGroups(existing=[], fail=[MS_GROUP])
-    perms = asyncio.run(approvers.permissions(_user(roles=["Platform Admin"])))
+    perms = asyncio.run(approvers.permissions(_user(roles=["Governance Admin"])))
     assert {p.plane: p.group_status for p in perms.planes}["uc_metastore"] == "unknown"
 
 
-def test_platform_admin_imports_and_resets_only_when_allowed(fake_sdk, monkeypatch):
-    admin = _user(roles=["Platform Admin"])
+def test_rules_admin_imports_and_resets_only_when_allowed(fake_sdk, monkeypatch):
+    admin = _user(roles=["Governance Admin"])
     perms = asyncio.run(approvers.permissions(admin))
     assert (perms.can_import, perms.can_reset, perms.can_export) == (True, False, True)
 
@@ -301,6 +312,6 @@ def test_platform_admin_imports_and_resets_only_when_allowed(fake_sdk, monkeypat
 
 
 def test_viewer_cannot_export(fake_sdk):
-    perms = asyncio.run(approvers.permissions(_user(roles=["Governance Admin"])))
+    perms = asyncio.run(approvers.permissions(_user(roles=["Finance Admin"])))
     assert (perms.can_view, perms.can_export, perms.can_import) == (True, False, False)
     assert not any(p.can_edit for p in perms.planes)

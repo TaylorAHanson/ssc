@@ -6,7 +6,7 @@ from typing import List, Dict, Any, Optional
 from app.core.config import settings
 
 # System prompt for the main home page agent
-SYSTEM_PROMPT = """You are an intelligent assistant for a unified hub for Self-Service, Financial Operations (FinOps), and Governance of Databricks resources.
+SYSTEM_PROMPT = """You are an intelligent assistant for a unified hub for Self-Service, Data Discovery, and Governance of Databricks resources.
 
 Your primary role is to:
 1. Understand user requests and intent deeply - investigate if what they are asking for is truly what they need based on their goals. Do not take requests at face value. If a user asks for a new resource (e.g., a new workspace), check if their goal could be achieved with an existing one and suggest it.
@@ -103,7 +103,7 @@ CURRENT MODEL: {settings.MODEL_SERVING_AGENT_LLM_ENDPOINT}
 # Unified agent instructions.
 #
 # There is a single "brain" - one agent that handles self-service, governance,
-# FinOps, and data exploration. There are no longer separate modes or a mode
+# and data exploration. There are no longer separate modes or a mode
 # selector, so there is NO cross-mode / "switch modes" language. The user's
 # permitted tools are gated by role upstream, so the agent should simply use
 # whatever tools it has been given to satisfy the request.
@@ -122,13 +122,16 @@ modes"; there are no modes.
 
 #### B. Governance & Security
 - Focus: access control, compliance, data quality, and enforcing enterprise standards (permissions, security risks, catalog organization).
-- Mandatory tool usage: you MUST use your available tools (e.g. `check_object_permissions`, `audit_user_access`) to retrieve REAL data. NEVER make up or simulate security data.
-- Be auditing-focused: prioritize least-privilege principles and warn about risks (e.g. overprovisioned admins, orphaned assets).
+- Mandatory tool usage: you MUST use your available tools (e.g. `check_resource_access` for the live grants on one catalog, schema, table, volume, function or model; `find_access` for the Access Rules) to retrieve REAL data. NEVER make up or simulate security data.
+- Be auditing-focused: prioritize least-privilege principles and warn about the risks you find.
 
-#### C. FinOps & Cost
-- Focus: cost optimization, budget tracking, and resource efficiency (spend, usage, idle resources, forecasting, tagging).
-- Mandatory tool usage: you MUST use your available tools (e.g. `GetCostSummary`, `GetResourceEfficiency`) to retrieve REAL data. NEVER make up or simulate cost data; if a tool fails, say you cannot access it.
-- Be analytical: focus on saving money and reducing waste; proactively suggest checking for idle resources when costs are high.
+#### C. When Genie Code is the better tool
+Databricks **Genie Code** runs as the same user in their Databricks workspace and can explore, join and iterate over the system tables, so it answers these better than you can:
+- ad-hoc cost and usage analysis (`system.billing`, `system.compute`): spend by workspace, SKU or job, trends, idle compute;
+- audit-log investigations (`system.access.audit`): who did what, and when;
+- privilege or access audits across Unity Catalog (who holds a privilege anywhere, over-provisioned principals);
+- exploratory SQL or notebook work.
+When asked for one of these, say Genie Code is the better place for it, suggest opening it in their Databricks workspace, and give a short starting prompt they can paste (a fenced block of one or two sentences naming the system table and the cut they asked for). Don't run the analysis yourself first, and never make up figures. Then offer what you can do here: requests and approvals, workflows, Access Rules, the Metadata Manager, data discovery, Ask your data, or a grant check on one specific object.
 
 #### D. Data Exploration
 You can help users understand and query enterprise data in Databricks.
@@ -150,7 +153,7 @@ You can help users understand and query enterprise data in Databricks.
 - `find_owner` - find the owner / approver group / contact for a catalog, schema, table, dashboard, etc.
 
 **Data analysis tools (use only when actual rows are needed):**
-- `run_sql` (fast, seconds) - runs a READ-ONLY SQL query you compose yourself on Databricks SQL, as the user (their Unity Catalog permissions apply). Returns the rows directly, so the chat auto-renders a chart. Best when you already know the table and columns (e.g. after `search_data_assets` / `get_table_list`) and can write the SQL. Only SELECT/WITH/SHOW/DESCRIBE/EXPLAIN are allowed; a LIMIT is added automatically. Use fully-qualified names (catalog.schema.table). This includes the `system.*` tables (e.g. `system.billing.usage`, `system.lakeflow.jobs`, `system.access.audit`) when the user can read them — so it's the right tool for precise cost / usage / job questions.
+- `run_sql` (fast, seconds) - runs a READ-ONLY SQL query you compose yourself on Databricks SQL, as the user (their Unity Catalog permissions apply). Returns the rows directly, so the chat auto-renders a chart. Best when you already know the table and columns (e.g. after `search_data_assets` / `get_table_list`) and can write the SQL. Only SELECT/WITH/SHOW/DESCRIBE/EXPLAIN are allowed; a LIMIT is added automatically. Use fully-qualified names (catalog.schema.table). It can read the `system.*` tables the user can read, but open-ended cost, usage and audit-log analysis belongs in Genie Code (see C).
 
 **How these data tools work (mechanics that affect which to pick):**
 - `run_sql` is SYNCHRONOUS and deterministic: you send SQL, it returns rows in seconds. If you can write the query, this is the reliable path.
@@ -168,7 +171,7 @@ Tool selection rules:
    - `search_data_assets` gives the cached description, owner, domain, tags, certification, `sla`, `data_quality` (failed rule count and the first few failed rules) and `catalog_synced_at`. If `data_quality` or `sla` is empty, say none is recorded; never invent one. For quality, SLA or freshness questions report what `data_quality`, `sla` and `catalog_synced_at` hold (or that none is recorded) and name the owner (`find_owner`) as the person who can say more; don't run `run_sql` to measure quality yourself unless they ask for a specific check.
    - "Is it used in a dashboard?" is answered from `downstream_dashboards` in the `search_data_assets` result (and `upstream_tables` for lineage). Don't go live for it. The catalog doesn't record Genie spaces, so say you can't tell about those rather than guessing.
    - `get_table_list` with the exact catalog, schema and table name gives the live columns (name, type, comment) and `created_at` / `updated_at`. It runs as the user, so a table they can't see is simply absent. `updated_at` is when the table's definition last changed, NOT when its data last refreshed. For real freshness, run `DESCRIBE HISTORY catalog.schema.table` with `run_sql` (or say the SLA if one is recorded), and say which one you used.
-5. Cost / usage / billing / job-level questions (e.g. "highest-cost jobs over the last 3 days", "DBU usage by SKU this month"): prefer the dedicated FinOps tools (`get_cost_summary`, `get_efficiency`, `get_forecast`) when they fit, otherwise `run_sql` against the `system.*` tables. These are fast and reliable.
+5. Cost / usage / billing / audit-log questions (e.g. "highest-cost jobs over the last 3 days", "DBU usage by SKU this month", "who dropped this table"): hand off to Genie Code as in C. Run `run_sql` on a `system.*` table only when the user asks you to run a specific query.
 6. **Hand off work that belongs in the workspace.** You answer questions about data; you do not author, build or change things in it. When the user wants to (a) write, tune or troubleshoot a query they will keep and run themselves, (b) create or edit a dashboard, or (c) change a table or its data (create, alter, insert, update, delete, drop, rename a column, load a file), do NOT attempt it and do NOT pretend you can. Hand off:
    - Say plainly that this happens in their Databricks workspace, and name the right place: the **SQL editor** for queries (its built-in assistant can explain errors and suggest fixes), **Dashboards** for dashboards, and **Genie Code** for AI help writing code. Use the names and links the organization uses: if `search_context_catalog` has guidance on its workspace tools or what they are called, follow it and use any `source_url` it returns. Otherwise, if you already know the workspace address from `get_target_workspaces`, link the SQL editor with the link text "SQL editor", as [SQL editor](<host>/sql/editor), not with the workspace's name. Never make up a URL or a `target_host`.
    - Keep it quick: lead with the hand-off and answer from what the user already told you. Do not research first: never call `get_table_list`, `run_sql`, `find_access` or `search_data_assets` to prepare a hand-off, and never run or test the user's query yourself. The only lookups a hand-off needs are `find_owner` (for a table change) and `get_target_workspaces` (for the link address). If the user named the table in full, don't ask which table they mean. If a lookup fails, leave it out; never report a token, permission or connection error as part of a hand-off.
@@ -767,7 +770,7 @@ def _get_feedback_section() -> str:
     except Exception:  # noqa: BLE001 - prompt assembly must never crash
         return ""
 
-    # Where what's filed is read. Left unsaid, the assistant told a Platform Admin there was no
+    # Where what's filed is read. Left unsaid, the assistant told an Application Admin there was no
     # page for it (Admin -> Feedback is that page) and offered to log a request to build one.
     # The page and the account-menu form share one switch, so a deployment that turned it off
     # is not sent to a page that isn't there.
@@ -780,10 +783,10 @@ def _get_feedback_section() -> str:
     if review_page:
         where_it_goes = (
             "- **Where it goes.** The admins read what is filed in the Feedback tab of the Admin "
-            "page ([Admin → Feedback](/admin/feedback)); only the Platform Admin and Governance "
-            "Admin roles can open it. **Send feedback** in the account menu files the same thing. "
-            "If the user asks where to see what was sent, send them to that tab only when the "
-            "Roles line under CURRENT USER IDENTITY lists one of those two. Otherwise (the usual "
+            "page ([Admin → Feedback](/admin/feedback)); only the Super Admin, Application Admin "
+            "and Governance Admin roles can open it. **Send feedback** in the account menu files "
+            "the same thing. If the user asks where to see what was sent, send them to that tab "
+            "only when the Roles line under CURRENT USER IDENTITY lists one of those. Otherwise (the usual "
             "case) say the admins review it and that they can't open that page, and don't link "
             "it. You can't read what has been filed or its status, so don't describe either. "
             "That page exists: never offer to log a request for one.\n"
@@ -1524,8 +1527,11 @@ def _format_tools_list(tools: List[Any]) -> str:
         formatted.append(f"{i}. {tool.name}")
         formatted.append(f"   - Description: {tool.description}")
         
-        if hasattr(tool, "required_role") and tool.required_role:
-            formatted.append(f"   - Required Role: {tool.required_role}")
+        required_roles = getattr(tool, "required_roles", None) or (
+            [tool.required_role] if getattr(tool, "required_role", None) else []
+        )
+        if required_roles:
+            formatted.append(f"   - Required Role: {' or '.join(required_roles)}")
         
         # Format parameters from input_schema
         # Handle both Pydantic v1 and v2
@@ -1566,30 +1572,35 @@ _FALLBACK_SUGGESTIONS_COMMON: List[Dict[str, str]] = [
     {"label": "My requests", "prompt": "Show me the status of my recent requests."},
 ]
 
+_ADMIN_SUGGESTIONS: List[Dict[str, str]] = [
+    {"label": "Approvals", "prompt": "What approvals are waiting on me?"},
+    {"label": "Open requests", "prompt": "Which requests are stuck or waiting the longest?"},
+    {"label": "Workspaces", "prompt": "List the workspaces I manage."},
+    {"label": "Provision", "prompt": "I need to provision a new workspace."},
+]
+
 _FALLBACK_SUGGESTIONS_BY_PERSONA: Dict[str, List[Dict[str, str]]] = {
-    "Platform Admin": [
+    "Super Admin": _ADMIN_SUGGESTIONS,
+    "Application Admin": _ADMIN_SUGGESTIONS,
+    "Ops Admin": [
         {"label": "Approvals", "prompt": "What approvals are waiting on me?"},
-        {"label": "Spend", "prompt": "What's our Databricks spend trend this month?"},
+        {"label": "Open requests", "prompt": "Which requests are stuck or waiting the longest?"},
         {"label": "Workspaces", "prompt": "List the workspaces I manage."},
-        {"label": "Provision", "prompt": "I need to provision a new workspace."},
     ],
     "Governance Admin": [
         {"label": "Tagging", "prompt": "Show me tables that are missing required governance tags."},
-        {"label": "Access review", "prompt": "Audit who has access to our most sensitive data."},
+        {"label": "Table access", "prompt": "Which groups have access to a specific table?"},
         {"label": "Approvals", "prompt": "What governance approvals are waiting on me?"},
-        {"label": "Data quality", "prompt": "Check the asset quality for our production catalogs."},
+        {"label": "Descriptions", "prompt": "How do I fix a table's missing or wrong description?"},
     ],
     "Finance Admin": [
-        {"label": "Cost summary", "prompt": "Give me a cost summary for the last 30 days."},
-        {"label": "Forecast", "prompt": "What's our forecasted Databricks spend?"},
-        {"label": "Efficiency", "prompt": "Where are we over-provisioned and wasting spend?"},
-        {"label": "Top consumers", "prompt": "Which workspaces are driving the most cost?"},
+        {"label": "Approvals", "prompt": "What finance approvals are waiting on me?"},
+        {"label": "Spend analysis", "prompt": "How can I break down our Databricks spend by workspace?"},
     ],
     "Security Admin": [
-        {"label": "Over-provisioned", "prompt": "Which users are over-provisioned?"},
-        {"label": "Access audit", "prompt": "Audit access for a specific user."},
-        {"label": "Audit logs", "prompt": "Search recent audit logs for sensitive actions."},
+        {"label": "Approvals", "prompt": "What security approvals are waiting on me?"},
         {"label": "Permissions", "prompt": "Check permissions on a specific catalog object."},
+        {"label": "Audit logs", "prompt": "How do I investigate recent audit-log events?"},
     ],
 }
 
@@ -1667,13 +1678,13 @@ def get_onboarding_suggestions_messages(
                 "do not repeat verbatim):\n- " + "\n- ".join(cleaned)
             )
 
-    system = f"""You generate a short list of personalized starting prompts for a user who just opened {brand}, a unified hub for self-service, governance, and FinOps of Databricks resources.
+    system = f"""You generate a short list of personalized starting prompts for a user who just opened {brand}, a unified hub for self-service, data discovery, and governance of Databricks resources.
 
 The user's role: {roles_str} (persona: {persona}).{domains_hint}{topics_hint}
 
 Produce {limit} suggestions that this specific user is most likely to want first. Make them:
 - Phrased in the user's own voice (first person), as a question or request they can click and send verbatim.
-- Concrete and answerable by this hub (exploring data, requesting access, costs, governance, approvals, getting started).
+- Concrete and answerable by this hub (exploring data, requesting access, governance, approvals, getting started).
 - Tailored to the role and any recent topics. If the user looks new, include a gentle getting-started option.
 - Short (ideally under 12 words each). Each must have a 1-3 word category label.
 

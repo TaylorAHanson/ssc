@@ -39,8 +39,13 @@ export function Breadcrumb({ catalog, schema, table, dataset }: { catalog?: stri
   );
 }
 
-/** Name, description and tags of one object, editable in place. */
-export function ObjectHeader({ detail, title, actions }: { detail: ObjectDetail; title: string; actions?: ReactNode }) {
+/** Name, description and tags of one object, editable in place. `onSuggestDescription` adds an AI suggest button. */
+export function ObjectHeader({ detail, title, actions, onSuggestDescription }: {
+  detail: ObjectDetail;
+  title: string;
+  actions?: ReactNode;
+  onSuggestDescription?: () => void;
+}) {
   const seed = seedFromDetail(detail);
   const unsaved = useStagingStore((s) => !!s.targets[seed.key] && hasEdits(s.targets[seed.key]));
   const desired = detail.desired?.status === 'active' ? detail.desired : null;
@@ -65,7 +70,7 @@ export function ObjectHeader({ detail, title, actions }: { detail: ObjectDetail;
         </span>
         {actions && <div className="ml-auto flex items-center gap-2">{actions}</div>}
       </div>
-      <DescriptionField seed={seed} />
+      <DescriptionField seed={seed} onSuggest={onSuggestDescription} />
       <TagsField seed={seed} />
     </header>
   );

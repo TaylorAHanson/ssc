@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.api import deps
-from app.api.v1.context_catalog import _WRITE_ROLES, _require_feature
+from app.api.v1.context_catalog import _WRITE_CAPABILITY, _require_feature
 from app.models.user import User
 from app.services import context_catalog_staleness as staleness
 from app.services.context_catalog_service import ContextCatalogService
@@ -34,7 +34,7 @@ def mark_document_reviewed(
     document = ContextCatalogService.get_document(db, document_id)
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
-    if not any(current_user.has_role(r) for r in _WRITE_ROLES):
+    if not current_user.can(_WRITE_CAPABILITY):
         owner, _source = staleness.effective_owner(
             document, ContextCatalogService.get_domain(db, document.domain_id)
         )
@@ -50,7 +50,7 @@ def mark_document_reviewed(
 @router.get("/staleness")
 def get_staleness_status(
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
 ) -> Any:
     """Reminder configuration (never the webhook URL) and every stale published document."""
@@ -60,7 +60,7 @@ def get_staleness_status(
 @router.post("/staleness/run")
 def run_stale_reminders_now(
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
 ) -> Any:
     """Post reminders now (respects the re-notify interval; ignores the on/off toggle)."""
@@ -70,7 +70,7 @@ def run_stale_reminders_now(
 
 @router.post("/staleness/test")
 def send_stale_reminder_test(
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
 ) -> Any:
     """Post a test card to the configured Teams channel, mentioning the caller."""

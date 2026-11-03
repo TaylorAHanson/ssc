@@ -12,6 +12,7 @@ import {
     type GeniePollResponse,
     type PendingPollEvent,
 } from '../lib/agentStream';
+import { errorMessage } from '../lib/errors';
 
 export interface PendingPollState {
     /** Live status of the poll cycle. */
@@ -247,7 +248,7 @@ export function usePendingPoll(
                 settle({
                     status: 'failed',
                     result: null,
-                    error: err instanceof Error ? err.message : String(err),
+                    error: errorMessage(err, 'Polling failed'),
                     elapsedMs: Date.now() - startedAt,
                     cancel: () => {},
                 });

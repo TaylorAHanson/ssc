@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-_WRITE_ROLES = ["Platform Admin", "Governance Admin"]
+_WRITE_CAPABILITY = "training.manage"
 
 # Media kinds tracked for consumption vs. simple downloadable resources.
 _VIDEO_KINDS = {"video"}
@@ -293,7 +293,7 @@ def stream_media(
 
 @router.get("/tracks", response_model=List[Dict[str, Any]])
 def admin_list_tracks(
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     db: Session = Depends(deps.get_db),
 ):
     return [
@@ -305,7 +305,7 @@ def admin_list_tracks(
 @router.post("/tracks", response_model=Dict[str, Any])
 def admin_create_track(
     body: TrackCreate,
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     db: Session = Depends(deps.get_db),
 ):
     track = TrainingService.create_track(db, created_by=current_user.email, **body.model_dump())
@@ -316,7 +316,7 @@ def admin_create_track(
 def admin_update_track(
     track_id: str,
     body: TrackUpdate,
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     db: Session = Depends(deps.get_db),
 ):
     try:
@@ -329,7 +329,7 @@ def admin_update_track(
 @router.delete("/tracks/{track_id}", response_model=Dict[str, Any])
 def admin_delete_track(
     track_id: str,
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     db: Session = Depends(deps.get_db),
 ):
     try:
@@ -348,7 +348,7 @@ def admin_delete_track(
 def admin_create_course(
     track_id: str,
     body: CourseCreate,
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     db: Session = Depends(deps.get_db),
 ):
     fields = body.model_dump()
@@ -368,7 +368,7 @@ def admin_create_course(
 def admin_update_course(
     course_id: str,
     body: CourseUpdate,
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     db: Session = Depends(deps.get_db),
 ):
     fields = body.model_dump(exclude_unset=True)
@@ -386,7 +386,7 @@ def admin_update_course(
 @router.delete("/courses/{course_id}", response_model=Dict[str, Any])
 def admin_delete_course(
     course_id: str,
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     db: Session = Depends(deps.get_db),
 ):
     try:
@@ -407,7 +407,7 @@ async def admin_upload_media(
     file: UploadFile = File(...),
     title: Optional[str] = Form(None),
     kind: str = Form("video"),
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     db: Session = Depends(deps.get_db),
 ):
     """Upload a media/doc file for a course (bytes -> UC Volume, metadata -> DB)."""
@@ -458,7 +458,7 @@ async def admin_upload_media(
 def admin_update_media(
     media_id: str,
     body: MediaUpdate,
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     db: Session = Depends(deps.get_db),
 ):
     try:
@@ -471,7 +471,7 @@ def admin_update_media(
 @router.delete("/media/{media_id}", response_model=Dict[str, Any])
 def admin_delete_media(
     media_id: str,
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     db: Session = Depends(deps.get_db),
 ):
     try:
@@ -486,7 +486,7 @@ def admin_delete_media(
 
 @router.post("/catalog/sync", response_model=Dict[str, Any])
 async def admin_sync_catalog(
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
 ):
     """Sync the Databricks Academy catalog now and refresh linked courses."""
     return await training_catalog.run_sync("manual")
@@ -494,7 +494,7 @@ async def admin_sync_catalog(
 
 @router.get("/catalog/status", response_model=Dict[str, Any])
 def admin_catalog_status(
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     db: Session = Depends(deps.get_db),
 ):
     return training_catalog.status(db)
@@ -504,7 +504,7 @@ def admin_catalog_status(
 def admin_search_catalog(
     q: str = "",
     limit: int = 25,
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     db: Session = Depends(deps.get_db),
 ):
     """Search the synced Academy catalog by name or course code."""
@@ -513,7 +513,7 @@ def admin_search_catalog(
 
 @router.get("/catalog/suggestions", response_model=Dict[str, Any])
 def admin_catalog_suggestions(
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     db: Session = Depends(deps.get_db),
 ):
     """Unlinked or retired courses with the Academy course each most likely is."""
@@ -524,7 +524,7 @@ def admin_catalog_suggestions(
 def admin_link_course(
     course_id: str,
     body: AcademyLink,
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     db: Session = Depends(deps.get_db),
 ):
     """Link a course to an Academy catalog course (or unlink it with null)."""
@@ -540,7 +540,7 @@ def admin_link_course(
 
 @router.get("/analytics/consumption", response_model=List[Dict[str, Any]])
 def admin_consumption_analytics(
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     db: Session = Depends(deps.get_db),
 ):
     return TrainingService.course_consumption_summary(db)
@@ -553,8 +553,7 @@ async def upload_training_data(
     db: Session = Depends(deps.get_db),
 ):
     """Upload Academy training completion CSV (admin only)."""
-    if not current_user.has_role("platform_admin"):
-        raise HTTPException(status_code=403, detail="Not authorized")
+    deps.ensure_capability(current_user, "training.upload")
 
     if not file.filename.endswith(".csv"):
         raise HTTPException(status_code=400, detail="File must be a CSV")

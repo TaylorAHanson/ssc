@@ -269,7 +269,7 @@ def prepare(db: Session, request_id: str) -> Dict[str, Any]:
         prepared["reverts_change_set_id"] = reverts
     _store_prepared(db, request, prepared, title=_title(items))
     logger.info("Metadata: prepared request %s (%d item(s), approvers %s, sensitive %s)", request.id, len(items),
-                approver_groups or "Platform Admins", bool(sensitive_reasons))
+                approver_groups or "none (no assignee)", bool(sensitive_reasons))
     return {
         "nothing_to_change": not items,
         "sensitive": bool(sensitive_reasons),

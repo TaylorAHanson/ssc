@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useSyncExternalStore } from 'react';
 import { api } from '../services/api';
 import type { DataAsset, PinnedAsset, PinnedAssetInput } from '../services/api';
+import { errorMessage } from './errors';
 
 interface PinState {
   pins: PinnedAsset[];
@@ -50,7 +51,7 @@ function load(force = false): Promise<void> {
       setState({ pins: res.pins, max: res.max, loading: false, error: null });
     })
     .catch((e: unknown) => {
-      setState({ loading: false, error: e instanceof Error ? e.message : 'Failed to load pins' });
+      setState({ loading: false, error: errorMessage(e, 'Failed to load pins') });
     })
     .finally(() => {
       inflight = null;
@@ -132,7 +133,7 @@ async function pin(input: PinnedAssetInput): Promise<void> {
     if (versions.get(input.asset_id) === v) {
       setState({
         pins: restore(input.asset_id, prev, prevIndex),
-        error: e instanceof Error ? e.message : 'Failed to pin',
+        error: errorMessage(e, 'Failed to pin'),
       });
     }
     throw e;
@@ -152,7 +153,7 @@ async function unpin(assetId: string): Promise<void> {
     if (versions.get(assetId) === v) {
       setState({
         pins: restore(assetId, prev, prevIndex),
-        error: e instanceof Error ? e.message : 'Failed to unpin',
+        error: errorMessage(e, 'Failed to unpin'),
       });
     }
     throw e;

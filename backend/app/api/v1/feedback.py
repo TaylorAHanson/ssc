@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-_ADMIN_ROLES = ["Platform Admin", "Governance Admin"]
+_ADMIN_CAPABILITY = "feedback.manage"
 
 
 def _require_feature() -> None:
@@ -102,7 +102,7 @@ def list_feedback(
     db: Session = Depends(deps.get_db),
     type: Optional[str] = Query(default=None),
     status: Optional[str] = Query(default=None),
-    current_user: User = Depends(deps.require_any_role(_ADMIN_ROLES)),
+    current_user: User = Depends(deps.require_capability(_ADMIN_CAPABILITY)),
     _: None = Depends(_require_feature),
 ) -> Any:
     """List feedback (admins only). Lightweight — diagnostics omitted."""
@@ -115,7 +115,7 @@ def get_feedback(
     *,
     db: Session = Depends(deps.get_db),
     feedback_id: str,
-    current_user: User = Depends(deps.require_any_role(_ADMIN_ROLES)),
+    current_user: User = Depends(deps.require_capability(_ADMIN_CAPABILITY)),
     _: None = Depends(_require_feature),
 ) -> Any:
     """Get one feedback item with full diagnostics (admins only)."""
@@ -131,7 +131,7 @@ def update_feedback(
     db: Session = Depends(deps.get_db),
     feedback_id: str,
     body: FeedbackUpdate,
-    current_user: User = Depends(deps.require_any_role(_ADMIN_ROLES)),
+    current_user: User = Depends(deps.require_capability(_ADMIN_CAPABILITY)),
     _: None = Depends(_require_feature),
 ) -> Any:
     """Update status / notes / severity (admins only)."""
@@ -155,7 +155,7 @@ def delete_feedback(
     *,
     db: Session = Depends(deps.get_db),
     feedback_id: str,
-    current_user: User = Depends(deps.require_any_role(_ADMIN_ROLES)),
+    current_user: User = Depends(deps.require_capability(_ADMIN_CAPABILITY)),
     _: None = Depends(_require_feature),
 ) -> Any:
     """Delete a feedback item (admins only)."""

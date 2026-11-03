@@ -1,11 +1,26 @@
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { ShieldAlert, AlertTriangle, Search, CheckCircle2, Loader2, X, FileStack, ShieldCheck, ListChecks, ArrowRight, ChevronLeft, ChevronRight, ChevronDown, ClipboardList, SlidersHorizontal, Mail, Send, Clock, Trash2 } from 'lucide-react';
-import { api, type TargetWorkspace } from '../../services/api';
-import { CertificationChecklist } from '../../components/admin/CertificationChecklist';
+import { api, type DigestInfo, type SystemSchedules, type TargetWorkspace } from '../../services/api';
+import type { Request } from '../../types';
+import { CertificationChecklist, type ChecklistRuleRow } from '../../components/admin/CertificationChecklist';
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { parseISO } from 'date-fns';
 import { useVisibleInterval } from '../../hooks/useVisibleInterval';
+import { useCan } from '../../stores/userStore';
+import { errorMessage } from '../../lib/errors';
+import {
+    sentinelDiscoverStats,
+    sentinelRunContext,
+    type SentinelCheck,
+    type SentinelViolation,
+    type SentinelWorkspaceFailure,
+} from './sentinelTypes';
+
+type ScanEnvironment = 'dev' | 'stage' | 'prod';
+
+// A checklist row flattened from a check, keeping the check's result and action.
+type SentinelRuleRow = ChecklistRuleRow & { result: string; action: string };
 
 // The backend serializes naive UTC datetimes (no timezone suffix). Treat any
 // such string as UTC so it isn't misread as the viewer's local wall-clock time.
@@ -40,7 +55,7 @@ const isOpenFinding = (v: { action?: string }): boolean => v.action !== 'CERTIFY
 const READY_TO_CERTIFY_TAB = '__ready_to_certify';
 const EXEMPTED_TAB = '__approved_exceptions';
 
-const formatReason = (v: any) => {
+const formatReason = (v: SentinelViolation) => {
     if (v.violation_reasons && Array.isArray(v.violation_reasons) && v.violation_reasons.length > 0) {
         if (v.violation_reasons.length === 1) {
             return v.violation_reasons[0];
@@ -58,13 +73,13 @@ const formatReason = (v: any) => {
 
 // Resolve the responsible party for a violation. Newer runs carry a top-level
 // `owner`; older ones only have it in the OPA input snapshot.
-const resolveOwner = (v: any): string =>
+const resolveOwner = (v: SentinelViolation): string =>
     (v?.owner || v?.input_context?.resource?.owner || '').toString().trim();
 
 // Resolve the workspace a violation came from. Newer (multi-workspace) runs
 // carry a top-level `workspace` tag; older ones only have it in the OPA input
 // snapshot.
-const resolveWorkspace = (v: any): string =>
+const resolveWorkspace = (v: SentinelViolation): string =>
     (v?.workspace?.name || v?.input_context?.workspace?.name || '').toString().trim();
 
 // Human-readable name for a finding's resource. Violations only carry the raw
@@ -73,7 +88,7 @@ const resolveWorkspace = (v: any): string =>
 // is kept in the OPA input snapshot. Checks carry the same thing as `resource`.
 // Returns '' when the id IS the name (jobs by path, apps by slug, UC tables)
 // so callers can render the id alone instead of printing it twice.
-const resolveResourceName = (v: any): string => {
+const resolveResourceName = (v: SentinelViolation): string => {
     const name = (
         v?.resource?.name
         || v?.input_context?.resource?.name
@@ -87,7 +102,7 @@ const resolveResourceName = (v: any): string => {
 // Friendly display label for a resource type. The backend calls certified data
 // products "data_product"; governance/business users know these as "Dataset".
 // Unknown types fall back to their raw value (styling may upper/capitalize it).
-const resourceTypeLabel = (type: any): string => {
+const resourceTypeLabel = (type?: string | null): string => {
     const t = (type || '').toString().trim().toLowerCase();
     if (t === 'data_product') return 'Dataset';
     return (type || '').toString();
@@ -113,6 +128,10 @@ const OwnerCell = ({ owner }: { owner: string }) => {
 };
 
 export function EnforcementSentinel() {
+    // Ops Admins can open this page to watch runs; starting scans, digests and
+    // enforcement need the Governance control tower.
+    const canOperate = useCan('governance.control_tower');
+    const canManageRuns = useCan('ops.sentinel_runs');
     const [isRunning, setIsRunning] = useState(false);
     // Keep the primary surface to a single "Run Scan" action; scan scope lives
     // behind this disclosure.
@@ -130,9 +149,9 @@ export function EnforcementSentinel() {
     // name scans just that one.
     const [workspaceSel, setWorkspaceSel] = useState<string>('__all__');
     const [targetWorkspaces, setTargetWorkspaces] = useState<TargetWorkspace[]>([]);
-    const [environment, setEnvironment] = useState<'dev' | 'stage' | 'prod'>('prod');
+    const [environment, setEnvironment] = useState<ScanEnvironment>('prod');
     const [actionLoading, setActionLoading] = useState<string | null>(null);
-    const [selectedViolation, setSelectedViolation] = useState<any | null>(null);
+    const [selectedViolation, setSelectedViolation] = useState<SentinelViolation | null>(null);
     const [executedActions, setExecutedActions] = useState<Record<string, { at: string; executed_action?: string }>>({});
 
     // In-report search + severity filter (on top of the policy-group tabs) and
@@ -148,7 +167,7 @@ export function EnforcementSentinel() {
     }, [selectedRunId, activeTab, violationSearch, severityFilter]);
 
     // Server-side pagination and search states
-    const [sentinelRuns, setSentinelRuns] = useState<any[]>([]);
+    const [sentinelRuns, setSentinelRuns] = useState<Request[]>([]);
     const [totalRuns, setTotalRuns] = useState(0);
     const [page, setPage] = useState(1);
     const [pageSize] = useState(10);
@@ -156,11 +175,11 @@ export function EnforcementSentinel() {
     const [debouncedSearch, setDebouncedSearch] = useState('');
     const [isLoadingRuns, setIsLoadingRuns] = useState(false);
 
-    const [schedules, setSchedules] = useState<any>(null);
+    const [schedules, setSchedules] = useState<SystemSchedules | null>(null);
 
     // On-demand digest modal
     const [digestOpen, setDigestOpen] = useState(false);
-    const [digestInfo, setDigestInfo] = useState<any>(null);
+    const [digestInfo, setDigestInfo] = useState<DigestInfo | null>(null);
     const [digestEmail, setDigestEmail] = useState('');
     const [digestSending, setDigestSending] = useState(false);
     const [digestResult, setDigestResult] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -172,16 +191,16 @@ export function EnforcementSentinel() {
             const info = await api.getDigestInfo();
             setDigestInfo(info);
             setDigestEmail(info.default_recipient || '');
-        } catch (e: any) {
+        } catch (e) {
             setDigestInfo(null);
-            setDigestResult({ type: 'error', text: e?.message || 'Failed to load digest info' });
+            setDigestResult({ type: 'error', text: errorMessage(e, 'Failed to load digest info') });
         }
     };
 
     // "Clear old runs": sheds accumulated Sentinel history (the main thing slowing
     // the runs list) by keeping only the most recent few and deleting the rest,
     // including their joined findings. Also clears hung runs orphaned mid-scan
-    // (e.g. stuck in "discovering" after a worker died). Platform-admin gated.
+    // (e.g. stuck in "discovering" after a worker died). Needs ops.sentinel_runs.
     const [purging, setPurging] = useState(false);
     const handlePurgeOldRuns = async () => {
         const keepRaw = window.prompt(
@@ -218,8 +237,8 @@ export function EnforcementSentinel() {
                 ? ` ${res.failed} run(s) could not be deleted — see the server log for details.`
                 : '';
             window.alert(`Deleted ${res.deleted} run(s)${hung}; kept the ${res.kept} most recent.${skipped}${failed}`);
-        } catch (e: any) {
-            window.alert(e?.message || 'Failed to clear old runs.');
+        } catch (e) {
+            window.alert(errorMessage(e, 'Failed to clear old runs.'));
         } finally {
             setPurging(false);
         }
@@ -241,7 +260,7 @@ export function EnforcementSentinel() {
             if (selectedRunId === run.id) setSelectedRunId(null);
             await fetchSentinelRuns();
         } catch (e) {
-            window.alert(e instanceof Error ? e.message : 'Failed to delete the run.');
+            window.alert(errorMessage(e, 'Failed to delete the run.'));
         } finally {
             setDeletingRunId(null);
         }
@@ -256,8 +275,8 @@ export function EnforcementSentinel() {
                 type: 'success',
                 text: `Digest sent to ${res.recipient} (${res.violation_count} active violation${res.violation_count === 1 ? '' : 's'}).`,
             });
-        } catch (e: any) {
-            setDigestResult({ type: 'error', text: e?.message || 'Failed to send digest' });
+        } catch (e) {
+            setDigestResult({ type: 'error', text: errorMessage(e, 'Failed to send digest') });
         } finally {
             setDigestSending(false);
         }
@@ -271,10 +290,11 @@ export function EnforcementSentinel() {
 
     useEffect(() => {
         api.getSystemSchedules().then(setSchedules).catch(e => console.error("Failed to fetch schedules:", e));
+        if (!canOperate) return;
         api.getTargetWorkspaces()
             .then(res => setTargetWorkspaces(res.workspaces || []))
             .catch(e => console.error("Failed to fetch target workspaces:", e));
-    }, []);
+    }, [canOperate]);
 
     // Reset page on search change
     useEffect(() => {
@@ -319,7 +339,7 @@ export function EnforcementSentinel() {
     // Full run records (with violations) fetched on demand when a row is opened.
     // The list itself is a lightweight summary, so we hydrate the selected run's
     // full payload here and cache it per id (immune to summary-list re-polling).
-    const [fullRuns, setFullRuns] = useState<Record<string, any>>({});
+    const [fullRuns, setFullRuns] = useState<Record<string, Request>>({});
     useEffect(() => {
         if (!selectedRunId || fullRuns[selectedRunId]) return;
         let cancelled = false;
@@ -367,8 +387,8 @@ export function EnforcementSentinel() {
     const hasActiveRuns = sentinelRuns.some(run => run.status !== 'completed' && run.status !== 'failed' && run.status !== 'rejected');
     useVisibleInterval(() => { fetchSentinelRuns(true); }, 3000, hasActiveRuns);
 
-    const getRunStatus = (run: any) => {
-        const activeState = run.stateMachine?.states?.find((s: any) => s.isActive);
+    const getRunStatus = (run: Request) => {
+        const activeState = run.stateMachine?.states?.find(s => s.isActive);
         if (run.status === 'completed') return <span className="flex items-center text-green-600 font-medium text-xs"><CheckCircle2 className="w-3 h-3 mr-1"/> Completed</span>;
         if (run.status === 'failed') return <span className="flex items-center text-red-600 font-medium text-xs"><AlertTriangle className="w-3 h-3 mr-1"/> Failed</span>;
         return <span className="flex items-center text-blue-600 font-medium text-xs"><Loader2 className="w-3 h-3 mr-1 animate-spin"/> {activeState?.name || 'Running'}</span>;
@@ -380,7 +400,7 @@ export function EnforcementSentinel() {
             // '__all__' => scan every target workspace (empty list); otherwise
             // scope to the single selected workspace by name.
             const workspaces = workspaceSel === '__all__' ? [] : [workspaceSel];
-            await api.createRequest('enforcement_sentinel' as any, 'Manual OmniGuard Run', environment, {
+            await api.createRequest('enforcement_sentinel', 'Manual OmniGuard Run', environment, {
                 workspaces,
                 environment: environment,
             });
@@ -399,7 +419,7 @@ export function EnforcementSentinel() {
         }
     };
 
-    const handleExecuteAction = async (runId: string, v: any) => {
+    const handleExecuteAction = async (runId: string, v: SentinelViolation) => {
         const label = resolveResourceName(v) ? `${resolveResourceName(v)} (${v.resource_id})` : v.resource_id;
         const actionVerb = v.resource_type === 'app' && ['KILL', 'STOP_AND_REVOKE'].includes(v.action)
             ? 'stop and revoke access for'
@@ -435,9 +455,9 @@ export function EnforcementSentinel() {
                     executed_action: `manual_${v.action.toLowerCase()}`,
                 }
             }));
-        } catch (e: any) {
+        } catch (e) {
             console.error(e);
-            alert(`Error executing action: ${e.message}`);
+            alert(`Error executing action: ${errorMessage(e, 'unknown error')}`);
         } finally {
             setActionLoading(null);
         }
@@ -478,112 +498,120 @@ export function EnforcementSentinel() {
                         <div className="flex items-center gap-2 self-start sm:self-auto">
                             {/* "Secret" maintenance action: shed accumulated run history
                                 that slows this list. Deliberately understated (ghost). */}
-                            <Button
-                                variant="ghost"
-                                onClick={handlePurgeOldRuns}
-                                disabled={purging}
-                                title="Clear old OmniGuard runs to speed up this page"
-                                className="h-9 whitespace-nowrap text-gray-400 hover:text-red-600"
-                            >
-                                {purging ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Trash2 className="w-4 h-4 mr-1.5" />}
-                                Clear old runs
-                            </Button>
-                            <Button
-                                variant="outline"
-                                onClick={openDigestModal}
-                                className="h-9 whitespace-nowrap"
-                            >
-                                <Mail className="w-4 h-4 mr-1.5" />
-                                Email Digest
-                            </Button>
-                            <Button
-                                onClick={() => handleRunSentinel()}
-                                disabled={isRunning}
-                                className="h-9 whitespace-nowrap text-white"
-                            >
-                                <Search className="w-4 h-4 mr-1.5" />
-                                {isRunning ? 'Starting...' : 'Run Scan'}
-                            </Button>
+                            {canManageRuns && (
+                                <Button
+                                    variant="ghost"
+                                    onClick={handlePurgeOldRuns}
+                                    disabled={purging}
+                                    title="Clear old OmniGuard runs to speed up this page"
+                                    className="h-9 whitespace-nowrap text-gray-400 hover:text-red-600"
+                                >
+                                    {purging ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Trash2 className="w-4 h-4 mr-1.5" />}
+                                    Clear old runs
+                                </Button>
+                            )}
+                            {canOperate && (
+                                <>
+                                    <Button
+                                        variant="outline"
+                                        onClick={openDigestModal}
+                                        className="h-9 whitespace-nowrap"
+                                    >
+                                        <Mail className="w-4 h-4 mr-1.5" />
+                                        Email Digest
+                                    </Button>
+                                    <Button
+                                        onClick={() => handleRunSentinel()}
+                                        disabled={isRunning}
+                                        className="h-9 whitespace-nowrap text-white"
+                                    >
+                                        <Search className="w-4 h-4 mr-1.5" />
+                                        {isRunning ? 'Starting...' : 'Run Scan'}
+                                    </Button>
+                                </>
+                            )}
                         </div>
                     </div>
 
                     {/* Everything else (scan scope + destructive enforcement) lives
                         behind an Advanced disclosure so the default surface stays simple. */}
-                    <div className="mt-4">
-                        <button
-                            type="button"
-                            onClick={() => setAdvancedOpen(o => !o)}
-                            className="flex items-center gap-1.5 text-sm font-medium text-gray-600 hover:text-gray-900 transition-colors"
-                            aria-expanded={advancedOpen}
-                        >
-                            <ChevronDown className={`w-4 h-4 transition-transform ${advancedOpen ? '' : '-rotate-90'}`} />
-                            <SlidersHorizontal className="w-4 h-4" />
-                            Advanced options
-                        </button>
+                    {canOperate && (
+                        <div className="mt-4">
+                            <button
+                                type="button"
+                                onClick={() => setAdvancedOpen(o => !o)}
+                                className="flex items-center gap-1.5 text-sm font-medium text-gray-600 hover:text-gray-900 transition-colors"
+                                aria-expanded={advancedOpen}
+                            >
+                                <ChevronDown className={`w-4 h-4 transition-transform ${advancedOpen ? '' : '-rotate-90'}`} />
+                                <SlidersHorizontal className="w-4 h-4" />
+                                Advanced options
+                            </button>
 
-                        {advancedOpen && (
-                            <div className="mt-3 border border-gray-200 rounded-md divide-y divide-gray-100 animate-in fade-in slide-in-from-top-1">
-                                {/* Scan scope */}
-                                <div className="p-4 flex flex-col gap-3">
-                                    <div className="text-xs font-semibold uppercase tracking-wider text-gray-500">
-                                        Scan scope
-                                    </div>
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                        <div className="flex flex-col gap-1">
-                                            <label htmlFor="workspace" className="text-xs font-medium text-gray-700">
-                                                Workspace
-                                            </label>
-                                            <select
-                                                id="workspace"
-                                                value={workspaceSel}
-                                                onChange={(e) => {
-                                                    const val = e.target.value;
-                                                    setWorkspaceSel(val);
-                                                    // Auto-derive environment from the selected workspace.
-                                                    const ws = targetWorkspaces.find(w => w.name === val);
-                                                    if (ws && ['dev', 'stage', 'prod'].includes(ws.environment)) {
-                                                        setEnvironment(ws.environment as 'dev' | 'stage' | 'prod');
-                                                    }
-                                                }}
-                                                className="flex h-8 w-full rounded-md border border-input bg-white px-2 py-1 text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                                            >
-                                                <option value="__all__">All target workspaces</option>
-                                                {targetWorkspaces.map(w => (
-                                                    <option key={w.name} value={w.name}>
-                                                        {w.name}{w.environment ? ` (${w.environment})` : ''}
-                                                    </option>
-                                                ))}
-                                            </select>
-                                            <p className="text-[11px] text-gray-500 leading-relaxed">
-                                                Scopes the <span className="font-medium text-gray-700">apps &amp; platform governance</span> policies
-                                                (clusters, jobs, warehouses, dashboards, etc.). <span className="font-medium text-gray-700">All target workspaces</span> runs
-                                                one aggregated scan across every configured workspace. Data certification is Unity Catalog&ndash;scoped and always
-                                                runs once against the configured certification workspace, regardless of this selection.
-                                            </p>
+                            {advancedOpen && (
+                                <div className="mt-3 border border-gray-200 rounded-md divide-y divide-gray-100 animate-in fade-in slide-in-from-top-1">
+                                    {/* Scan scope */}
+                                    <div className="p-4 flex flex-col gap-3">
+                                        <div className="text-xs font-semibold uppercase tracking-wider text-gray-500">
+                                            Scan scope
                                         </div>
-                                        <div className="flex flex-col gap-1">
-                                            <label htmlFor="environment" className="text-xs font-medium text-gray-700">
-                                                Environment
-                                            </label>
-                                            <select
-                                                id="environment"
-                                                value={environment}
-                                                onChange={(e) => setEnvironment(e.target.value as any)}
-                                                className="flex h-8 w-full rounded-md border border-input bg-white px-2 py-1 text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                                            >
-                                                <option value="dev">dev</option>
-                                                <option value="stage">stage</option>
-                                                <option value="prod">prod</option>
-                                            </select>
-                                            <p className="text-[11px] text-gray-500 leading-relaxed">
-                                                Environment context the platform-governance policies are evaluated under. Some rules are stricter in prod.
-                                            </p>
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                            <div className="flex flex-col gap-1">
+                                                <label htmlFor="workspace" className="text-xs font-medium text-gray-700">
+                                                    Workspace
+                                                </label>
+                                                <select
+                                                    id="workspace"
+                                                    value={workspaceSel}
+                                                    onChange={(e) => {
+                                                        const val = e.target.value;
+                                                        setWorkspaceSel(val);
+                                                        // Auto-derive environment from the selected workspace.
+                                                        const ws = targetWorkspaces.find(w => w.name === val);
+                                                        if (ws && ['dev', 'stage', 'prod'].includes(ws.environment)) {
+                                                            setEnvironment(ws.environment as ScanEnvironment);
+                                                        }
+                                                    }}
+                                                    className="flex h-8 w-full rounded-md border border-input bg-white px-2 py-1 text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                                >
+                                                    <option value="__all__">All target workspaces</option>
+                                                    {targetWorkspaces.map(w => (
+                                                        <option key={w.name} value={w.name}>
+                                                            {w.name}{w.environment ? ` (${w.environment})` : ''}
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                                <p className="text-[11px] text-gray-500 leading-relaxed">
+                                                    Scopes the <span className="font-medium text-gray-700">apps &amp; platform governance</span> policies
+                                                    (clusters, jobs, warehouses, dashboards, etc.). <span className="font-medium text-gray-700">All target workspaces</span> runs
+                                                    one aggregated scan across every configured workspace. Data certification is Unity Catalog&ndash;scoped and always
+                                                    runs once against the configured certification workspace, regardless of this selection.
+                                                </p>
+                                            </div>
+                                            <div className="flex flex-col gap-1">
+                                                <label htmlFor="environment" className="text-xs font-medium text-gray-700">
+                                                    Environment
+                                                </label>
+                                                <select
+                                                    id="environment"
+                                                    value={environment}
+                                                    onChange={(e) => setEnvironment(e.target.value as ScanEnvironment)}
+                                                    className="flex h-8 w-full rounded-md border border-input bg-white px-2 py-1 text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                                >
+                                                    <option value="dev">dev</option>
+                                                    <option value="stage">stage</option>
+                                                    <option value="prod">prod</option>
+                                                </select>
+                                                <p className="text-[11px] text-gray-500 leading-relaxed">
+                                                    Environment context the platform-governance policies are evaluated under. Some rules are stricter in prod.
+                                                </p>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
-                            </div>
-                        )}
-                    </div>
+                            )}
+                        </div>
+                    )}
                 </CardContent>
             </Card>
 
@@ -626,17 +654,17 @@ export function EnforcementSentinel() {
                                 </tr>
                             ) : (
                                 sentinelRuns.map(run => {
-                                    const ctx = (run as any).stateContext || run.metadata || (run as any).state_context || {};
+                                    const ctx = sentinelRunContext(run);
                                     const violations = ctx.violations || [];
 
                                     // Open findings, the same unit as the run report. Runs scanned before
                                     // 1.6.1 stored a per-failed-rule count here, so older rows can read higher.
-                                    const discoverFact = run.stateMachine?.states?.flatMap((s: any) => s.facts || []).find((f: any) => f.type === 'discover_completed');
+                                    const discoverStats = sentinelDiscoverStats(run);
                                     let vCount: number;
                                     if (ctx.scan_stats && typeof ctx.scan_stats.violation_count === 'number') {
                                         vCount = ctx.scan_stats.violation_count;
-                                    } else if (discoverFact?.data?.violation_count !== undefined) {
-                                        vCount = discoverFact.data.violation_count;
+                                    } else if (discoverStats?.violation_count !== undefined) {
+                                        vCount = discoverStats.violation_count;
                                     } else {
                                         vCount = violations.filter(isOpenFinding).length;
                                     }
@@ -658,9 +686,9 @@ export function EnforcementSentinel() {
                                             </td>
                                             <td className="p-3">
                                                 {(() => {
-                                                    const failures: any[] = Array.isArray(ctx.workspace_failures) ? ctx.workspace_failures : [];
-                                                    const hard = failures.filter((f: any) => !f.partial).length;
-                                                    const partial = failures.filter((f: any) => f.partial).length;
+                                                    const failures: SentinelWorkspaceFailure[] = Array.isArray(ctx.workspace_failures) ? ctx.workspace_failures : [];
+                                                    const hard = failures.filter(f => !f.partial).length;
+                                                    const partial = failures.filter(f => f.partial).length;
                                                     if (hard === 0 && partial === 0) {
                                                         return <span className="text-gray-300">&mdash;</span>;
                                                     }
@@ -692,17 +720,19 @@ export function EnforcementSentinel() {
                                                 <Button variant="ghost" size="sm" className="h-8 text-gray-400 group-hover:text-gray-900 group-hover:bg-gray-200">
                                                     View Report <ArrowRight className="w-4 h-4 ml-2" />
                                                 </Button>
-                                                <Button
-                                                    variant="ghost"
-                                                    size="sm"
-                                                    title="Delete this run"
-                                                    aria-label="Delete this run"
-                                                    disabled={deletingRunId === run.id}
-                                                    onClick={(e) => { e.stopPropagation(); handleDeleteRun(run); }}
-                                                    className="h-8 w-8 p-0 ml-1 text-gray-300 hover:text-red-600 hover:bg-red-50"
-                                                >
-                                                    {deletingRunId === run.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
-                                                </Button>
+                                                {canManageRuns && (
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="sm"
+                                                        title="Delete this run"
+                                                        aria-label="Delete this run"
+                                                        disabled={deletingRunId === run.id}
+                                                        onClick={(e) => { e.stopPropagation(); handleDeleteRun(run); }}
+                                                        className="h-8 w-8 p-0 ml-1 text-gray-300 hover:text-red-600 hover:bg-red-50"
+                                                    >
+                                                        {deletingRunId === run.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                                                    </Button>
+                                                )}
                                             </td>
                                         </tr>
                                     );
@@ -755,7 +785,7 @@ export function EnforcementSentinel() {
                                 </h2>
                                 <p className="text-sm text-gray-500 mt-1">
                                     {formatPacific(selectedRun.createdAt, { month: 'long', second: '2-digit' })} • 
-                                    {((selectedRun as any).stateContext || selectedRun.metadata || (selectedRun as any).state_context || {}).workspace || 'ws-enterprise-prod'}
+                                    {sentinelRunContext(selectedRun).workspace || 'Unknown workspace'}
                                 </p>
                             </div>
                             <Button variant="ghost" size="sm" onClick={() => { setSelectedRunId(null); setActiveTab('all'); setReportView('violations'); setShowScanIssues(false); }} className="rounded-full hover:bg-gray-100">
@@ -764,18 +794,18 @@ export function EnforcementSentinel() {
                         </div>
 
                         {(() => {
-                            const ctx = (selectedRun as any).stateContext || selectedRun.metadata || (selectedRun as any).state_context || {};
-                            const violations: any[] = ctx.violations || [];
-                            const checks: any[] = ctx.checks || [];
-                            const discoverFact = selectedRun.stateMachine?.states?.flatMap((s: any) => s.facts || []).find((f: any) => f.type === 'discover_completed');
+                            const ctx = sentinelRunContext(selectedRun);
+                            const violations: SentinelViolation[] = ctx.violations || [];
+                            const checks: SentinelCheck[] = ctx.checks || [];
+                            const discoverStats = sentinelDiscoverStats(selectedRun);
 
                             // Flatten every (resource, policy) check into its individual policy
                             // rules for the checklist view. Policies without per-rule results
                             // fall back to a single synthetic rule row for that evaluation.
-                            const ruleRows: any[] = checks.flatMap((c: any) => {
+                            const ruleRows: SentinelRuleRow[] = checks.flatMap((c): SentinelRuleRow[] => {
                                 const rrs = Array.isArray(c.rule_results) ? c.rule_results : [];
                                 if (rrs.length > 0) {
-                                    return rrs.map((rr: any) => ({
+                                    return rrs.map(rr => ({
                                         ...rr,
                                         result: rr.passed ? 'PASS' : 'VIOLATION',
                                         resource_id: c.resource_id,
@@ -809,13 +839,13 @@ export function EnforcementSentinel() {
                             // policy) check, which is also one row of the violation list. A
                             // finding under an approved allowlist exception is signed-off risk
                             // and is excluded from the total and the severity cards.
-                            const openFailedChecks = checks.filter((c: any) => c.result !== 'PASS' && c.action !== 'SKIPPED_ALLOWLIST');
+                            const openFailedChecks = checks.filter(c => c.result !== 'PASS' && c.action !== 'SKIPPED_ALLOWLIST');
 
-                            const assetsScanned = stats.total_resources_scanned ?? discoverFact?.data?.total_resources_scanned ?? '—';
-                            const policiesEvaluated = stats.policies_evaluated ?? discoverFact?.data?.policies_evaluated ?? '—';
-                            const totalChecks = stats.total_checks ?? discoverFact?.data?.total_checks ?? checks.length ?? '—';
-                            const vCount = stats.violation_count ?? discoverFact?.data?.violation_count ?? openFailedChecks.length;
-                            const passCount = stats.pass_count ?? discoverFact?.data?.pass_count ?? checks.filter((c: any) => c.result === 'PASS').length;
+                            const assetsScanned = stats.total_resources_scanned ?? discoverStats?.total_resources_scanned ?? '—';
+                            const policiesEvaluated = stats.policies_evaluated ?? discoverStats?.policies_evaluated ?? '—';
+                            const totalChecks = stats.total_checks ?? discoverStats?.total_checks ?? checks.length ?? '—';
+                            const vCount = stats.violation_count ?? discoverStats?.violation_count ?? openFailedChecks.length;
+                            const passCount = stats.pass_count ?? discoverStats?.pass_count ?? checks.filter(c => c.result === 'PASS').length;
                             // Only shown for runs that recorded it; older runs folded exempt
                             // findings into the violation total and can't be split apart now.
                             const exemptCount = typeof stats.exempt_count === 'number' ? stats.exempt_count : null;
@@ -824,10 +854,10 @@ export function EnforcementSentinel() {
                             // they match the totals above. Rows that need attention but aren't
                             // violations get their own tabs.
                             const openFindings = violations.filter(isOpenFinding);
-                            const readyToCertify = violations.filter((v: any) => v.action === 'CERTIFY');
-                            const exempted = violations.filter((v: any) => v.action === 'SKIPPED_ALLOWLIST');
+                            const readyToCertify = violations.filter(v => v.action === 'CERTIFY');
+                            const exempted = violations.filter(v => v.action === 'SKIPPED_ALLOWLIST');
 
-                            const violationsByPolicy = openFindings.reduce((acc: any, v: any) => {
+                            const violationsByPolicy = openFindings.reduce<Record<string, SentinelViolation[]>>((acc, v) => {
                                 if (!acc[v.policy]) acc[v.policy] = [];
                                 acc[v.policy].push(v);
                                 return acc;
@@ -837,7 +867,7 @@ export function EnforcementSentinel() {
                             
                             // Sort violations by severity (highest first)
                             const severityOrder: Record<string, number> = { 'CRITICAL': 4, 'HIGH': 3, 'MEDIUM': 2, 'LOW': 1, 'NONE': 0 };
-                            const sortViolations = (vList: any[]) => [...vList].sort((a, b) => {
+                            const sortViolations = (vList: SentinelViolation[]) => [...vList].sort((a, b) => {
                                 const sevA = severityOrder[a.severity] || 0;
                                 const sevB = severityOrder[b.severity] || 0;
                                 return sevB - sevA;
@@ -846,13 +876,13 @@ export function EnforcementSentinel() {
                             // Base set = the selected policy tab, then narrowed by the
                             // severity filter and free-text search (resource, policy,
                             // workspace, owner, action, severity, and reason text).
-                            const baseViolations: any[] =
+                            const baseViolations: SentinelViolation[] =
                                 activeTab === 'all' ? openFindings
                                 : activeTab === READY_TO_CERTIFY_TAB ? readyToCertify
                                 : activeTab === EXEMPTED_TAB ? exempted
                                 : (violationsByPolicy[activeTab] || []);
                             const q = violationSearch.trim().toLowerCase();
-                            const matchesSearch = (v: any): boolean => {
+                            const matchesSearch = (v: SentinelViolation): boolean => {
                                 if (!q) return true;
                                 const reasons = Array.isArray(v.violation_reasons) ? v.violation_reasons.join(' ') : (v.reason || '');
                                 const hay = [
@@ -862,7 +892,7 @@ export function EnforcementSentinel() {
                                 ].filter(Boolean).join(' ').toLowerCase();
                                 return hay.includes(q);
                             };
-                            const filteredViolations = baseViolations.filter((v: any) =>
+                            const filteredViolations = baseViolations.filter(v =>
                                 (severityFilter === 'all' || v.severity === severityFilter) && matchesSearch(v)
                             );
                             const filtersActive = q.length > 0 || severityFilter !== 'all';
@@ -885,7 +915,7 @@ export function EnforcementSentinel() {
                                         <div className="flex-1 flex flex-col items-center justify-center py-20 text-center">
                                             <Loader2 className="w-16 h-16 text-blue-500 animate-spin mb-6" />
                                             <h3 className="text-xl font-semibold text-gray-900 mb-2">
-                                                {selectedRun.stateMachine?.states?.find((s: any) => s.isActive)?.name || 'Discovering Resources...'}
+                                                {selectedRun.stateMachine?.states?.find(s => s.isActive)?.name || 'Discovering Resources...'}
                                             </h3>
                                             <p className="text-gray-500 max-w-md">
                                                 OmniGuard is actively scanning the workspace. This process can take a few minutes depending on the number of resources.
@@ -898,11 +928,11 @@ export function EnforcementSentinel() {
                                                 NOT confirmed clean. Collapsed by default — a colored bar
                                                 indicates issues exist; click to view the definitive cause. */}
                                             {(() => {
-                                                const failures: any[] = Array.isArray(ctx.workspace_failures) ? ctx.workspace_failures : [];
+                                                const failures: SentinelWorkspaceFailure[] = Array.isArray(ctx.workspace_failures) ? ctx.workspace_failures : [];
                                                 const scanError: string = typeof ctx.scan_error === 'string' ? ctx.scan_error : '';
                                                 if (failures.length === 0 && !scanError) return null;
-                                                const hard = failures.filter((f: any) => !f.partial);
-                                                const partial = failures.filter((f: any) => f.partial);
+                                                const hard = failures.filter(f => !f.partial);
+                                                const partial = failures.filter(f => f.partial);
                                                 const isHard = hard.length > 0 || !!scanError;
                                                 const CATEGORY_LABEL: Record<string, string> = {
                                                     authentication: 'Authentication / credentials',
@@ -941,7 +971,7 @@ export function EnforcementSentinel() {
                                                                     A scan that fails to authenticate or reach a workspace reports 0 findings, which does not mean the workspace is compliant. Resolve the cause below and re-run.
                                                                 </p>
                                                                 <div className="flex flex-col gap-2">
-                                                                    {failures.map((f: any, i: number) => (
+                                                                    {failures.map((f, i) => (
                                                                         <div key={i} className="text-sm bg-white/70 rounded-md border border-gray-200 p-2.5">
                                                                             <div className="flex flex-wrap items-center gap-2">
                                                                                 <span className="font-semibold text-gray-900">{f.workspace || 'unknown'}</span>
@@ -1054,7 +1084,7 @@ export function EnforcementSentinel() {
                                                             const sevCounts = stats.severity_counts;
                                                             const count = (sevCounts && typeof sevCounts[sev] === 'number')
                                                                 ? sevCounts[sev]
-                                                                : openFailedChecks.filter((c: any) => (c.severity === sev || (sev === 'HIGH' && c.severity === 'CRITICAL'))).length;
+                                                                : openFailedChecks.filter(c => (c.severity === sev || (sev === 'HIGH' && c.severity === 'CRITICAL'))).length;
                                                             const colors = sev === 'HIGH' && count > 0 ? 'bg-orange-50/30 border-orange-100' :
                                                                            sev === 'MEDIUM' && count > 0 ? 'bg-yellow-50/30 border-yellow-100' :
                                                                            sev === 'LOW' && count > 0 ? 'bg-gray-50/50 border-gray-200' :
@@ -1236,7 +1266,7 @@ export function EnforcementSentinel() {
                                                                 </tr>
                                                             </thead>
                                                             <tbody className="divide-y divide-gray-100">
-                                                                {visibleViolations.map((v: any, idx: number) => (
+                                                                {visibleViolations.map((v, idx) => (
                                                                     <tr key={idx} className="hover:bg-gray-50">
                                                                         <td className="p-3 px-4 font-mono text-xs text-gray-900">
                                                                             <div className="flex flex-col">
@@ -1403,21 +1433,23 @@ export function EnforcementSentinel() {
                             </div>
                         </div>
                         <div className="p-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-3 shrink-0">
-                            <Button variant="outline" onClick={() => setSelectedViolation(null)}>Cancel</Button>
-                            <Button 
-                                variant="default"
-                                disabled={actionLoading === selectedViolation.resource_id}
-                                onClick={async () => {
-                                    await handleExecuteAction(selectedRun.id, selectedViolation);
-                                    setSelectedViolation(null);
-                                }}
-                                className="flex items-center bg-red-600 hover:bg-red-700 text-white"
-                            >
-                                {actionLoading === selectedViolation.resource_id ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
-                                {selectedViolation.resource_type === 'app' && ['KILL', 'STOP_AND_REVOKE'].includes(selectedViolation.action)
-                                    ? 'Stop App & Revoke Access'
-                                    : 'Execute Action'}
-                            </Button>
+                            <Button variant="outline" onClick={() => setSelectedViolation(null)}>{canOperate ? 'Cancel' : 'Close'}</Button>
+                            {canOperate && (
+                                <Button 
+                                    variant="default"
+                                    disabled={actionLoading === selectedViolation.resource_id}
+                                    onClick={async () => {
+                                        await handleExecuteAction(selectedRun.id, selectedViolation);
+                                        setSelectedViolation(null);
+                                    }}
+                                    className="flex items-center bg-red-600 hover:bg-red-700 text-white"
+                                >
+                                    {actionLoading === selectedViolation.resource_id ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+                                    {selectedViolation.resource_type === 'app' && ['KILL', 'STOP_AND_REVOKE'].includes(selectedViolation.action)
+                                        ? 'Stop App & Revoke Access'
+                                        : 'Execute Action'}
+                                </Button>
+                            )}
                         </div>
                     </div>
                 </div>
@@ -1486,7 +1518,7 @@ export function EnforcementSentinel() {
                             <Button variant="outline" onClick={() => setDigestOpen(false)} disabled={digestSending}>Close</Button>
                             <Button
                                 onClick={handleSendDigest}
-                                disabled={digestSending || !digestEmail.trim() || (digestInfo && !digestInfo.latest_run_id)}
+                                disabled={digestSending || !digestEmail.trim() || (!!digestInfo && !digestInfo.latest_run_id)}
                                 className="flex items-center text-white"
                             >
                                 {digestSending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Send className="w-4 h-4 mr-2" />}

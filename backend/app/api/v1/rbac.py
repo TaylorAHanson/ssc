@@ -11,14 +11,14 @@
 - ``POST /history/{id}/revert``            record the inverse change set (or file a request
                                            under the two-person rule)
 - ``GET  /imports``, ``POST /imports/preview``, ``POST /imports``
-                                           workbook import (Platform Admin)
+                                           workbook import (Access Rules admin)
 - ``GET  /exports``, ``POST /exports``     export runs, the schedule and targets; export now
 - ``GET  /exports/{id}/files/{file_id}``   download an archived CSV (by id, never by path)
 - ``POST /exports/test-path``              write and delete a probe file at a target's path
 - ``POST /exports/compare``                compare a sheet with a manually exported CSV
 
 Every endpoint is gated by ``features.rbac`` and authorized through
-``app.services.rbac.approvers`` (Platform Admin, viewer roles, or a type's
+``app.services.rbac.approvers`` (Access Rules admins, viewers, or a type's
 approver group). Uploads are parsed in memory and capped; nothing a client
 sends is used as a filesystem path. Endpoints are async and run every database
 or service call in a worker thread.
@@ -89,19 +89,15 @@ router = APIRouter(dependencies=[Depends(_require_feature)])
 # --- Authorization and error mapping ---------------------------------------------
 
 
-def _is_platform_admin(user: User) -> bool:
-    return user.has_role(approvers.PLATFORM_ADMIN)
-
-
-def _require_platform_admin(user: User, action: str) -> None:
-    if not _is_platform_admin(user):
-        raise RbacForbidden(f"Only Platform Admins can {action}.")
+def _require_rules_admin(user: User, action: str) -> None:
+    if not approvers.is_rules_admin(user):
+        raise RbacForbidden(f"Only Governance Admins can {action}.")
 
 
 def _require_export(user: User) -> None:
-    """Platform Admin or a member of any type's approver group (``permissions().can_export``)."""
-    if not (_is_platform_admin(user) or approvers.editable_planes(user)):
-        raise RbacForbidden("Only Platform Admins and approver group members can run or test exports.")
+    """An Access Rules admin or a member of any type's approver group (``permissions().can_export``)."""
+    if not (approvers.is_rules_admin(user) or approvers.editable_planes(user)):
+        raise RbacForbidden("Only Governance Admins and approver group members can run or test exports.")
 
 
 def _ordered(planes: Iterable[str]) -> List[str]:
@@ -268,7 +264,7 @@ def _authorize_revert(db: Session, user: User, change_set_id: str) -> None:
     if cs is None:
         raise HTTPException(status_code=404, detail="That change set doesn't exist.")
     if cs.source == SOURCE_IMPORT:
-        _require_platform_admin(user, "revert a workbook import")
+        _require_rules_admin(user, "revert a workbook import")
     for plane in _change_set_planes(db, cs):
         approvers.require_edit(user, plane)
 
@@ -282,7 +278,7 @@ def _revert(db: Session, user: User, change_set_id: str, reason: str) -> ChangeS
     """Revert now, or file a request when a touched environment has the two-person rule.
 
     A revert can't be split by type, so one spanning several types is filed as a
-    single request that Platform Admins approve.
+    single request that Application Admins approve.
     """
     _authorize_revert(db, user, change_set_id)
     preview = ledger.revert_preview(db, change_set_id, actor=user.email, reason=reason)
@@ -427,13 +423,13 @@ async def revert_change_set(
         return await asyncio.to_thread(_revert, db, user, change_set_id, body.reason)
 
 
-# --- Import (Platform Admin) ---------------------------------------------------------------
+# --- Import (Access Rules admin) ---------------------------------------------------------------
 
 
 @router.get("/imports", response_model=List[ImportSummary])
 async def list_imports(db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> List[ImportSummary]:
     with _http_errors():
-        _require_platform_admin(user, "import the workbook")
+        _require_rules_admin(user, "import the workbook")
         return await asyncio.to_thread(workbook_import.list_imports, db)
 
 
@@ -443,7 +439,7 @@ async def preview_import(
 ) -> ImportPreview:
     """Multipart ``file`` (.xlsx, at most 25 MB)."""
     with _http_errors():
-        _require_platform_admin(user, "import the workbook")
+        _require_rules_admin(user, "import the workbook")
         _, filename, data = await _workbook_upload(request)
         preview = await asyncio.to_thread(workbook_import.preview, db, data, filename, actor=user.email)
     logger.info("Access Rules: %s previewed workbook %s as import %s (mode %s)",
@@ -457,7 +453,7 @@ async def run_import(
 ) -> ImportResult:
     """Multipart ``file`` (the previewed workbook), ``preview_id``, ``mode`` and ``confirmation``."""
     with _http_errors():
-        _require_platform_admin(user, "import the workbook")
+        _require_rules_admin(user, "import the workbook")
         form, filename, data = await _workbook_upload(request)
         preview_id = _form_text(form, "preview_id")
         if not preview_id:

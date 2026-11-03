@@ -51,6 +51,7 @@ import { HelpTip, LabelWithHelp, AskAgentHint } from '../ui/help-tip';
 import { Link } from 'react-router-dom';
 import type { RbacPlanePermission } from '../../types/rbac';
 import { SETTINGS_PATH } from '../rbac/utils';
+import { errorMessage } from '../../lib/errors';
 
 // `inputBase` has no width so it can be combined with flex/explicit widths
 // without the `w-full` conflict that otherwise collapses flex children.
@@ -184,7 +185,7 @@ export function WorkflowEditor({
         setValidation({ ok: true, msg: 'Valid workflow — ready to publish.' });
       }
     } catch (e) {
-      setValidation({ ok: false, msg: e instanceof Error ? e.message : 'Invalid workflow' });
+      setValidation({ ok: false, msg: errorMessage(e, 'Invalid workflow') });
     } finally {
       setValidating(false);
     }
@@ -479,7 +480,7 @@ function GateForm({
     <>
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <LabelWithHelp className={labelClass} help="The kind of gate the request pauses on — NOT a group name. manager / platform_admin / data_owner are human approvals; training waits for a completed training, pr_merge for a merged PR, and children for all spawned child requests. manual_task holds the request while a person does work there's no tool for, then they mark it done (it is not an approval). To send approval to a specific group, pick a human type and set the Approver group below.">
+          <LabelWithHelp className={labelClass} help="The kind of gate the request pauses on — NOT a group name. manager / platform_admin (an Application Admin approval; the key keeps the role's old name) / data_owner are human approvals; training waits for a completed training, pr_merge for a merged PR, and children for all spawned child requests. manual_task holds the request while a person does work there's no tool for, then they mark it done (it is not an approval). To send approval to a specific group, pick a human type and set the Approver group below.">
             Gate type
           </LabelWithHelp>
           <select
@@ -508,7 +509,9 @@ function GateForm({
                   ? 'manual_task (hold for manual work)'
                   : t === 'terramate'
                     ? 'terramate (poll until provision terminal)'
-                    : t}
+                    : t === 'platform_admin'
+                      ? 'platform_admin (Application Admin approval)'
+                      : t}
               </option>
             ))}
           </select>
@@ -694,7 +697,7 @@ function AccessRuleApprovers() {
   return (
     <div className="space-y-1.5 text-[11px] text-gray-600">
       <p>
-        Each request goes to the approver group for its type of rule. Platform Admins can always approve,
+        Each request goes to the approver group for its type of rule. Application Admins can always approve,
         and are the only approvers for a type whose group isn't set.
       </p>
       {planes ? (
@@ -705,7 +708,7 @@ function AccessRuleApprovers() {
               {p.approver_group ? (
                 <span className="font-mono">{p.approver_group}</span>
               ) : (
-                <span className="text-amber-700">not set, Platform Admins</span>
+                <span className="text-amber-700">not set, Application Admins</span>
               )}
             </li>
           ))}
@@ -770,7 +773,7 @@ function GateApproverField({
           className={labelClass}
           help={
             isManual
-              ? "Who does the manual work. 'Specific group' assigns the task to any member of a group you name — pick this one. 'Default' falls back to platform admins, which is rarely who should be doing the work."
+              ? "Who does the manual work. 'Specific group' assigns the task to any member of a group you name — pick this one. 'Default' falls back to Application Admins, which is rarely who should be doing the work."
               : "Who can approve this human gate. 'Default' uses the gate type's built-in routing (e.g. manager → the requester's manager). 'Specific group' sends it to any member of a group you name. 'From data's approver_group tag' resolves the group from the Unity Catalog approver_group tag on the requested assets. 'Access rule approvers' sends it to the approver group set for the request's type of access rule; use it after the step that prepares an access change."
           }
         >
@@ -782,7 +785,7 @@ function GateApproverField({
           onChange={(e) => setSource(e.target.value as ApproverSource)}
         >
           <option value="default">
-            {isManual ? 'Default (platform admins)' : 'Default for this gate type'}
+            {isManual ? 'Default (Application Admins)' : 'Default for this gate type'}
           </option>
           <option value="group">Specific group</option>
           <option value="approver_group_tag">From data's approver_group tag</option>
@@ -792,7 +795,7 @@ function GateApproverField({
         </select>
         {isManual && source === 'default' && (
           <div className="text-[11px] text-amber-600 mt-1">
-            Assign this to the team that actually performs the work, or it lands on platform admins.
+            Assign this to the team that actually performs the work, or it lands on Application Admins.
           </div>
         )}
       </div>

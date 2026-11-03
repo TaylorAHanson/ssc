@@ -5,7 +5,7 @@ catalogs, schemas, tables, views and columns correct. Classification, ownership,
 domain and data-product membership all ride on tags, and certification checks
 them, so this is where they're maintained.
 
-Governance sees every object: Platform Admins, the editor roles and the
+Governance sees every object: Super Admins, the editor roles and the
 **Browse roles** (Governance Admin by default). Data owners can open it too,
 without an admin role, but see only the objects they own: search, counts,
 datasets and history leave everything else out, and the page says *Showing only
@@ -99,10 +99,75 @@ Catalog*.
 **Discard** on the bar drops every unsaved change. A key with no value, such as
 `pii`, is a key-only tag and is applied as a tag with no value.
 
+### Tag rules you'll see while editing
+
+Your admin's key policies (see [Settings](#settings)) shape the **Add tag**
+form and the tags already on an object:
+
+- **Picking a key.** Normally you can type any key, and the box suggests keys
+  already in use. When your admin allows only known keys, the key is a
+  dropdown instead: it lists only the keys that may be set on the kind of
+  object you're editing (when you edit several objects at once, only keys
+  allowed on all of them). If the dropdown is empty, no key policy applies
+  there yet; ask an admin to add one.
+- **Keys that need a value.** Some keys can't be added without a value. Once
+  you pick one, the value box says *Value (required)* and shows a red
+  asterisk, a message under the form says a value is required, and **Add**
+  stays greyed out until you type one. A key-only or blank value for such a
+  key is also refused when you preview, including in **Edit many tables by
+  name**, pasted sheets and imports.
+- **Required tags.** A tag your admin has marked required shows a shield and a
+  blue-violet outline. It has no cross, so it can't be removed by accident;
+  hover over it for a reminder. You can still change its value: choose **Add
+  tag** and add the same key with the new value. **Edit all** greys out
+  required tags in its **Remove a tag** list, a dataset's **Remove from all**
+  skips the tables where the tag is required, and a change that would remove
+  one anyway (for example an import in *Replace* mode that leaves it out) is
+  refused at preview.
+
 Each table page also has two sections that start folded away: **Details**
 (owners, the same table in other environments, sync status, **Check Unity
 Catalog now** and **Copy to another environment**) and **Activity** (every
 change made to it here).
+
+## AI-generated descriptions
+
+{{brand_name}} can draft descriptions for a table and its columns, like the
+*AI generate* button in Catalog Explorer. Unity Catalog's own AI comments can
+only be used in Catalog Explorer, so {{brand_name}} writes these with its own
+model.
+
+- **AI generate**, above the **Columns** list, suggests a description for
+  every column that doesn't have one yet, counting descriptions you've typed
+  but not saved. The arrow next to it has **Regenerate all**, which suggests a
+  new description for every column, including ones that already have one.
+- The sparkle next to a column's description, or next to the table's own
+  description at the top of the page, suggests one for just that column or
+  the table. Use it to replace a description, too.
+
+**What the model sees.** The catalog, schema and table names, the table type
+and description, each column's name, data type and current description, and
+the tag keys and values on the table and its columns. It never sees row data
+or sample values. It's told to write short business descriptions, not to
+guess at meaning it can't work out from that, and not to say whether a column
+holds personal or sensitive data. Everything it's sent is treated as data, so
+a description that reads like an instruction can't steer it.
+
+**Nothing is saved until you review it.** Suggestions arrive as ordinary
+unsaved changes, marked *AI suggestion* with a violet outline until you edit
+or save them, and the page reminds you: *AI suggestions can be wrong. Review
+each one before saving.* Fix one with the pencil, drop it with undo, then use
+**Review and save** as for any edit; approval rules apply in exactly the same
+way. A bulk run never replaces a description you've typed and not saved yet.
+
+One request describes up to 200 columns (admins can change this); for a wider
+table, save the first batch and choose **AI generate** again. If the model
+can't answer, you'll see a message and nothing is added; try again in a
+moment.
+
+**Turning it off.** Admins can switch it off, choose the model and add house
+style notes under **Admin → Settings → Metadata Manager → AI descriptions**
+(see [Settings](#settings)). When it's off, the buttons are hidden.
 
 ## Tagging many objects at once
 
@@ -154,8 +219,9 @@ anything changed on it since. Changes still waiting for approval are under
 
 ## Sync & admin
 
-Platform Admins get a **Sync & admin** link in the page header (not to be
-confused with **Admin** in the sidebar, which opens the platform dashboard) with:
+Super Admins and the editor roles (Governance Admin by default) get a
+**Sync & admin** link in the page header (not to be confused with **Admin** in
+the sidebar, which opens the platform dashboard) with:
 
 - a summary of whether syncing is on, which catalogs it covers and when Unity
   Catalog was last checked;
@@ -185,8 +251,8 @@ confused with **Admin** in the sidebar, which opens the platform dashboard) with
   check carries on as normal. A check that's writing also stops before its next
   statement if the sync settings change or the app starts shutting down; its
   row says why, and the next check writes the rest.
-  A sync *Paused* by the removal limit writes nothing until a Platform Admin
-  chooses **Review and resume**. **Apply these removals** re-checks only that
+  A sync *Paused* by the removal limit writes nothing until a Super Admin or
+  Governance Admin chooses **Review and resume**. **Apply these removals** re-checks only that
   sync's objects and writes their changes, as long as that removes no more than
   it planned (and only while syncing is on). **Clear without applying** lifts
   the pause and writes nothing. Fix what caused the removals first, or the next
@@ -195,6 +261,10 @@ confused with **Admin** in the sidebar, which opens the platform dashboard) with
   the API or MCP, and their scope. See [Metadata API and MCP](metadata-api.md);
 - **Bring in many tables at once**: **Start managing catalogs** and **Import
   from a file**.
+
+Ops Admins get **Sync history** on its own, even without browse rights: they
+can read every check and use **Check now**, but can't resume or clear a paused
+sync, edit objects or change automation access.
 
 ### Starting out: start managing, report, then sync
 
@@ -236,8 +306,9 @@ removals.
 - **Owners.** An object's owner tag (`data_owner` by default) names the groups
   that own it. Members of those groups can edit it. An object without the tag
   inherits the owner of its table, schema or catalog.
-- **Admins.** Platform Admins, and any roles an admin adds as editors, can edit
-  everything.
+- **Admins.** Super Admins, and the roles added as editors (Governance Admin by
+  default), can edit everything. An Application Admin is only a Metadata
+  Manager admin when that role is added as an editor.
 - **Everyone else** can propose a change. It goes to the object's owners, or to
   the governance approver group when nobody owns it. The preview they get back
   doesn't show the current values of objects they can't browse.
@@ -281,7 +352,7 @@ confirm.
 
 ## Settings
 
-Platform Admins configure the Metadata Manager under **Admin → Settings →
+Super and Application Admins configure the Metadata Manager under **Admin → Settings →
 Metadata Manager**:
 
 - **Reconcile mode**: **Plan** (the default, shown on the page as *Report
@@ -305,14 +376,31 @@ Metadata Manager**:
   schema. `*` means every schema and the catalogs' own tags. Blank means
   Enforce writes nothing, so clearing the list can never widen what's written.
   Each entry is checked when you save.
-- **Browse roles**: who sees every object, besides Platform Admins and the
+- **Browse roles**: who sees every object, besides Super Admins and the
   editor roles. Everyone else sees only what they own. Blank = admins and
   editor roles only; clearing it never opens the page to everyone.
 - **Owner tag key**, **Editor roles** and **Governance approver group**: who
   can edit and who approves. With no governance approver group, only Platform
   Admins approve sensitive changes and changes to objects nobody owns.
+- **Allowed keys**: **Open** (the default) lets editors type any key, with
+  suggestions. **Known only** accepts only keys listed under **Key policies**,
+  and turns the key box in every **Add tag** form into a dropdown of the keys
+  that apply to the object being edited. Tags with other keys that are
+  already on an object can still be removed. Changing this doesn't touch
+  existing tags; turn it on once your key policies list every key people need.
 - **Key policies**: per key, where it may be used, which values it allows, which
-  groups may change it and whether it's sensitive.
+  groups may change it and whether it's sensitive. Two switches protect
+  important tags, and they're independent, so turn on both for a tag that must
+  always be present with a value:
+  - **Required**: once an object carries the tag it can't be removed, by hand,
+    by a bulk edit or by a *Replace* import; only its value can change. Editors
+    see it with a shield. It doesn't add the tag to objects that don't have it
+    yet; use `!key` in the search box to find those.
+  - **Value required**: the tag can't be added or saved as a key-only or blank
+    tag. The **Add tag** form marks the value as required and won't add it
+    until one is entered, and previews refuse a blank value from any source.
+    Tags that already have a blank value are left as they are; they're only
+    checked when someone changes them.
 - **Environments**: which catalogs belong to which environment.
 - **Exempt tag keys**: keys the reconciler never touches.
   `system.certification_status` is on it, because OmniGuard owns it.
@@ -323,9 +411,15 @@ Metadata Manager**:
 - **Max removals per hour**: how many tags or descriptions syncing may remove
   or blank out in an hour, counted across every run (50 by default). A run
   that would go over writes nothing, is paused under **Sync history** and
-  alerts governance. Removals a Platform Admin applies from a paused sync don't
+  alerts governance. Removals a Super or Governance Admin applies from a paused sync don't
   count. Set it to 0 and every removal waits for review.
 - **Statements in parallel**: how many tables the reconciler updates at once.
+- **AI descriptions** (see [AI-generated descriptions](#ai-generated-descriptions)):
+  **AI-generated descriptions** turns the AI generate buttons on or off (on by
+  default). **Description model** picks the model; blank uses the assistant's.
+  **Max columns per request** (200 by default) and **Columns per model call**
+  (50 by default) control how a wide table is split up. **House style** adds
+  your own notes to the model's instructions, such as "Use British spelling".
 - **Max objects per change**: 5,000 by default.
 - **Wait after a new table changes**: a new table, or one dropped and
   recreated, is left alone until it has gone this many minutes without

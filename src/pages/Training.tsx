@@ -119,7 +119,7 @@ export function Training() {
     const load = async () => {
       try {
         setLoading(true);
-        const { tracks } = await getTrainingStatus() as { tracks: TrainingTrackFull[] };
+        const { tracks } = await getTrainingStatus();
         setTracks(tracks || []);
         if (tracks && tracks.length > 0) setActiveTab(tracks[0].id);
       } catch (error) {
@@ -167,7 +167,8 @@ export function Training() {
   const toggleCourse = (id: string) =>
     setExpanded((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
 

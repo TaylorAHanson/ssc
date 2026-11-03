@@ -24,7 +24,7 @@ request for the same resource is not a duplicate of yours. Those compare only
 against the caller's own requests, unless the parameters name a beneficiary
 (``principal``, ``github_username``), which then has to match instead.
 
-Non-admins can't open other people's requests (``GET /requests/{id}`` 403s), so
+Without ``requests.view_all`` a caller can't open other people's requests (``GET /requests/{id}`` 403s), so
 a match on someone else's request is reported without its id, link, title, or
 requester: only that it exists, its status and date, and which of the caller's
 own values it matched.
@@ -41,7 +41,8 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.request import RequestModel
-from app.services.approval_scope import is_platform_admin, parse_csv
+from app.core.capabilities import has_capability
+from app.services.approval_scope import parse_csv
 
 logger = logging.getLogger(__name__)
 
@@ -337,7 +338,7 @@ def find_duplicate_requests(
             query.order_by(RequestModel.created_at.desc()).limit(_MAX_CANDIDATES).all()
         )
 
-    admin = is_platform_admin(_role_list(roles))
+    admin = has_capability(_role_list(roles), "requests.view_all")
     me = (requester_email or "").strip().lower()
     new_qual = _qualifier_values(params)
     matches: List[Dict[str, Any]] = []

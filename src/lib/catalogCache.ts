@@ -18,7 +18,29 @@
 import { useEffect, useState } from 'react';
 
 import { api } from '../services/api';
-import type { DomainHierarchy, LegacyMapping } from '../services/api';
+import type {
+  AccessibleAssetsResponse,
+  DataAsset,
+  DomainHierarchy,
+  LegacyMapping,
+  OdpsDocument,
+  WorkspaceApp,
+  WorkspaceDashboard,
+  WorkspaceGenieSpace,
+  WorkspaceJob,
+} from '../services/api';
+
+/**
+ * One row of the unified Discover catalog: a cached data asset, or a workspace
+ * object (dashboard, job, app, Genie space, ODPS product) mapped onto the same
+ * shape. Workspace objects leave the cached-asset-only fields (contract,
+ * quality, SLA, sync time) unset.
+ */
+export type CatalogAsset = DataAsset & {
+  url?: string | null;
+  thumbnail_url?: string | null;
+  updated_at?: string | null;
+};
 
 const TTL_MS = 5 * 60_000;
 
@@ -69,10 +91,6 @@ function createResource<T>(fetcher: () => Promise<T>, fallback: T): Resource<T> 
 
     useEffect(() => {
       let mounted = true;
-      if (entry.data !== null) {
-        setData(entry.data);
-        setLoading(false);
-      }
       load()
         .then((d) => {
           if (mounted) {
@@ -98,94 +116,108 @@ function createResource<T>(fetcher: () => Promise<T>, fallback: T): Resource<T> 
 // Underlying endpoint resources. Non-essential ones swallow errors so a single
 // failing integration never blanks the whole catalog.
 // ---------------------------------------------------------------------------
-export const dataAssetsResource = createResource<any[]>(() => api.getDataAssets(), []);
-export const odpsResource = createResource<any[]>(() => api.getOdpsList().catch(() => []), []);
-const dashboardsResource = createResource<any[]>(() => api.getDatabricksDashboards().catch(() => []), []);
-const jobsResource = createResource<any[]>(() => api.getDatabricksJobs().catch(() => []), []);
-const appsResource = createResource<any[]>(() => api.getDatabricksApps().catch(() => []), []);
-const genieResource = createResource<any[]>(() => api.getDatabricksGenieSpaces().catch(() => []), []);
+export const dataAssetsResource = createResource<DataAsset[]>(() => api.getDataAssets(), []);
+export const odpsResource = createResource<OdpsDocument[]>(() => api.getOdpsList().catch(() => []), []);
+const dashboardsResource = createResource<WorkspaceDashboard[]>(() => api.getDatabricksDashboards().catch(() => []), []);
+const jobsResource = createResource<WorkspaceJob[]>(() => api.getDatabricksJobs().catch(() => []), []);
+const appsResource = createResource<WorkspaceApp[]>(() => api.getDatabricksApps().catch(() => []), []);
+const genieResource = createResource<WorkspaceGenieSpace[]>(() => api.getDatabricksGenieSpaces().catch(() => []), []);
 
 /**
  * Merge the raw endpoint payloads into the unified asset list the Discover
  * page renders. Mirrors the shape the page previously built inline.
  */
 function combineCatalog(
-  data: any[],
-  dashboards: any[],
-  jobs: any[],
-  apps: any[],
-  genieSpaces: any[],
-  odpsList: any[],
-): any[] {
+  data: DataAsset[],
+  dashboards: WorkspaceDashboard[],
+  jobs: WorkspaceJob[],
+  apps: WorkspaceApp[],
+  genieSpaces: WorkspaceGenieSpace[],
+  odpsList: OdpsDocument[],
+): CatalogAsset[] {
   const mappedData = data.map((d) =>
     d.type === 'DATA_PRODUCT' ? { ...d, type: 'dataset' } : d,
   );
 
   return [
     ...mappedData,
-    ...dashboards.map((d) => ({
-      id: d.id,
-      table_name: d.name,
-      type: 'dashboard',
-      domain: 'Analytics',
-      description: 'Lakeview Dashboard',
-      catalog: 'workspace',
-      schema_name: 'dashboards',
-      certified: false,
-      tags: [],
-    })),
-    ...jobs.map((j) => ({
-      id: j.id,
-      table_name: j.name,
-      type: 'job',
-      domain: 'Engineering',
-      description: `Job created by ${j.creator}`,
-      catalog: 'workspace',
-      schema_name: 'jobs',
-      certified: false,
-      tags: [],
-    })),
-    ...apps.map((a) => ({
-      id: a.id,
-      table_name: a.name,
-      type: 'app',
-      domain: 'Engineering',
-      description: a.description ?? null,
-      owner: a.creator ?? null,
-      url: a.url ?? null,
-      thumbnail_url: a.thumbnail_url ?? null,
-      updated_at: a.updated_at ?? null,
-      catalog: 'workspace',
-      schema_name: 'apps',
-      certified: false,
-      tags: [],
-    })),
-    ...genieSpaces.map((g) => ({
-      id: g.id,
-      table_name: g.name,
-      type: 'genie_space',
-      domain: 'Analytics',
-      description: g.description || 'Genie Space',
-      catalog: 'workspace',
-      schema_name: 'genie',
-      certified: false,
-      tags: [],
-    })),
-    ...odpsList.map((o) => ({
-      id: o.id,
-      table_name: o.name,
-      type: 'data_product',
-      domain: 'Analytics',
-      description: 'ODPS Data Product',
-      catalog: 'workspace',
-      schema_name: 'odps',
-      certified: false,
-      tags: [],
-    })),
+    ...dashboards.map(
+      (d): CatalogAsset => ({
+        id: d.id,
+        table_name: d.name || 'Untitled dashboard',
+        type: 'dashboard',
+        domain: 'Analytics',
+        description: 'Lakeview Dashboard',
+        owner: null,
+        catalog: 'workspace',
+        schema_name: 'dashboards',
+        certified: false,
+        tags: [],
+      }),
+    ),
+    ...jobs.map(
+      (j): CatalogAsset => ({
+        id: j.id,
+        table_name: j.name || 'Untitled job',
+        type: 'job',
+        domain: 'Engineering',
+        description: j.creator ? `Job created by ${j.creator}` : 'Databricks Job',
+        owner: null,
+        catalog: 'workspace',
+        schema_name: 'jobs',
+        certified: false,
+        tags: [],
+      }),
+    ),
+    ...apps.map(
+      (a): CatalogAsset => ({
+        id: a.id,
+        table_name: a.name,
+        type: 'app',
+        domain: 'Engineering',
+        description: a.description ?? null,
+        owner: a.creator ?? null,
+        url: a.url ?? null,
+        thumbnail_url: a.thumbnail_url ?? null,
+        updated_at: a.updated_at ?? null,
+        catalog: 'workspace',
+        schema_name: 'apps',
+        certified: false,
+        tags: [],
+      }),
+    ),
+    ...genieSpaces.map(
+      (g): CatalogAsset => ({
+        id: g.id,
+        table_name: g.name || 'Untitled Genie space',
+        type: 'genie_space',
+        domain: 'Analytics',
+        description: g.description || 'Genie Space',
+        owner: null,
+        catalog: 'workspace',
+        schema_name: 'genie',
+        certified: false,
+        tags: [],
+      }),
+    ),
+    ...odpsList.map(
+      (o): CatalogAsset => ({
+        id: o.id,
+        table_name: o.name,
+        type: 'data_product',
+        domain: 'Analytics',
+        description: 'ODPS Data Product',
+        owner: null,
+        catalog: 'workspace',
+        schema_name: 'odps',
+        certified: false,
+        tags: [],
+      }),
+    ),
   ];
 }
 
-export const discoveryCatalogResource = createResource<any[]>(async () => {
+export const discoveryCatalogResource = createResource<CatalogAsset[]>(async () => {
   const [data, dashboards, jobs, apps, genieSpaces, odpsList] = await Promise.all([
     dataAssetsResource.load(),
     dashboardsResource.load(),
@@ -212,7 +244,7 @@ export const legacyMappingsResource = createResource<LegacyMapping[]>(
 );
 export const useLegacyMappings = legacyMappingsResource.useResource;
 
-export const metricViewsResource = createResource<any[]>(
+export const metricViewsResource = createResource<DataAsset[]>(
   () => api.getMetricViews().catch(() => []),
   [],
 );
@@ -224,11 +256,10 @@ export const useMetricViews = metricViewsResource.useResource;
  * data can't be computed (e.g. local dev) — callers should then hide the
  * "Accessible to me" filter rather than guess.
  */
-export const accessibleAssetsResource = createResource<{
-  available: boolean;
-  mode: string;
-  accessible_ids: string[];
-}>(() => api.getAccessibleAssetIds(), { available: false, mode: 'unavailable', accessible_ids: [] });
+export const accessibleAssetsResource = createResource<AccessibleAssetsResponse>(
+  () => api.getAccessibleAssetIds(),
+  { available: false, mode: 'unavailable', accessible_ids: [] },
+);
 
 /** Hook for the current user's accessible-asset set. */
 export const useAccessibleAssets = accessibleAssetsResource.useResource;

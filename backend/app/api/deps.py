@@ -10,6 +10,7 @@ import uuid
 import logging
 import time
 from app.api import identity
+from app.core import capabilities
 from app.core.logging_formatter import note_request_identity
 from app.models.user import User
 from app.db.role_mapping import RoleMappingModel
@@ -106,7 +107,9 @@ def _calculate_roles(db: Session, entitlements: List[str]) -> List[str]:
     ).all()
     
     for mapping in mappings:
-        roles.add(mapping.internal_role)
+        # Canonical labels, so a row still spelling an old name ("Platform Admin")
+        # reads as its current one.
+        roles.add(capabilities.canonical_role(mapping.internal_role))
             
     return list(roles)
 
@@ -174,8 +177,8 @@ def resolve_user(
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=(
-                    f"'{caller}' has no email identity and isn't a registered service principal. A Platform "
-                    "Admin can register its application id under Metadata Manager -> System principals."
+                    f"'{caller}' has no email identity and isn't a registered service principal. A Super Admin or "
+                    "Metadata Manager editor can register its application id under Metadata Manager -> System principals."
                 ),
             )
 
@@ -240,7 +243,7 @@ def _resolve_human(
         if not _dev_features_allowed():
             # Fail closed. Collapsing an unidentified caller onto the shared
             # ``admin@example.com`` identity would hand them whatever
-            # ``role_mappings`` grants that address (Platform Admin, as seeded)
+            # ``role_mappings`` grants that address (Super Admin, as seeded)
             # *and* pool their chat transcripts and cached user context with
             # every other unidentified caller.
             logger.warning(
@@ -258,16 +261,15 @@ def _resolve_human(
     entitlements = _get_user_entitlements(user_email, obo_token)
     calculated_roles = _calculate_roles(db, entitlements)
     
-    # Local dev mock fallback: if 'users' in entitlements and local dev, ensure 'Platform Admin' or 'User' is present.
+    # Local dev mock fallback: the mock user gets Super Admin if no DB seeding occurred yet.
     if _dev_features_allowed() and "users" in entitlements and not calculated_roles:
-        # Fallback to giving Platform Admin to the mock user if no DB seeding occurred yet
-        calculated_roles = ["Platform Admin"]
+        calculated_roles = [capabilities.SUPER_ADMIN]
     
     # DEV FEATURE: Role Override (local/dev-flavored envs only; never stage/prod)
     applied_override = None
     if x_dev_role_override and _dev_features_allowed():
         logger.debug(f"DEV: Overriding role for user {user_email} to {x_dev_role_override}")
-        calculated_roles = [x_dev_role_override]
+        calculated_roles = [capabilities.canonical_role(x_dev_role_override)]
         applied_override = x_dev_role_override
     elif x_dev_role_override:
         logger.warning(
@@ -304,6 +306,26 @@ def require_any_role(role_names: List[str]):
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Operation requires one of these roles: {', '.join(role_names)}"
             )
+        return user
+    return checker
+
+
+def ensure_capability(user: User, *capability_ids: str) -> None:
+    """Raise 403 unless ``user`` holds at least one of ``capability_ids``."""
+    if not any(user.can(c) for c in capability_ids):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=capabilities.denied_detail(capability_ids[0]),
+        )
+
+
+def require_capability(*capability_ids: str):
+    """Dependency: the current user, if they hold any of ``capability_ids`` (Super Admin always does)."""
+    for capability_id in capability_ids:
+        capabilities.get_capability(capability_id)
+
+    def checker(user: User = Depends(get_current_user)) -> User:
+        ensure_capability(user, *capability_ids)
         return user
     return checker
 

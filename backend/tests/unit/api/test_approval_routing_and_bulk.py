@@ -36,7 +36,8 @@ def _user(email, roles=(), groups=()):
                 entitlements=[email, *groups], is_active=True)
 
 
-ADMIN = _user("admin@example.com", roles=["Platform Admin"])
+ADMIN = _user("admin@example.com", roles=["Super Admin"])
+APP_ADMIN = _user("app@example.com", roles=["Application Admin"])
 MEMBER = _user("member@example.com", groups=["uc approvers"])
 OUTSIDER = _user("outsider@example.com", groups=["Other Group"])
 
@@ -106,13 +107,13 @@ def test_group_member_can_approve_and_outsider_cannot(db_session):
     assert _status(db_session, "req-2") == "rejected"
 
 
-def test_no_group_configured_falls_back_to_platform_admins(db_session):
+def test_no_group_configured_falls_back_to_application_admins(db_session):
     _add(db_session, "req-1", role=None, approval_type="platform_admin")
 
     assert get_approvals(status="pending", current_user=MEMBER, db=db_session) == []
     with pytest.raises(HTTPException):
         approve_request("req-1", current_user=MEMBER, db=db_session)
-    approve_request("req-1", current_user=ADMIN, db=db_session)
+    approve_request("req-1", current_user=APP_ADMIN, db=db_session)
     assert _status(db_session, "req-1") == "approved"
 
 
@@ -127,7 +128,7 @@ def test_the_card_names_the_access_rule_approvers_for_the_requests_type(db_sessi
     labels = {a.requestId: a.approverLabel
               for a in get_approvals(status="pending", current_user=ADMIN, db=db_session)}
     assert labels == {"req-uc": f"UC securables approvers: {GROUP}",
-                      "req-ws": "Platform Admins (no Workspace securables group set)",
+                      "req-ws": "Application Admins (no Workspace securables group set)",
                       # Only the gate that takes its group from the type of rule gets a label.
                       "req-other": None}
     assert get_approval("appr-req-uc", current_user=MEMBER, db=db_session).approverLabel == (
@@ -141,7 +142,7 @@ def test_the_card_names_the_access_rule_approvers_for_the_requests_type(db_sessi
     # calls the gate by where its approvers come from rather than "platform admin".
     formatted = requests_api._format_request(db_session.get(RequestModel, "req-ws"), db_session)
     [shown] = formatted.approvals
-    assert shown.approverLabel == "Platform Admins (no Workspace securables group set)"
+    assert shown.approverLabel == "Application Admins (no Workspace securables group set)"
     gates = {s.id: (s.gateType, s.gateLabel) for s in formatted.stateMachine.states if s.gateType}
     assert gates == {"approve": ("platform_admin", "Access rule approvers")}
     summary = requests_api._format_request(db_session.get(RequestModel, "req-ws"), db_session, summary=True)
@@ -151,7 +152,7 @@ def test_the_card_names_the_access_rule_approvers_for_the_requests_type(db_sessi
 # --- Self-approval ------------------------------------------------------------------
 
 
-def test_nobody_approves_their_own_request_not_even_a_platform_admin(db_session):
+def test_nobody_approves_their_own_request_not_even_a_super_admin(db_session):
     _add(db_session, "req-own", requester="Admin@Example.com")
 
     with pytest.raises(HTTPException) as exc_info:
@@ -266,3 +267,37 @@ def test_bulk_approve_route_is_reachable(committing_db):
         too_many = client.post("/api/v1/requests/approve-bulk",
                                json={"request_ids": [f"r{i}" for i in range(101)]})
         assert too_many.status_code == 422
+
+
+# --- Who may act on which gate --------------------------------------------------------
+
+
+@pytest.mark.parametrize("approval_type,assignee,role,allowed", [
+    ("platform_admin", None, "Application Admin", True),
+    ("platform_admin", None, "Governance Admin", False),
+    ("governance_admin", "Governance Admin", "Governance Admin", True),
+    ("governance_admin", "Governance Admin", "Application Admin", False),
+    ("governance_admin", "Governance Admin", "Super Admin", True),
+    ("finance_admin", "Finance Admin", "Finance Admin", True),
+    ("finance_admin", "Finance Admin", "Ops Admin", False),
+    ("data_owner", None, "Application Admin", False),
+    ("data_owner", None, "Super Admin", True),
+])
+def test_role_gates_are_acted_on_by_their_role_or_super_admin(db_session, approval_type, assignee, role, allowed):
+    _add(db_session, "req-gate", role=assignee, approval_type=approval_type)
+    actor = _user(f"{role.split()[0].lower()}@example.com", roles=[role])
+
+    if allowed:
+        approve_request("req-gate", current_user=actor, db=db_session)
+        assert _status(db_session, "req-gate") == "approved"
+    else:
+        with pytest.raises(HTTPException) as exc_info:
+            approve_request("req-gate", current_user=actor, db=db_session)
+        assert exc_info.value.status_code == 403
+        assert _status(db_session, "req-gate") == "pending"
+
+
+def test_application_admin_completes_an_unassigned_manual_task(db_session):
+    _add(db_session, "req-task", role=None, approval_type="manual_task")
+    approve_request("req-task", current_user=APP_ADMIN, db=db_session)
+    assert _status(db_session, "req-task") == "approved"

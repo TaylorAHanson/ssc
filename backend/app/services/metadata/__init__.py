@@ -19,4 +19,5 @@ Modules:
 * ``apply``        executing statements against UC
 * ``reconciler``   the queue, runs, modes and circuit breaker
 * ``requests``     filing approval requests and the workflow's prepare and record steps
+* ``describe``     AI-drafted description suggestions (never written; the UI stages them)
 """

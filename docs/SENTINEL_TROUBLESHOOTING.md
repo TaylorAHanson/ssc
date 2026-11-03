@@ -395,7 +395,7 @@ re-selected; the cron fails it once it's past `ENFORCEMENT_SENTINEL_STALE_MINUTE
 with no live lock), and a scan genuinely hung inside a worker (its heartbeat keeps
 the lock live, and it holds the one-scan slot until the process restarts).
 
-**Unstick:** Run History → trash button on the run (Platform Admin;
+**Unstick:** Run History → trash button on the run (Super, Application or Ops Admin;
 `DELETE /api/v1/governance/sentinel/runs/{id}`). It deletes that one run and its
 findings regardless of state or lock. A scan still executing checks for its row
 before each workspace and before the data certification pass, logs `run <id> was

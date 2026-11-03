@@ -12,7 +12,8 @@ import { FindingList } from './FindingList';
 import { Badge, ErrorBanner, Notice, SectionTitle, Skeleton, type Tone, type ToastMessage } from './ui';
 import { useLoad } from './useLoad';
 import { useResizableColumns } from './useResizableColumns';
-import { CELL, PLANE_GROUP_LABELS, SETTINGS_PATH, TEXT_CELL, errorMessage, formatTime, plural } from './utils';
+import { CELL, PLANE_GROUP_LABELS, SETTINGS_PATH, TEXT_CELL, formatTime, plural } from './utils';
+import { errorMessage } from '../../lib/errors';
 
 const loadImports = () => api.getRbacImports();
 
@@ -315,10 +316,10 @@ function ImportPreviewView({ preview, file, canReset, onImported }: {
                 reflects it.
               </span>
             </p>
-            {!canReset && <p className="text-sm text-red-800">Only Platform Admins can reset and re-import.</p>}
+            {!canReset && <p className="text-sm text-red-800">Only Governance Admins can reset and re-import.</p>}
             {!preview.reset_allowed && (
               <p className="text-sm text-red-800">
-                Reset is turned off. A Platform Admin can allow it with “Allow reset” in{' '}
+                Reset is turned off. An Application Admin can allow it with “Allow reset” in{' '}
                 <Link to={SETTINGS_PATH} className="font-medium underline">Admin → Settings → Access Rules</Link>; it
                 should stay off in production.
               </p>

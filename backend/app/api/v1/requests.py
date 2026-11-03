@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 from app.api.deps import get_current_user
 from app.core.config import settings
 from app.models.user import User
-from app.services.approval_scope import in_group
+from app.services.approval_scope import in_group, is_unassigned_task
 from app.services.state_summary import summarize_state_context
 
 logger = logging.getLogger(__name__)
@@ -196,7 +196,7 @@ def get_requests(
 ):
     """Get all requests.
 
-    ``mine=true`` limits a Platform Admin to their own requests too, so the
+    ``mine=true`` limits someone who can see every request to their own too, so the
     "My requests" list isn't crowded out by everyone else's (e.g. automated runs).
 
     Defined as a *sync* handler so Starlette runs it in the worker threadpool:
@@ -209,8 +209,8 @@ def get_requests(
     # Build query; eager-load approvals to avoid a per-request lazy load.
     query = db.query(RequestModel).options(selectinload(RequestModel.approvals))
     
-    # Non-admins can only see their own requests
-    if mine or not current_user.has_role("platform_admin"):
+    # Without requests.view_all a caller only sees their own requests
+    if mine or not current_user.can("requests.view_all"):
         query = query.filter(RequestModel.requester_email == current_user.email)
     
     requests = query.order_by(RequestModel.created_at.desc()).offset(skip).limit(limit).all()
@@ -257,7 +257,9 @@ def get_paginated_requests(
     if summary:
         query = query.options(defer(RequestModel.state_context), defer(RequestModel.conversation))
 
-    if not current_user.has_role("platform_admin"):
+    # OmniGuard viewers list every OmniGuard run (most are scheduled, filed by the app).
+    sentinel_list = type == RequestType.ENFORCEMENT_SENTINEL.value and current_user.can("sentinel.view")
+    if not (current_user.can("requests.view_all") or sentinel_list):
         query = query.filter(RequestModel.requester_email == current_user.email)
         
     if type:
@@ -303,6 +305,13 @@ def get_paginated_requests(
     return _orjson_response(payload.model_dump(mode="json"))
 
 
+def _can_view_request(current_user: User, request: RequestModel) -> bool:
+    """The requester, anyone who sees every request, and OmniGuard viewers for OmniGuard runs."""
+    if request.requester_email == current_user.email or current_user.can("requests.view_all"):
+        return True
+    return request.type == RequestType.ENFORCEMENT_SENTINEL.value and current_user.can("sentinel.view")
+
+
 @router.get("/{request_id}", response_model=Request)
 def get_request(
     request_id: str,
@@ -332,7 +341,7 @@ def get_request(
     logger.info(f"[GET /requests/{request_id}] ✅ Found request")
         
     # Check permission
-    if not current_user.has_role("platform_admin") and request_model.requester_email != current_user.email:
+    if not _can_view_request(current_user, request_model):
         logger.warning(f"Unauthorized access attempt to {request_id} by {current_user.email}")
         raise HTTPException(status_code=403, detail="Not authorized to view this request")
         
@@ -369,7 +378,7 @@ def get_request_status(
     request = RequestService.get_request(db, request_id)
     if not request:
         raise HTTPException(status_code=404, detail="Request not found")
-    if not current_user.has_role("platform_admin") and request.requester_email != current_user.email:
+    if not _can_view_request(current_user, request):
         raise HTTPException(status_code=403, detail="Not authorized to view this request")
 
     return {
@@ -394,7 +403,7 @@ def get_request_graph(
     request = RequestService.get_request(db, request_id)
     if not request:
         raise HTTPException(status_code=404, detail="Request not found")
-    if not current_user.has_role("platform_admin") and request.requester_email != current_user.email:
+    if not _can_view_request(current_user, request):
         raise HTTPException(status_code=403, detail="Not authorized to view this request")
 
     from app.workflows.render import live_graph
@@ -411,8 +420,8 @@ def create_request(
     # Admin-only workflow types must be gated server-side, not just by hiding
     # the UI. The enforcement sentinel scans/remediates governed assets, so a
     # crafted API call shouldn't be able to start one without the right role.
-    if request_data.type == RequestType.ENFORCEMENT_SENTINEL.value and not (
-        current_user.has_role("Platform Admin") or current_user.has_role("Governance Admin")
+    if request_data.type == RequestType.ENFORCEMENT_SENTINEL.value and not current_user.can(
+        "governance.control_tower"
     ):
         raise HTTPException(status_code=403, detail="Not authorized to start enforcement sentinel runs")
 
@@ -455,7 +464,7 @@ def _claim_pending_approval(db: Session, approval: ApprovalModel, fields: Dict[s
 
 
 def _authorize_approval_actor(approval: ApprovalModel, current_user: User) -> None:
-    """Enforce that the caller is the assigned approver (or a platform admin).
+    """Enforce that the caller is the assigned approver (or holds a capability covering it).
 
     Manager-approval tasks are addressed to the requester's manager (email
     captured by the agent and stored in approval.assigned_to_email). Data-owner
@@ -465,10 +474,17 @@ def _authorize_approval_actor(approval: ApprovalModel, current_user: User) -> No
     Databricks group the caller belongs to (matched case-insensitively against
     their entitlements, as the inbox's visibility filter does). Anyone else
     attempting to act on the approval is rejected here so the state machine
-    can't be advanced by an unrelated user. Platform admins retain an override
-    for break-glass scenarios.
+    can't be advanced by an unrelated user.
+
+    Application Admins (``approvals.application``) act on every ``platform_admin``
+    gate and on manual tasks nobody was assigned. Super Admins keep the
+    break-glass override on everything (``approvals.break_glass``).
     """
-    if current_user.has_role("platform_admin"):
+    if current_user.can("approvals.break_glass"):
+        return
+    if current_user.can("approvals.application") and (
+        approval.approval_type == "platform_admin" or is_unassigned_task(approval)
+    ):
         return
 
     actor_email = (current_user.email or "").lower()
@@ -484,12 +500,12 @@ def _authorize_approval_actor(approval: ApprovalModel, current_user: User) -> No
 
     if not assignee_email and not assignee_role:
         # Defensive: an approval with no assignee shouldn't be actionable by
-        # arbitrary authenticated users. Force a platform-admin override.
+        # arbitrary authenticated users. Force a Super Admin override.
         raise HTTPException(
             status_code=403,
             detail=(
                 f"This {approval.approval_type} approval has no assignee on file; "
-                "only a platform admin can act on it."
+                "only a Super Admin can act on it."
             ),
         )
 
@@ -533,7 +549,7 @@ def _approve(db: Session, request_id: str, current_user: User, comment: Optional
     if not pending_approvals:
         raise HTTPException(status_code=404, detail="No pending approval found for this request")
 
-    # Segregation of duties, ahead of the platform-admin override below.
+    # Segregation of duties, ahead of the admin overrides below.
     requester_email = db.query(RequestModel.requester_email).filter(RequestModel.id == request_id).scalar()
     if self_approval_blocked(requester_email, current_user):
         raise HTTPException(status_code=403, detail=SELF_APPROVAL_DETAIL)
@@ -589,8 +605,8 @@ def approve_request(
 
     Authorization: only the assignee of the current pending approval (e.g. the
     manager for manager_approval, the data owner for data_owner_approval) may
-    approve. Platform admins may override. With ``APPROVALS_DENY_SELF_APPROVAL``
-    on, nobody (platform admins included) may approve their own request.
+    approve. Super Admins may override. With ``APPROVALS_DENY_SELF_APPROVAL``
+    on, nobody (Super Admins included) may approve their own request.
     """
     return _approve(db, request_id, current_user)
 
@@ -719,8 +735,8 @@ def delete_request(
     if not request:
         raise HTTPException(status_code=404, detail="Request not found")
     
-    # Only admins or owner can delete
-    if not current_user.has_role("platform_admin") and request.requester_email != current_user.email:
+    # Only the owner, or someone who can see every request, can delete
+    if not current_user.can("requests.view_all") and request.requester_email != current_user.email:
         raise HTTPException(status_code=403, detail="Not authorized to delete this request")
 
     # Explicitly clear the run's joined findings. The DB-level FK cascades on
@@ -795,14 +811,14 @@ def edit_parameters(
     The poller calls tick() → detects `has_parameters_edited=True` → transitions
     through `parameters_updated` → back to `terraform_planning` → fresh plan runs.
 
-    Requires: platform_admin role.
+    Requires: the requests.edit_parameters capability.
     Only valid when current_state is in the SM's get_editable_states() list.
     """
     from app.workflows.graphs import editable_states as v2_editable_states
     from app.workflows.render import render_state
 
-    if not current_user.has_role("platform_admin"):
-        raise HTTPException(status_code=403, detail="Only platform admins can edit workflow parameters")
+    if not current_user.can("requests.edit_parameters"):
+        raise HTTPException(status_code=403, detail="Only Application Admins can edit workflow parameters")
 
     request_model = db.query(RequestModel).filter(RequestModel.id == request_id).first()
     if not request_model:
@@ -900,7 +916,7 @@ async def execute_enforcement_action(
     db: Session = Depends(get_db)
 ):
     """Execute a specific enforcement action manually (e.g. from audit mode)."""
-    if not current_user.has_role("Platform Admin") and not current_user.has_role("Governance Admin"):
+    if not current_user.can("governance.control_tower"):
         raise HTTPException(status_code=403, detail="Not authorized to execute enforcement actions")
 
     from app.providers.databricks.handlers import (
@@ -1174,7 +1190,7 @@ def list_enforcement_actions(
     Lets the Sentinel UI durably rehydrate the "Executed" state after a page
     refresh instead of relying on ephemeral client state.
     """
-    if not current_user.has_role("Platform Admin") and not current_user.has_role("Governance Admin"):
+    if not current_user.can("sentinel.view"):
         raise HTTPException(status_code=403, detail="Not authorized to view enforcement actions")
 
     from app.db.enforcement_audit import EnforcementAuditModel

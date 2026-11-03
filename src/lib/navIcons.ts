@@ -1,4 +1,4 @@
-import React from 'react';
+import { createElement, type ReactNode } from 'react';
 import {
   LayoutDashboard,
   BarChart,
@@ -91,7 +91,6 @@ export function resolveNavIcon(name?: string): LucideIcon {
 export function renderNavIcon(
   name: string | undefined,
   className = 'w-5 h-5'
-): React.ReactNode {
-  const Icon = resolveNavIcon(name);
-  return <Icon className={className} />;
+): ReactNode {
+  return createElement(resolveNavIcon(name), { className });
 }

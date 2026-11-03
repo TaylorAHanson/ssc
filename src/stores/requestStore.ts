@@ -14,9 +14,8 @@ interface RequestStore {
   delegations: Delegation[];
   bannerMessage: string | null;
   bannerData: BannerData | null;
-  addRequest: (type: RequestType, title: string, environment?: Environment, metadata?: Record<string, any>) => Promise<void>;
+  addRequest: (type: RequestType, title: string, environment?: Environment, metadata?: Record<string, unknown>) => Promise<void>;
   deleteRequest: (id: string) => Promise<void>;
-  updateRequest: (id: string, updates: Partial<Request>) => Promise<void>;
   setBannerMessage: (message: string | null) => void;
   fetchRequests: () => Promise<void>;
   fetchApprovals: () => Promise<void>;
@@ -80,15 +79,6 @@ export const useRequestStore = create<RequestStore>((set, get) => ({
       console.error('Failed to delete request:', error);
       throw error;
     }
-  },
-
-  updateRequest: async (_id, _updates) => {
-    // This is currently client-side only optimistic update support if needed, 
-    // but better to just re-fetch or use specific update endpoints if available.
-    // Since we don't have a generic PATCH endpoint exposed in the store yet beyond API,
-    // we'll keep it simple for now or implement if needed.
-    // For now, let's just refresh requests to be safe.
-    get().fetchRequests();
   },
 
   setBannerMessage: (message) => {

@@ -101,6 +101,7 @@ class Fakes:
         self.refreshed = []
         self.refresh_fails = False
         self.unreadable = set()  # fqn_keys refresh can't read
+        self.check_policy = False  # also attach the real key-policy findings, as authz.decide does
 
     def observe(self, name, column=None, *, tags=None, comment=None, securable_type=None, present=True):
         key = ObjectKey.parse(name, column)
@@ -145,7 +146,10 @@ class Fakes:
                                   sensitive_reasons=[f"{key} is sensitive."], approver_groups=["data_owners"])
             else:
                 d = AuthzDecision(allowed=True, via="owner")
-            out.append(ItemDecision(item=item, decision=d, findings=[self.flagged[key]] if key in self.flagged else []))
+            findings = [self.flagged[key]] if key in self.flagged else []
+            if self.check_policy:
+                findings += policy.check_item(item)
+            out.append(ItemDecision(item=item, decision=d, findings=findings))
         return out
 
     def file(self, db, *, request, preview, items, actor, source=None, reverts_change_set_id=None):
@@ -262,6 +266,43 @@ def test_replace_tags_sets_unsets_and_leaves_exempt_keys_alone(db, fakes):
 
     assert summary(pv) == [(DEV_KEY, "b", "unset", None), (DEV_KEY, "c", "set", "3")]
     assert pv.findings == [] and not pv.blocked
+
+
+def test_a_replace_cannot_drop_a_required_tag(db, fakes, monkeypatch):
+    monkeypatch.setattr(settings, "METADATA_KEY_POLICIES", [{"key": "domain", "applies_to": "table", "required": True}])
+    submit(db, op("set_tags", tags={"domain": "sales", "tier": "silver"}))
+    fakes.check_policy = True
+
+    pv = preview(db, op("replace_tags", tags={"tier": "gold"}))
+
+    assert pv.blocked
+    assert [(d.item.key, d.item.action, [f.code for f in d.findings]) for d in pv.items if d.findings] == [
+        ("domain", "unset", ["required_key"])]
+    with pytest.raises(errors.ChangeBlocked):
+        submit(db, op("replace_tags", tags={"tier": "gold"}))
+    assert desired(db).tags == {"domain": "sales", "tier": "silver"}
+    # Keeping it, with a new value, is fine.
+    assert not preview(db, op("replace_tags", tags={"domain": "marketing", "tier": "gold"})).blocked
+
+
+def test_a_replace_import_cannot_drop_a_required_tag_or_blank_a_value_required_one(db, fakes, monkeypatch):
+    monkeypatch.setattr(settings, "METADATA_KEY_POLICIES", [
+        {"key": "domain", "applies_to": "table", "required": True},
+        {"key": "cost_center", "value_required": True},
+    ])
+    submit(db, op("set_tags", tags={"domain": "sales"}))
+    fakes.check_policy = True
+
+    pv = changes.preview_import(db, ImportRequest(rows=[ImportRow(name=DEV, tags={"cost_center": None})],
+                                                  mode="replace"), ADMIN)
+
+    assert pv.blocked
+    assert sorted((d.item.key, f.code) for d in pv.items for f in d.findings) == [
+        ("cost_center", "value_required"), ("domain", "required_key")]
+    with pytest.raises(errors.ChangeBlocked):
+        changes.import_rows(db, ImportRequest(rows=[ImportRow(name=DEV, tags={"cost_center": None})],
+                                              mode="replace"), ADMIN)
+    assert desired(db).tags == {"domain": "sales"}
 
 
 def test_naming_an_exempt_key_explicitly_is_denied(db, fakes):

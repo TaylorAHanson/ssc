@@ -34,6 +34,13 @@ The domain view lists everything in that area by type: **Metric Views**,
 **Legacy Dashboards** from older reporting tools. Click a type to show or hide
 it. Use **All Domains** and **All Subdomains** at the top to move back up.
 
+**Dashboards** lists the dashboards built on the domain's metric views,
+including ones in other Databricks workspaces. A dashboard from another
+workspace shows that workspace's name, and **Open Dashboard** opens it there.
+Whether it loads depends on your access in that workspace. If
+{{brand_name}} can't read its name, the card is titled **Dashboard in**
+followed by the workspace name.
+
 Two switches narrow the list:
 
 - **Accessible to me** shows only the data you already have permission to
@@ -59,6 +66,11 @@ these tabs:
   filter box. Filters accept text, `null`, or comparisons such as `>20` on
   number columns. The preview only loads when you open the tab, and it shows
   at most a set number of rows, which your administrator chooses.
+
+  If a view or metric view says a column in one of its source tables changed
+  type, the view's stored definition no longer matches its source, and every
+  query of it fails until it's recreated. Ask its owner (on the **Overview**
+  tab) to recreate it.
 - **Quality**: service levels and data quality checks, where they're defined.
 - **Team & Support**: the people responsible for a dataset and how to get
   help, plus the day-to-day support contact your administrator has set.

@@ -2,6 +2,7 @@ import json
 import logging
 from typing import Dict, Any, Optional, List
 from pydantic import BaseModel, Field
+import urllib.parse
 import urllib.request
 import urllib.error
 
@@ -18,7 +19,8 @@ class DraftOdpsInput(BaseModel):
 @tool(
     name="draft_odps_document",
     description="Drafts an Open Data Product Specification (ODPS) v4.1 YAML document by combining ODCS data contracts and OpenAPI specs using the LLM.",
-    args_schema=DraftOdpsInput
+    args_schema=DraftOdpsInput,
+    required_capability="governance.tools",
 )
 async def draft_odps_document(
     odcs_yamls: List[str], 
@@ -31,6 +33,10 @@ async def draft_odps_document(
     openapi_content = ""
     if openapi_urls:
         for url in openapi_urls:
+            # urllib also opens file:// and ftp:// URLs, which would read the app's own disk.
+            if urllib.parse.urlparse(url).scheme not in ("http", "https"):
+                openapi_content += f"\n--- OpenAPI Spec: {url} ---\nSkipped: only http(s) URLs are fetched.\n"
+                continue
             try:
                 req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
                 with urllib.request.urlopen(req, timeout=10) as response:

@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
+from app.core import capabilities
 from app.db.tool_registry import (
     IDENTITY_OBO,
     IDENTITY_SP,
@@ -83,20 +84,20 @@ WORKFLOW_ONLY_TOOL_NAMES = frozenset({
 ROLE_FLOOR_TOOL_NAMES = frozenset({
     # Describes any table as the governance SP, which can BROWSE everything.
     "draft_odcs_contract",
+    # Fetches any OpenAPI URL the caller names, from the app's network position.
+    "draft_odps_document",
+    # Requests any URL from the app's network position.
+    "ping_url",
 })
 
 # Normalize the inconsistent role strings tools declare (e.g. "governance_admin")
-# to the canonical internal role names used by ``User.has_role``.
+# to the canonical internal role names used by ``User.has_role``. "Platform Admin"
+# is the old name of Application Admin and is stored as the new name.
 _ROLE_ALIASES = {
-    "platform_admin": "Platform Admin",
-    "platform admin": "Platform Admin",
-    "governance_admin": "Governance Admin",
-    "governance admin": "Governance Admin",
-    "finance_admin": "Finance Admin",
-    "finance admin": "Finance Admin",
-    "security_admin": "Security Admin",
-    "security admin": "Security Admin",
-    "user": "User",
+    "platform_admin": capabilities.APPLICATION_ADMIN,
+    "platform admin": capabilities.APPLICATION_ADMIN,
+    **{capabilities.role_key(label): label for label in capabilities.ROLE_LABELS},
+    **{label.lower(): label for label in capabilities.ROLE_LABELS},
 }
 
 
@@ -104,6 +105,23 @@ def _normalize_role(role: Optional[str]) -> Optional[str]:
     if not role:
         return None
     return _ROLE_ALIASES.get(role.strip().lower(), role.strip())
+
+
+def _normalize_roles(roles) -> List[str]:
+    out: List[str] = []
+    for r in roles or []:
+        label = _normalize_role(r)
+        if label and label not in out:
+            out.append(label)
+    return out
+
+
+def _code_roles(tool) -> List[str]:
+    """The roles a code tool restricts itself to (from its capability, else its single role)."""
+    declared = getattr(tool, "required_roles", None)
+    if declared is None:
+        declared = [getattr(tool, "required_role", None)]
+    return _normalize_roles(declared)
 
 
 class ToolRegistryService:
@@ -137,7 +155,7 @@ class ToolRegistryService:
                 continue
             catalog_names.add(name)
             schema = tool.input_schema if isinstance(getattr(tool, "input_schema", None), dict) else None
-            role = _normalize_role(getattr(tool, "required_role", None))
+            code_roles = _code_roles(tool)
             is_workflow_tool = catalog_origin == TOOL_ORIGIN_WORKFLOW
             row = existing.get(name)
             if row is None:
@@ -175,7 +193,7 @@ class ToolRegistryService:
                         enabled_for_workflow_agent=workflow_agent,
                         enabled_for_workflow_execution=workflow_execution,
                         exposed_via_mcp=bool(getattr(tool, "external", False)),
-                        allowed_roles=[role] if role else [],
+                        allowed_roles=list(code_roles),
                         identity_mode=identity_mode,
                     )
                 )
@@ -187,11 +205,11 @@ class ToolRegistryService:
                     row.input_schema = schema
                 row.is_mutating = bool(getattr(tool, "is_mutating", False))
                 row.side_effect_class = getattr(tool, "side_effect_class", row.side_effect_class)
-                if role and name in ROLE_FLOOR_TOOL_NAMES and not row.allowed_roles:
-                    row.allowed_roles = [role]
+                if code_roles and name in ROLE_FLOOR_TOOL_NAMES and not row.allowed_roles:
+                    row.allowed_roles = list(code_roles)
                     logger.warning(
                         "ToolRegistry: %s was open to all roles; restricted to %s",
-                        name, role,
+                        name, ", ".join(code_roles),
                     )
                 # Keep origin in sync if a tool moved definition sites.
                 if row.origin != catalog_origin:
@@ -283,7 +301,7 @@ class ToolRegistryService:
             if key == "identity_mode" and value not in (IDENTITY_SP, IDENTITY_OBO):
                 raise ValueError(f"identity_mode must be '{IDENTITY_SP}' or '{IDENTITY_OBO}'")
             if key == "allowed_roles":
-                value = [_normalize_role(r) for r in value if r]
+                value = _normalize_roles(value)
             setattr(row, key, value)
         db.commit()
         db.refresh(row)

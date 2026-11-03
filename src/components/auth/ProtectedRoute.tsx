@@ -1,13 +1,14 @@
 import { Navigate } from 'react-router-dom';
-import { useUserStore } from '../../stores/userStore';
-import type { UserPersona } from '../../types';
+import { hasCapability, useUserStore } from '../../stores/userStore';
 
 interface ProtectedRouteProps {
     children: React.ReactNode;
-    allowedPersonas: UserPersona[];
+    /** Capability id(s); holding any one of them opens the route. */
+    capability: string | string[];
 }
 
-export function ProtectedRoute({ children, allowedPersonas }: ProtectedRouteProps) {
+export function ProtectedRoute({ children, capability }: ProtectedRouteProps) {
+    const currentUser = useUserStore((state) => state.currentUser);
     const currentPersona = useUserStore((state) => state.currentPersona);
     const hydrated = useUserStore((state) => state.hydrated);
     const isLoading = useUserStore((state) => state.isLoading);
@@ -42,8 +43,9 @@ export function ProtectedRoute({ children, allowedPersonas }: ProtectedRouteProp
         return null;
     }
 
-    if (!allowedPersonas.includes(currentPersona)) {
-        console.warn(`Access denied for persona: ${currentPersona}. Required: ${allowedPersonas.join(', ')}`);
+    const required = Array.isArray(capability) ? capability : [capability];
+    if (!hasCapability(currentUser, ...required)) {
+        console.warn(`Access denied for ${currentPersona}. Requires one of: ${required.join(', ')}`);
         return <Navigate to="/" replace />;
     }
 

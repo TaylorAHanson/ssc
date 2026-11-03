@@ -32,6 +32,7 @@ def _fake_user(email: str = "user@example.com"):
         roles=[],
         entitlements=[],
         has_role=lambda _r: True,
+        can=lambda _c: True,
     )
 
 

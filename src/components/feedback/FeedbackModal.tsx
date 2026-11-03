@@ -8,6 +8,7 @@ import { Label } from '../ui/label';
 import { cn } from '../../lib/utils';
 import { submitFeedback, type FeedbackType } from '../../services/api';
 import { getDiagnostics } from '../../lib/diagnostics';
+import { errorMessage } from '../../lib/errors';
 
 interface FeedbackModalProps {
   open: boolean;
@@ -84,7 +85,7 @@ export function FeedbackModal({ open, onClose, initialType = 'feedback' }: Feedb
       setSuccess(true);
       setTimeout(() => onClose(), 1400);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to submit. Please try again.');
+      setError(errorMessage(e, 'Failed to submit. Please try again.'));
     } finally {
       setSubmitting(false);
     }

@@ -74,9 +74,9 @@ def test_report_shows_approvers_changes_rows_and_context():
     assert "UC metastore: filed alongside this one" in linked
 
 
-def test_report_without_a_group_says_platform_admins_approve():
+def test_report_without_a_group_says_application_admins_approve():
     md = report.render_proposal_report(proposal(approver_group=None, approver_fallback=True), justification="")
-    assert "No approver group set — Platform Admins approve." in md
+    assert "No approver group set — Application Admins approve." in md
     assert "Justification: none given" in md
     assert "**Linked requests**" not in md
 
@@ -166,7 +166,7 @@ def test_revert_report_names_the_change_set_both_reasons_and_who_approves():
         approver_group=None, editor="admin@example.com", reason="",
     )
     assert "**Access Rules revert (second approval)**" in across
-    assert "Approvers: Platform Admins, because this revert changes" in across
+    assert "Approvers: Application Admins, because this revert changes" in across
     assert "Original reason: none recorded" in across and "Reason for reverting: none given" in across
 
 

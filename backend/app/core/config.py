@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     # Environment
     ENVIRONMENT: str = os.getenv("ENVIRONMENT", "production")
     
-    # Platform Admin
+    # Legacy admin contact address (not read anywhere).
     PLATFORM_ADMIN_EMAIL: str | None = os.getenv("PLATFORM_ADMIN_EMAIL", "admin@example.com")
 
     # Public base URL of this app (e.g. https://edh-ssc-....databricksapps.com).
@@ -581,7 +581,7 @@ class Settings(BaseSettings):
     # A feature no workspace lists for this many syncs in a row is archived as retired.
     PREVIEW_FEATURE_RETIRE_AFTER_SYNCS: int = int(os.getenv("PREVIEW_FEATURE_RETIRE_AFTER_SYNCS", "3"))
     # Who is emailed (and assigned the approval) when a preview is requested.
-    # Blank = no email; the approval stays in the Platform Admin inbox only.
+    # Blank = no email; the approval stays in the Application Admin inbox only.
     PREVIEW_FEATURE_WORKSPACE_APPROVER_EMAIL: str = os.getenv(
         "PREVIEW_FEATURE_WORKSPACE_APPROVER_EMAIL", ""
     )
@@ -619,7 +619,7 @@ class Settings(BaseSettings):
     # Notebook discovery walks the ENTIRE workspace tree (/Users + /Shared,
     # recursive) — by far the most expensive handler on a large workspace and,
     # in practice, the dominant cost of a whole scan. OFF by default: the scan
-    # skips the notebook handler entirely. A Platform Admin can flip this on under
+    # skips the notebook handler entirely. An Application Admin can flip this on under
     # Admin -> Settings (no redeploy) if notebook-targeting policies are needed.
     SENTINEL_SCAN_NOTEBOOKS: bool = os.getenv("SENTINEL_SCAN_NOTEBOOKS", "false").lower() == "true"
     # Hard cap on how long a SINGLE workspace's scan (auth probe + resource
@@ -914,6 +914,11 @@ class Settings(BaseSettings):
     METADATA_MIN_REASON_LENGTH: int = _metadata.get("min_reason_length", 0)
     METADATA_MIN_JUSTIFICATION_LENGTH: int = _metadata.get("min_justification_length", 10)
     METADATA_GOVERNANCE_APPROVER_GROUP: str = _metadata.get("governance_approver_group", "")
+    METADATA_AI_DESCRIPTIONS: bool = _metadata.get("ai_descriptions", True)
+    METADATA_AI_DESCRIPTION_ENDPOINT: str = _metadata.get("ai_description_endpoint", "")
+    METADATA_AI_DESCRIPTION_MAX_COLUMNS: int = _metadata.get("ai_description_max_columns", 200)
+    METADATA_AI_DESCRIPTION_BATCH_SIZE: int = _metadata.get("ai_description_batch_size", 50)
+    METADATA_AI_DESCRIPTION_GUIDANCE: str = _metadata.get("ai_description_guidance", "")
 
     # Requesters can't approve their own requests (any workflow). Platform-wide.
     APPROVALS_DENY_SELF_APPROVAL: bool = True
@@ -1184,7 +1189,7 @@ _install_sdk_timeout_defaults()
 
 
 # Environments where dev-only conveniences (the "Dev Persona Mode" role override,
-# mock entitlements, auto Platform-Admin fallback) are permitted. This is an
+# mock entitlements, auto Super Admin fallback) are permitted. This is an
 # ALLOWLIST of local/dev-flavored names, NOT a denylist of prod spellings: a
 # denylist misses the many prod tokens in the wild ("prod", "prd", "production"),
 # which is exactly how role override once leaked into a prod deploy. Anything not

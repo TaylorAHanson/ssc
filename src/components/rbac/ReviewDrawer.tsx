@@ -8,7 +8,8 @@ import { DiffView } from './DiffView';
 import { FindingList } from './FindingList';
 import { toRowChange, type StagedChange } from './staging';
 import { Drawer, ErrorBanner, Notice, SectionTitle, Spinner } from './ui';
-import { blockedPreviewOf, cellValue, conflictOf, errorMessage, plural, ruleCells, type RbacConflictDetail } from './utils';
+import { blockedPreviewOf, cellValue, conflictOf, plural, ruleCells, type RbacConflictDetail } from './utils';
+import { errorMessage } from '../../lib/errors';
 
 interface ReviewDrawerProps {
   staged: StagedChange[];

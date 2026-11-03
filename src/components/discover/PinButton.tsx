@@ -3,6 +3,7 @@ import type { MouseEvent } from 'react';
 import { Pin, PinOff } from 'lucide-react';
 import type { PinnedAssetInput } from '../../services/api';
 import { usePinnedAssets } from '../../lib/usePinnedAssets';
+import { errorMessage } from '../../lib/errors';
 
 interface PinButtonProps {
   asset: PinnedAssetInput;
@@ -32,7 +33,7 @@ export function PinButton({ asset, variant = 'icon', className = '' }: PinButton
     e.stopPropagation();
     e.preventDefault();
     setFailure(null);
-    togglePin(asset).catch((err: unknown) => setFailure(err instanceof Error ? err.message : 'Something went wrong'));
+    togglePin(asset).catch((err: unknown) => setFailure(errorMessage(err)));
   };
 
   const title = failure ?? (pinned ? 'Unpin from your pinned assets' : 'Pin for quick access from Discover');

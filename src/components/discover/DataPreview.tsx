@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, ArrowDown, ArrowUp, ArrowUpDown, Loader2, Lock, RefreshCw, Search, X } from 'lucide-react';
 import { api } from '../../services/api';
 import type { TablePreviewCell, TablePreviewResponse } from '../../services/api';
+import { errorMessage } from '../../lib/errors';
 
 interface DataPreviewProps {
   /** `catalog.schema.table` of the table or view. */
@@ -113,6 +114,11 @@ function errorCopy(kind: TablePreviewResponse['error_kind']): { title: string; b
         title: "This view can't be queried",
         body: 'A table it reads from no longer exists or was renamed.',
       };
+    case 'schema_changed':
+      return {
+        title: "This view can't be queried",
+        body: 'A column in a table it reads from changed type after the view was created. Ask the owner to recreate the view.',
+      };
     case 'no_warehouse':
       return {
         title: 'Previews are not set up',
@@ -150,7 +156,7 @@ export function DataPreview({ fqn, active, fallbackTypes, onRequestAccess }: Dat
         if (!cancelled) setLoaded({ forRequest: request, data, failure: null });
       },
       (e: unknown) => {
-        if (!cancelled) setLoaded({ forRequest: request, data: null, failure: e instanceof Error ? e.message : String(e) });
+        if (!cancelled) setLoaded({ forRequest: request, data: null, failure: errorMessage(e, 'Failed to load the preview.') });
       },
     );
     return () => {

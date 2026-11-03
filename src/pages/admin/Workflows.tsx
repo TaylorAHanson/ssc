@@ -47,6 +47,7 @@ import { LabelWithHelp, AskAgentHint } from '../../components/ui/help-tip';
 import { ChatView } from '../../components/chat/ChatView';
 import { AssistantShelf } from '../../components/assistant/AssistantShelf';
 import { ErrorBoundary } from '../../components/ErrorBoundary';
+import { errorMessage } from '../../lib/errors';
 
 const inputClass =
   'w-full border border-gray-300 rounded-md h-10 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-accent';
@@ -635,7 +636,7 @@ export function Workflows() {
           .join(' '),
       );
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to generate instructions');
+      setError(errorMessage(e, 'Failed to generate instructions'));
     } finally {
       setGeneratingInstructions(false);
     }
@@ -729,7 +730,7 @@ export function Workflows() {
     try {
       setWorkflows(await api.listWorkflows(true));
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load workflows');
+      setError(errorMessage(e, 'Failed to load workflows'));
     } finally {
       setLoading(false);
     }
@@ -779,7 +780,7 @@ export function Workflows() {
     api
       .getWorkflow(workflowParam)
       .then((full) => setFormBaselined(toForm(full)))
-      .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load workflow'));
+      .catch((e) => setError(errorMessage(e, 'Failed to load workflow')));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workflowParam]);
 
@@ -882,7 +883,7 @@ export function Workflows() {
       if (wasNew) setWorkflowParam(saved.id, { replace: true });
       await loadList();
     } catch (e) {
-      const message = e instanceof Error ? e.message : 'Failed to save workflow';
+      const message = errorMessage(e, 'Failed to save workflow');
       setError(message);
       // A rejected stale write leaves the edits on screen; offer the reload
       // explicitly so "changed underneath you" doesn't read as "your work is
@@ -919,7 +920,7 @@ export function Workflows() {
         'Reloaded the current version and kept your edits on top. Review, then Save.',
       );
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to reload workflow');
+      setError(errorMessage(e, 'Failed to reload workflow'));
     } finally {
       setSaving(false);
     }
@@ -936,7 +937,7 @@ export function Workflows() {
       if (form.id === workflow.id) setFormBaselined(toForm(updated));
       await loadList();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to change status');
+      setError(errorMessage(e, 'Failed to change status'));
     } finally {
       setBusyId(null);
     }
@@ -952,7 +953,7 @@ export function Workflows() {
       await api.setWorkflowDisabled(workflow.id, !workflow.disabled);
       await loadList();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to change workflow state');
+      setError(errorMessage(e, 'Failed to change workflow state'));
     } finally {
       setBusyId(null);
     }
@@ -975,7 +976,7 @@ export function Workflows() {
         return params;
       });
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to duplicate workflow');
+      setError(errorMessage(e, 'Failed to duplicate workflow'));
     } finally {
       setBusyId(null);
     }
@@ -993,7 +994,7 @@ export function Workflows() {
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to export workflows');
+      setError(errorMessage(e, 'Failed to export workflows'));
     }
   };
 
@@ -1010,7 +1011,7 @@ export function Workflows() {
       }
       await loadList();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to delete workflow');
+      setError(errorMessage(e, 'Failed to delete workflow'));
     } finally {
       setBusyId(null);
     }

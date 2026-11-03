@@ -11,7 +11,7 @@ One workflow carries two shapes of request:
   fact with a digest of the edit, and the prepare step refuses ``changes`` without
   a matching fact, so a chat submission can't pass itself off as an admin edit;
 * a revert held by the two-person rule: ``revert_of`` (a change set id) and its
-  ``plane`` (None when the change set spans several types; Platform Admins
+  ``plane`` (None when the change set spans several types; Application Admins
   approve those), filed from History by ``submit_revert`` with the same fact.
 
 The prepare step works out the exact row changes and who approves, and stores
@@ -443,7 +443,7 @@ def submit_revert(
     """File a revert held by the two-person rule; the admin reverting is the requester.
 
     ``plane`` is the one type the change set touched, or None when it spans
-    several: a revert can't be split, so Platform Admins approve those. Re-checks
+    several: a revert can't be split, so Application Admins approve those. Re-checks
     the revert (reason, policy, rows unchanged since) and raises the ledger's
     errors (VersionConflict, ChangeBlocked, LedgerError) so the caller maps them
     as for a direct revert.
@@ -533,7 +533,7 @@ def prepare_step(
 
 def _approvers(group: Optional[str]) -> List[str]:
     # For specs that still route the gate with approvers_from. Empty -> the gate's
-    # approval has no assignee, which only Platform Admins can act on.
+    # approval has no assignee, which only Application Admins can act on.
     return [group] if group else []
 
 
@@ -638,7 +638,7 @@ def _prepare_revert(db: Session, request, ctx: Dict[str, Any]) -> Dict[str, Any]
                                                   report_markdown=markdown))
     logger.info("Access Rules: prepared revert %s of change set %s (%s, %d rows, approvers %s)",
                 request.id, change_set_id, ", ".join(planes), len(preview.diffs),
-                group or "Platform Admins")
+                group or "Application Admins")
     label = _planes_label(planes)
     return {
         "plane": plane,

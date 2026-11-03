@@ -308,9 +308,9 @@ export function EmbeddedAppsEditor({
               onChange={(v) => update(i, { ...app, description: v })}
             />
             <TextField
-              label="Allowed personas (comma-separated; blank = everyone)"
+              label="Allowed roles (comma-separated; blank = everyone)"
               value={personasToStr(app.allowed_personas)}
-              placeholder="Platform Admin"
+              placeholder="Application Admin, Ops Admin"
               onChange={(v) => update(i, { ...app, allowed_personas: strToPersonas(v) })}
             />
           </div>

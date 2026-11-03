@@ -123,7 +123,11 @@ function ChangeRow({ target }: { target: StagedTarget }) {
       {target.unset.map((k) => (
         <TagChip key={k} tagKey={k} value={target.baseTags[k]} tone="removed" />
       ))}
-      {target.comment && <span className="text-xs text-amber-800">{target.comment.value === null ? 'Description cleared' : 'Description changed'}</span>}
+      {target.comment && (
+        <span className={target.comment.ai ? 'text-xs text-violet-800' : 'text-xs text-amber-800'}>
+          {target.comment.value === null ? 'Description cleared' : target.comment.ai ? 'AI-suggested description, not reviewed yet' : 'Description changed'}
+        </span>
+      )}
       <button
         type="button"
         onClick={() => remove(target.key)}

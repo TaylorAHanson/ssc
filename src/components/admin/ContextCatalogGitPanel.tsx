@@ -13,6 +13,7 @@ import {
 import { Button } from '../ui/button';
 import { api } from '../../services/api';
 import type { ContextGitStatus, ContextGitSyncReport } from '../../services/api';
+import { errorMessage } from '../../lib/errors';
 
 interface Props {
   /** Called with every loaded status, so the page can hide edit controls. */
@@ -76,7 +77,7 @@ export function ContextCatalogGitPanel({ onStatusChange, onSynced }: Props) {
       setNotice(summarize(report));
       onSynced?.();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Sync failed');
+      setError(errorMessage(e, 'Sync failed'));
     } finally {
       setSyncing(false);
       load();

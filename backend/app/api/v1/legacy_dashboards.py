@@ -166,10 +166,9 @@ def list_legacy_dashboards(
     """All mappings, optionally scoped to the metric view's domain / subdomain.
 
     Mappings to a metric view hidden from Discover by tag are left out, except
-    for a Platform Admin passing ``include_hidden`` (the admin editor), who sees
+    for a legacy-dashboard admin passing ``include_hidden`` (the admin editor), who sees
     them flagged ``hidden_from_discover``.
     """
-    from app.services.approval_scope import is_platform_admin
     from app.services.discover_visibility import load_visibility
 
     q = db.query(LegacyDashboardMappingModel)
@@ -178,7 +177,7 @@ def list_legacy_dashboards(
     rows = _serialize_all(db, q.order_by(LegacyDashboardMappingModel.dashboard).all())
     vis = load_visibility(db)
     if vis.active:
-        keep_hidden = include_hidden and is_platform_admin(getattr(current_user, "roles", None))
+        keep_hidden = include_hidden and current_user.can("legacy_dashboards.manage")
         for r in rows:
             r["hidden_from_discover"] = vis.is_hidden_id(r["metric_view_id"])
         rows = [r for r in rows if keep_hidden or not r["hidden_from_discover"]]
@@ -194,7 +193,7 @@ def list_legacy_dashboards(
 def create_legacy_dashboard(
     entry: LegacyDashboardIn,
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.require_role("Platform Admin")),
+    current_user: User = Depends(deps.require_capability("legacy_dashboards.manage")),
 ) -> Dict[str, Any]:
     m = LegacyDashboardMappingModel(id=str(uuid.uuid4()))
     mv = _apply(db, entry, m, current_user)
@@ -210,7 +209,7 @@ def update_legacy_dashboard(
     mapping_id: str,
     entry: LegacyDashboardIn,
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.require_role("Platform Admin")),
+    current_user: User = Depends(deps.require_capability("legacy_dashboards.manage")),
 ) -> Dict[str, Any]:
     m = db.query(LegacyDashboardMappingModel).filter(LegacyDashboardMappingModel.id == mapping_id).first()
     if not m:
@@ -226,7 +225,7 @@ def update_legacy_dashboard(
 def delete_legacy_dashboard(
     mapping_id: str,
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.require_role("Platform Admin")),
+    current_user: User = Depends(deps.require_capability("legacy_dashboards.manage")),
 ) -> Dict[str, Any]:
     m = db.query(LegacyDashboardMappingModel).filter(LegacyDashboardMappingModel.id == mapping_id).first()
     if not m:
@@ -241,7 +240,7 @@ def delete_legacy_dashboard(
 def import_legacy_dashboards(
     payload: LegacyDashboardImport,
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.require_role("Platform Admin")),
+    current_user: User = Depends(deps.require_capability("legacy_dashboards.manage")),
 ) -> Dict[str, Any]:
     """Add many mappings at once (pasted CSV). Bad rows are reported, not fatal; repeats are skipped."""
     created, skipped, errors = 0, 0, []

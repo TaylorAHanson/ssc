@@ -12,6 +12,7 @@
  * we surface a small error instead of crashing the chat.
  */
 import { useEffect, useRef, useState } from 'react';
+import { errorMessage } from '../../lib/errors';
 
 export interface VegaLiteChartProps {
     /** The Vega-Lite spec object as Genie returned it. */
@@ -84,7 +85,7 @@ export function VegaLiteChart({ spec, data, height = 280, onDatumClick }: VegaLi
                 setReady(true);
             } catch (err) {
                 if (cancelled) return;
-                setError(err instanceof Error ? err.message : String(err));
+                setError(errorMessage(err, 'Could not render the chart.'));
             }
         })();
 

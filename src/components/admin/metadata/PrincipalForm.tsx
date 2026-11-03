@@ -7,7 +7,8 @@ import { Switch } from '../../ui/switch';
 import { Textarea } from '../../ui/textarea';
 import { ErrorBanner, Modal, Notice } from '../../rbac/ui';
 import { useMetadata } from './context';
-import { OPERATION_LABELS, errorMessage } from './format';
+import { OPERATION_LABELS } from './format';
+import { errorMessage } from '../../../lib/errors';
 
 const lines = (text: string) => [...new Set(text.split(/[\n,]/).map((s) => s.trim()).filter(Boolean))];
 

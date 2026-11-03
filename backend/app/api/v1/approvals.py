@@ -13,9 +13,9 @@ from app.workflows.graphs import editable_states
 from app.api.deps import get_current_user
 from app.models.user import User
 from app.services.approval_scope import (
-    allowed_approval_types,
     approval_visibility_filter,
     in_group,
+    type_visible,
 )
 from app.api.v1.requests import is_own_request, self_approval_blocked
 from app.services.rbac.inflight import LEGACY_PREPARED_CONTEXT_KEY, PREPARED_CONTEXT_KEY
@@ -32,7 +32,7 @@ class InboxApproval(Approval):
     isOwnRequest: bool = False
     # ...and APPROVALS_DENY_SELF_APPROVAL is on: they may reject (withdraw) it, not approve it.
     selfApprovalBlocked: bool = False
-    # A Platform Admin may Edit & Restart the request from this gate.
+    # The caller may Edit & Restart the request from this gate (an Application Admin step).
     canEditParameters: bool = False
     # Display name of the workflow behind requestType; None when no workflow row has one.
     workflowName: Optional[str] = None
@@ -195,6 +195,7 @@ def _map_approval(
         isOwnRequest=bool(current_user) and is_own_request(requester, current_user),
         selfApprovalBlocked=bool(current_user) and self_approval_blocked(requester, current_user),
         canEditParameters=(approval_model.approval_type == "platform_admin"
+                           and bool(current_user) and current_user.can("requests.edit_parameters")
                            and bool(editable_states(request_model.type))),
         workflowName=workflow_name,
         approverLabel=approver_label,
@@ -266,12 +267,10 @@ def get_approval(
     # second hand-maintained copy: this one had already drifted (it predated
     # ``manual_task``, so a manual task nobody was assigned 403'd here while the
     # list endpoint showed it).
-    allowed_types = allowed_approval_types(current_user.roles)
-
     is_assigned = approval_model.assigned_to_email == current_user.email
     is_delegated = approval_model.delegated_to_email == current_user.email
     is_role_assigned = in_group(current_user.entitlements, approval_model.assigned_to_role)
-    is_role_based = approval_model.approval_type in allowed_types
+    is_role_based = type_visible(approval_model, current_user.roles)
     
     if not (is_assigned or is_delegated or is_role_assigned or is_role_based):
         raise HTTPException(status_code=403, detail="Not authorized to view this approval")

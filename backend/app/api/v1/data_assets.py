@@ -697,6 +697,10 @@ def _classify_uc_error(message: str) -> str:
     # "does not exist" since the message contains that too.
     if "uc_dependency_does_not_exist" in m:
         return "broken_dependency"
+    # A view whose source column changed type (e.g. INT -> BIGINT) after the view
+    # was created; it fails until its owner recreates it.
+    if "cannot_up_cast_datatype" in m or "incompatible_view_schema_change" in m:
+        return "schema_changed"
     if "does not exist" in m:
         return "not_found"
     if ("permission" in m or "not authorized" in m or "access denied" in m or "forbidden" in m
@@ -844,7 +848,7 @@ async def get_databricks_table_preview(table_name: str, req: Request, limit: Opt
     ``DISCOVER_PREVIEW_ROW_LIMIT``; ``limit`` may lower it, never raise it.
     Like the sibling table endpoints, failures return HTTP 200 with ``error`` /
     ``error_kind`` (``permission_denied``, ``not_found``, ``broken_dependency``,
-    ``no_warehouse``, ``no_obo`` or ``error``); a malformed name is a 400.
+    ``schema_changed``, ``no_warehouse``, ``no_obo`` or ``error``); a malformed name is a 400.
     """
     from fastapi import HTTPException
     from app.core.config import settings

@@ -149,6 +149,8 @@ export interface WhoAmI {
   /** full = every object; owned = only objects the caller owns; none = no access. */
   browse_scope?: 'full' | 'owned' | 'none';
   message?: string | null;
+  /** May read sync history and start a check, even without browse rights (Ops Admins, admins). */
+  can_view_runs?: boolean;
 }
 
 // --- Changes -------------------------------------------------------------------------
@@ -520,7 +522,10 @@ export interface KeyPolicy {
   pattern?: string | null;
   editor_groups: string[];
   sensitive: boolean;
+  /** Can't be removed from objects it applies to; its value can still change. */
   required: boolean;
+  /** Can't be set without a value (no key-only or blank tag). Independent of `required`. */
+  value_required?: boolean;
   description?: string | null;
 }
 
@@ -559,7 +564,9 @@ export interface MetadataConfig {
   circuit_breaker_tripped: boolean;
   /** The paused sync to review while syncing is paused. */
   circuit_breaker_run_id?: string | null;
-  /** Whether this user may resume or clear a paused sync (Platform Admins). */
+  /** Whether this user may start a check (Super, Ops and editor roles). */
+  can_run_sync?: boolean;
+  /** Whether this user may resume or clear a paused sync (Super and Governance Admins). */
   can_resume_sync?: boolean;
   /** Catalog names or patterns this deployment manages; empty = every catalog, but plan only. */
   managed_catalogs: string[];
@@ -567,6 +574,37 @@ export interface MetadataConfig {
   enforce_schemas?: string[];
   /** Set when enforce is configured but can't run because no catalogs or schemas are listed. */
   enforce_blocked_reason?: string | null;
+  /** POST /describe is on: show the AI generate controls. */
+  ai_descriptions_enabled?: boolean;
+}
+
+// --- AI-generated descriptions ----------------------------------------------------------
+
+export type DescribeMode = 'empty_only' | 'all';
+export type DescribeSkipReason = 'has_description' | 'unknown_column' | 'over_limit' | 'no_suggestion' | 'model_error';
+
+export interface DescribeRequest {
+  /** A table or view: catalog.schema.table, or its fqn_key. */
+  object: string;
+  /** Omit for every column; [] for none (only the table, with include_table). */
+  columns?: string[] | null;
+  mode?: DescribeMode;
+  include_table?: boolean;
+}
+
+export interface DescribeSkip {
+  /** null = the table's own description. */
+  column?: string | null;
+  reason: DescribeSkipReason;
+}
+
+/** Suggestions only: nothing is saved until they're staged, reviewed and submitted. */
+export interface DescribeResult {
+  table?: string | null;
+  /** Column name (as Unity Catalog spells it) -> suggested description. */
+  columns: Record<string, string>;
+  skipped: DescribeSkip[];
+  model: string;
 }
 
 // --- Adopt and import ----------------------------------------------------------------

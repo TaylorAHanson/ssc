@@ -522,10 +522,10 @@ class _Evaluator:
             return f'{privilege} can\'t be granted on "{kind}": it isn\'t a securable type Access Rules cover.'
         allowed = self.allowed.get(kind)
         if not allowed:
-            return (f"Nothing can be granted on {_a(kind)} yet, so {privilege} can't be added. A Platform Admin "
+            return (f"Nothing can be granted on {_a(kind)} yet, so {privilege} can't be added. An Application Admin "
                     f"can allow privileges on it under {_ALLOW_LIST_SETTING}.")
         return (f"{privilege} isn't allowed on {_a(kind)}. Allowed on {_a(kind)}: {_listing(allowed)}. "
-                f"A Platform Admin can add {privilege} under {_ALLOW_LIST_SETTING}.")
+                f"An Application Admin can add {privilege} under {_ALLOW_LIST_SETTING}.")
 
     def check_privileges(self, change: _Change, after: RuleRow) -> None:
         kind = layout.normalize_securable_type(after.securable_type)
@@ -579,7 +579,7 @@ class _Evaluator:
             if not value or cell_key(value) in {cell_key(o) for o in options}:
                 continue
             message = (f'{_label(change.plane, fld)} "{value}" isn\'t one of the {setting.lower()} set up for '
-                       f"{env.key}. Use one of: {_listing(options)}. A Platform Admin can add it to {env.key}'s "
+                       f"{env.key}. Use one of: {_listing(options)}. An Application Admin can add it to {env.key}'s "
                        f"{setting} under {_ENVIRONMENTS_SETTING}.")
             for principal in change.added_principals or [None]:
                 self.add(change, "value_not_in_options", _SELF_SERVICE, message, field=fld, principal=principal)

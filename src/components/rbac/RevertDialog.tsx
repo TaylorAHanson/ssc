@@ -8,7 +8,8 @@ import { DiffView } from './DiffView';
 import { FindingList } from './FindingList';
 import { ErrorBanner, Modal, Notice, SectionTitle, Spinner } from './ui';
 import { useLoad } from './useLoad';
-import { blockedPreviewOf, conflictOf, errorMessage, formatTime, sourceLabel } from './utils';
+import { blockedPreviewOf, conflictOf, formatTime, sourceLabel } from './utils';
+import { errorMessage } from '../../lib/errors';
 
 /** Previews the inverse of a change set and records it, with its own reason. */
 export function RevertDialog({ changeSet, sheets, onClose, onDone, minReasonLength }: {

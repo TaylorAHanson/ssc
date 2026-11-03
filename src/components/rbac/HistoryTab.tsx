@@ -10,7 +10,8 @@ import { DiffView } from './DiffView';
 import { Badge, EmptyState, ErrorBanner, Pager, Skeleton, Spinner, type Tone, type ToastMessage } from './ui';
 import { useLoad } from './useLoad';
 import { useResizableColumns } from './useResizableColumns';
-import { CELL, TEXT_CELL, errorMessage, formatTime, loadSheets, relativeTime, sourceLabel } from './utils';
+import { CELL, TEXT_CELL, formatTime, loadSheets, relativeTime, sourceLabel } from './utils';
+import { errorMessage } from '../../lib/errors';
 import { RevertDialog } from './RevertDialog';
 
 const LIMIT = 50;

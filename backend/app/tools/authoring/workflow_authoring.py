@@ -6,8 +6,8 @@ validate / preview (dry-run) a candidate graph, and — only on explicit admin
 confirmation — save a draft or publish.
 
 Design notes:
-  * All gated with ``required_role="Governance Admin"`` (Platform Admins always
-    pass; Governance Admins match by name; others are filtered out upstream).
+  * All gated with ``required_capability="workflows.author"`` (Super, Application
+    and Governance Admins; others are filtered out upstream).
   * Read tools never mutate. ``save_workflow_draft`` / ``publish_workflow`` are
     ``app_write`` (DB-only), so they route through the governed ToolExecutor and
     are audited but don't trigger infra approval gates.
@@ -20,7 +20,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from app.tools.mcp import tool
 
-_AUTHOR_ROLE = "Governance Admin"
+_AUTHOR_CAPABILITY = "workflows.author"
 
 # Longest ``run_workflow_tests`` will hold a chat turn waiting for verdicts.
 # Nothing streams to the browser while a tool runs, so the turn must stay well
@@ -69,7 +69,7 @@ _GATE_TYPE_DETAILS: Dict[str, Dict[str, Any]] = {
     },
     "platform_admin": {
         "waits_for": "a human approval",
-        "when": "a platform/governance admin must sign off.",
+        "when": "an Application Admin must sign off (the gate type key stays 'platform_admin').",
         "extra_fields": [],
     },
     "data_owner": {
@@ -158,7 +158,7 @@ def _composable_keys(db) -> set:
 @tool(
     name="list_workflow_building_blocks",
     description="List available step tools, gate types, and expression operators for authoring no-code workflows.",
-    required_role=_AUTHOR_ROLE,
+    required_capability=_AUTHOR_CAPABILITY,
     friendly_label="Loading workflow building blocks...",
 )
 async def list_workflow_building_blocks() -> Dict[str, Any]:
@@ -214,7 +214,7 @@ async def list_workflow_building_blocks() -> Dict[str, Any]:
                                  "approver_group tag off the request's assets, OR "
                                  "{source:'access_rule_type', rule_type_from:<expr=plane>} for the "
                                  "approver group set per type of access rule in Admin -> Settings -> "
-                                 "Access Rules (Platform Admins when that type's group is blank); use it "
+                                 "Access Rules (Application Admins when that type's group is blank); use it "
                                  "on a 'platform_admin' gate after rbac_prepare_access_change, OR "
                                  "{source:'metadata_owner', role:'owner'|'governance'} after "
                                  "prepare_metadata_change: the owner groups of the objects in the "
@@ -288,7 +288,7 @@ class SearchSimilarWorkflowsInput(BaseModel):
 @tool(
     name="search_similar_workflows",
     description="Search existing workflows by keyword matching against key, name, and goal to find reuse candidates.",
-    required_role=_AUTHOR_ROLE,
+    required_capability=_AUTHOR_CAPABILITY,
     args_schema=SearchSimilarWorkflowsInput,
     friendly_label="Searching for similar workflows...",
 )
@@ -357,7 +357,7 @@ class ResearchWorkflowContextInput(BaseModel):
 @tool(
     name="research_workflow_context",
     description="Search Context Catalog knowledge domains for naming conventions, approval norms, and policy requirements relevant to a workflow topic.",
-    required_role=_AUTHOR_ROLE,
+    required_capability=_AUTHOR_CAPABILITY,
     args_schema=ResearchWorkflowContextInput,
     friendly_label="Researching your organization's conventions...",
 )
@@ -452,7 +452,7 @@ class GetWorkflowInput(BaseModel):
 @tool(
     name="get_workflow",
     description="Fetch a workflow definition by key (graph_spec, instructions_markdown, metadata, and status).",
-    required_role=_AUTHOR_ROLE,
+    required_capability=_AUTHOR_CAPABILITY,
     args_schema=GetWorkflowInput,
     friendly_label="Loading workflow...",
 )
@@ -495,7 +495,7 @@ class ValidateSpecInput(BaseModel):
 @tool(
     name="validate_workflow_spec",
     description="Structurally validate a candidate workflow graph_spec (stage shapes, gates, step tools, expressions) without saving.",
-    required_role=_AUTHOR_ROLE,
+    required_capability=_AUTHOR_CAPABILITY,
     args_schema=ValidateSpecInput,
     friendly_label="Validating workflow...",
 )
@@ -535,7 +535,7 @@ class PreviewSpecInput(BaseModel):
 @tool(
     name="preview_workflow_spec",
     description="Dry-run a workflow graph_spec against sample request context to project gate evaluations, tool args, and fan-out.",
-    required_role=_AUTHOR_ROLE,
+    required_capability=_AUTHOR_CAPABILITY,
     args_schema=PreviewSpecInput,
     friendly_label="Previewing workflow...",
 )
@@ -566,7 +566,7 @@ class EvaluateSpecInput(BaseModel):
 @tool(
     name="evaluate_workflow_spec",
     description="Evaluate a workflow graph_spec for safety and completeness, producing risk/quality scores and policy findings.",
-    required_role=_AUTHOR_ROLE,
+    required_capability=_AUTHOR_CAPABILITY,
     args_schema=EvaluateSpecInput,
     friendly_label="Evaluating workflow...",
 )
@@ -634,7 +634,7 @@ class SaveDraftInput(BaseModel):
 @tool(
     name="save_workflow_draft",
     description="Save a workflow graph_spec as a draft (creates new or updates existing). You do NOT need permission to save a draft; ask before PUBLISHING, not before saving. Environments where a live save would matter have authoring locked, so do not ask to take a published workflow offline first.",
-    required_role=_AUTHOR_ROLE,
+    required_capability=_AUTHOR_CAPABILITY,
     args_schema=SaveDraftInput,
     side_effect_class="app_write",
     friendly_label="Saving workflow draft...",
@@ -874,7 +874,7 @@ class SaveWorkflowTestsInput(BaseModel):
 @tool(
     name="save_workflow_tests",
     description="Save behavioral test cases for an authored workflow draft. CALL run_workflow_tests in the same turn after saving test cases.",
-    required_role=_AUTHOR_ROLE,
+    required_capability=_AUTHOR_CAPABILITY,
     args_schema=SaveWorkflowTestsInput,
     side_effect_class="app_write",
     friendly_label="Saving workflow tests...",
@@ -981,7 +981,7 @@ class ListWorkflowTestsInput(BaseModel):
 @tool(
     name="list_workflow_tests",
     description="List behavioral test cases and latest run results (verdicts, scores, rationales, transcripts) for a workflow.",
-    required_role=_AUTHOR_ROLE,
+    required_capability=_AUTHOR_CAPABILITY,
     args_schema=ListWorkflowTestsInput,
     friendly_label="Reading workflow tests...",
 )
@@ -1083,7 +1083,7 @@ class RunWorkflowTestsInput(BaseModel):
 @tool(
     name="run_workflow_tests",
     description="Execute a workflow's behavioral test cases in a sandboxed agent loop and return judge scores/verdicts.",
-    required_role=_AUTHOR_ROLE,
+    required_capability=_AUTHOR_CAPABILITY,
     args_schema=RunWorkflowTestsInput,
     side_effect_class="app_write",
     friendly_label="Running workflow tests...",
@@ -1235,7 +1235,7 @@ class PublishWorkflowInput(BaseModel):
 @tool(
     name="publish_workflow",
     description="Publish a validated workflow draft so it governs live requests of its request_type. Requires explicit admin confirmation.",
-    required_role=_AUTHOR_ROLE,
+    required_capability=_AUTHOR_CAPABILITY,
     args_schema=PublishWorkflowInput,
     side_effect_class="app_write",
     friendly_label="Publishing workflow...",

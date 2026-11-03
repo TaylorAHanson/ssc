@@ -3,6 +3,7 @@ import { AlertTriangle, CheckCircle2, Loader2, Upload, X } from 'lucide-react';
 import { Button } from '../ui/button';
 import { api } from '../../services/api';
 import type { ContextCatalogBundle, ContextImportReport } from '../../services/api';
+import { errorMessage } from '../../lib/errors';
 
 interface Props {
   onImported: () => void;
@@ -42,7 +43,7 @@ export function ImportContextCatalogModal({ onImported, onClose }: Props) {
       setReport(r);
       onImported();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Import failed');
+      setError(errorMessage(e, 'Import failed'));
     } finally {
       setImporting(false);
     }

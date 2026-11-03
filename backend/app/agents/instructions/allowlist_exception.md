@@ -42,4 +42,4 @@ Once all parameters are gathered, call `execute_workflow` with:
 ```
 
 ## Post-Execution
-Tell the user that their request has been submitted to the Platform Admin for approval. Inform them that the system will temporarily ignore their app until the ticket is reviewed.
+Tell the user that their request has been submitted to an Application Admin for approval. Inform them that the system will temporarily ignore their app until the ticket is reviewed.

@@ -8,7 +8,8 @@ import {
   adminSyncTrainingCatalog,
   type AcademyCatalogStatus, type AcademyCourse, type AcademySuggestion, type AcademySuggestions,
 } from '../../../services/api';
-import { errorMessage, plural, relativeTime } from '../metadata/format';
+import { plural, relativeTime } from '../metadata/format';
+import { errorMessage } from '../../../lib/errors';
 import { useDebounced } from '../metadata/useAsync';
 import { settingsGroupPath, TRAINING_GROUP } from '../../../pages/admin/settingsGroups';
 import { academyMeta } from './academy';

@@ -1,6 +1,7 @@
 # Settings, features and access
 
-Platform admins configure {{brand_name}} under **Admin → Settings**, without a
+Super Admins and Application Admins configure {{brand_name}} under
+**Admin → Settings**, without a
 redeploy. This page explains how the settings are organized and covers the
 ones you're most likely to change.
 
@@ -55,25 +56,56 @@ it from other pages.
 
 **General → Roles & Access** controls who holds which role. People get roles
 through **Role Mappings**, which link a group, role or user in Databricks to a
-role in {{brand_name}}.
+role in {{brand_name}}. Someone with several roles gets everything each of them
+allows.
 
-To add one, select **Add Mapping**, enter the **External Identity (SCIM)**
-exactly as it's named in Databricks (a group name, role or user email), and
-pick the **Internal Role**. Everyone in that group gets the role. Roles decide
-which sidebar sections people see and which approvals they can act on.
+| Role | What it's for |
+|---|---|
+| **Super Admin** | Everything. The only role that changes role mappings, and the only one that can act on any approval as a break-glass override. |
+| **Application Admin** | Runs the app: settings, the Admin pages, the Tool Registry, Workflow Studio, Application Admin approvals and Edit & Restart. Doesn't hold governance, security or finance permissions. This role used to be called Platform Admin. |
+| **Governance Admin** | The governance tools in Watch Tower, Access Rules administration, Governance Admin approvals and the assistant's contract and data product drafting tools. |
+| **Security Admin** | Security Admin approvals. |
+| **Finance Admin** | Finance Admin approvals. |
+| **Ops Admin** | Operations: sees every request and delegation, watches OmniGuard runs and clears stuck ones, and uses the workspace diagnostics tools, including the URL reachability check. |
+
+The assistant no longer has its own cost, audit-log or privilege-audit tools.
+Cost and usage analysis, audit-log investigations and Unity Catalog-wide access
+audits are better done in Databricks Genie Code, which runs as you in your
+workspace; ask the assistant and it gives you a prompt to start from. See
+[Work that happens in Databricks](../using-the-assistant.md#work-that-happens-in-databricks).
+| **User** | Self-service: asking the assistant, filing and tracking your own requests. |
+
+Below the mappings, **Roles** lists each role with the groups and people mapped
+to it, and **What each role can do** shows every permission, grouped by area,
+with a check under each role that holds it. The Super Admin column is always
+fully checked. A permission marked with a number also goes to the roles listed
+in a setting, named in the footnote with its current value: for example the
+Metadata Manager editor roles, or the Access Rules viewer roles. The grid is
+read-only; change who holds a role through the mappings.
+
+To add a mapping, select **Add Mapping**, enter the **External Identity
+(SCIM)** exactly as it's named in Databricks (a group name, role or user
+email), and pick the **Internal Role**. Everyone in that group gets the role.
+Only Super Admins see **Add Mapping**, **Edit** and **Delete**; Application
+Admins see the page read-only.
+
+When the Platform Admin role was renamed, every mapping to it became an
+Application Admin mapping, and the same group or person was also mapped to
+Super Admin so nobody lost access. Delete the Super Admin mappings you don't
+want to keep.
 
 ## Approvals
 
 **Requests & Approvals → Approvals** holds settings that apply to every
 workflow. **Block approving your own request** is on by default: nobody can
-approve a request they submitted, Platform Admins included, so another
+approve a request they submitted, Super Admins included, so another
 approver must. Rejecting your own request, which withdraws it, is still
 allowed.
 
 Some approvals go to a Databricks group rather than a role, such as the
 approver groups for [access rules](access-rules.md). Anyone in that group sees
 the approval and can act on it; there's no role mapping to add. The approval
-card names the group, or says Platform Admins approve because none is set.
+card names the group, or says Application Admins approve because none is set.
 
 ## Other settings
 

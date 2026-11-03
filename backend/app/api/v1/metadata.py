@@ -17,15 +17,15 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.api import deps, identity
-from app.core import settings_store
+from app.core import capabilities, settings_store
 from app.core.config import settings
 from app.core.feature_flags import is_feature_enabled
 from app.db.session import get_db
 from app.models.user import User
-from app.services.approval_scope import is_platform_admin
 from app.services.metadata import (
     authz,
     changes,
+    describe,
     detail,
     environments,
     expand,
@@ -49,6 +49,8 @@ from app.services.metadata.types import (
     ChangeSetPage,
     ChangeSource,
     DatasetSummary,
+    DescribeRequest,
+    DescribeResult,
     ImportRequest,
     KeyInfo,
     MetadataConfig,
@@ -124,20 +126,33 @@ def _browse_all(db: Session, user: User, what: str) -> Actor:
 
 
 def _admin(db: Session, user: User, action: str) -> Actor:
+    """``metadata.admin`` (Super Admin and METADATA_EDITOR_ROLES); never a service principal."""
     actor = _actor(db, user)
     if not actor.is_admin:
-        raise Forbidden(f"Only Platform Admins and Metadata Manager editors can {action}.")
+        raise Forbidden(f"Only Super Admins and Metadata Manager editors can {action}.")
     return actor
 
 
-def _is_platform_admin(user: User) -> bool:
-    return user.actor_type != "service_principal" and is_platform_admin(list(user.roles or []))
+def _person_can(user: User, capability_id: str) -> bool:
+    """A signed-in person holding the capability; service principals hold none of these."""
+    return user.actor_type != "service_principal" and user.can(capability_id)
 
 
-def _platform_admin(db: Session, user: User, action: str) -> Actor:
-    if not _is_platform_admin(user):
-        raise Forbidden(f"Only Platform Admins can {action}.")
+def _holders(capability_id: str) -> str:
+    labels = [f"{r}s" for r in [capabilities.SUPER_ADMIN, *capabilities.roles_for(capability_id)]]
+    return labels[0] if len(labels) == 1 else f"{', '.join(labels[:-1])} and {labels[-1]}"
+
+
+def _require(db: Session, user: User, capability_id: str, action: str) -> Actor:
+    if not _person_can(user, capability_id):
+        raise Forbidden(f"Only {_holders(capability_id)} can {action}.")
     return _actor(db, user)
+
+
+def _runs_viewer(db: Session, user: User) -> None:
+    """``metadata.runs`` holders, plus anyone who sees every object (browse roles, registered principals)."""
+    if not _person_can(user, "metadata.runs"):
+        _browse_all(db, user, "Sync runs")
 
 
 def _source(request: Request, actor: Actor) -> ChangeSource:
@@ -177,7 +192,8 @@ def _whoami(db: Session, request: Request) -> WhoAmI:
     recognized = "service_principal" if actor.actor_type == "service_principal" else "user"
     message = {"owned": authz.OWNED_ONLY_MESSAGE, "none": authz.NO_BROWSE_MESSAGE}.get(browse.level)
     return WhoAmI(actor=actor, recognized_as=recognized, headers_seen=headers_seen, identifiers=ids,
-                  can_browse=browse.level != "none", browse_scope=browse.level, message=message)
+                  can_browse=browse.level != "none", browse_scope=browse.level, message=message,
+                  can_view_runs=_person_can(user, "metadata.runs"))
 
 
 @router.get("/whoami", response_model=WhoAmI)
@@ -187,7 +203,11 @@ async def whoami(request: Request, db: Session = Depends(get_db)) -> WhoAmI:
 
 
 def _config(db: Session, user: User) -> MetadataConfig:
-    _, browse = _browse(db, user)
+    _, browse = _scoped(db, user)
+    runs = _person_can(user, "metadata.runs")
+    if browse.level == "none" and not runs:
+        raise Forbidden(authz.NO_BROWSE_MESSAGE)
+    sees_sync = browse.full or runs
     settings_store.refresh_overrides(db, "METADATA_")
     breaker = reconciler.circuit_breaker_state(db)
     return MetadataConfig(
@@ -202,14 +222,16 @@ def _config(db: Session, user: User) -> MetadataConfig:
         min_justification_length=settings.METADATA_MIN_JUSTIFICATION_LENGTH,
         new_object_policy="ignore" if settings.METADATA_NEW_OBJECT_POLICY == "ignore" else "adopt",
         last_sweep_at=observed.last_sweep_at(db),
-        unread_catalogs=observed.unread_catalogs(db) if browse.full else [],
-        unread_reasons=observed.unread_reasons(db) if browse.full else {},
+        unread_catalogs=observed.unread_catalogs(db) if sees_sync else [],
+        unread_reasons=observed.unread_reasons(db) if sees_sync else {},
         circuit_breaker_tripped=breaker is not None,
-        circuit_breaker_run_id=(breaker or {}).get("run_id") if browse.full else None,
-        can_resume_sync=_is_platform_admin(user),
+        circuit_breaker_run_id=(breaker or {}).get("run_id") if sees_sync else None,
+        can_run_sync=runs,
+        can_resume_sync=_person_can(user, "metadata.resume_paused_sync"),
         managed_catalogs=scope.patterns(),
         enforce_schemas=scope.enforce_patterns(),
         enforce_blocked_reason=scope.enforce_blocked_reason(),
+        ai_descriptions_enabled=describe.enabled(),
     )
 
 
@@ -316,6 +338,25 @@ async def list_datasets(
             return search.list_datasets(db, browse=browse)
 
         return await asyncio.to_thread(run)
+
+
+@router.post("/describe", response_model=DescribeResult)
+async def describe_object(
+    body: DescribeRequest, db: Session = Depends(get_db), user: User = Depends(deps.get_current_user_or_principal),
+) -> DescribeResult:
+    """AI-drafted descriptions for a table and its columns, for the caller to review. Writes nothing."""
+    with _http_errors():
+        def prepare() -> describe.DescribePlan:
+            try:
+                actor, browse = _browse(db, user)
+                settings_store.refresh_overrides(db, "METADATA_AI_")
+                return describe.prepare(db, actor, body, browse=browse)
+            finally:
+                # Hand the connection back before the model calls, which can take a minute.
+                db.close()
+
+        plan = await asyncio.to_thread(prepare)
+        return await describe.generate(plan)
 
 
 @router.get("/drift", response_model=SearchResult)
@@ -530,7 +571,7 @@ async def list_runs(
 ) -> ReconcileRunPage:
     with _http_errors():
         def run() -> ReconcileRunPage:
-            _browse_all(db, user, "Sync runs")
+            _runs_viewer(db, user)
             return reconciler.list_runs(db, page=page, page_size=page_size)
 
         return await asyncio.to_thread(run)
@@ -542,7 +583,7 @@ async def get_run(
 ) -> ReconcileResult:
     with _http_errors():
         def run() -> ReconcileResult:
-            _browse_all(db, user, "Sync runs")
+            _runs_viewer(db, user)
             return reconciler.get_run(db, run_id)
 
         return await asyncio.to_thread(run)
@@ -555,7 +596,7 @@ async def start_run(
     """Run the reconciler now: drain the queue, or sweep (``plan`` sweeps without writing)."""
     with _http_errors():
         def run() -> ReconcileResult:
-            actor = _admin(db, user, "run the reconciler")
+            actor = _require(db, user, "metadata.runs", "run the reconciler")
             if body.override_circuit_breaker:
                 raise MetadataError("Resume a paused sync from Sync history (POST /runs/paused/resume with its "
                                     "run_id), so only the removals that were reviewed are applied.")
@@ -583,7 +624,7 @@ async def resume_paused_run(
     """Apply the reviewed paused run: only its objects, and only if that removes no more than it planned."""
     with _http_errors():
         def run() -> ReconcileResult:
-            actor = _platform_admin(db, user, "resume a paused sync")
+            actor = _require(db, user, "metadata.resume_paused_sync", "resume a paused sync")
             return reconciler.resume_paused(db, run_id=body.run_id, actor=actor.id)
 
         return await asyncio.to_thread(run)
@@ -596,7 +637,7 @@ async def clear_paused_run(
     """Lift the pause without applying the paused run's removals."""
     with _http_errors():
         def run() -> MetadataConfig:
-            actor = _platform_admin(db, user, "clear a paused sync")
+            actor = _require(db, user, "metadata.resume_paused_sync", "clear a paused sync")
             reconciler.clear_paused(db, run_id=body.run_id, actor=actor.id)
             return _config(db, user)
 

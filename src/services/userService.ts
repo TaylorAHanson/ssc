@@ -1,5 +1,5 @@
 
-import type { User, RoleMapping } from '../types';
+import type { CapabilityGrid, User, RoleMapping } from '../types';
 
 import { useUserStore } from '../stores/userStore';
 
@@ -34,6 +34,14 @@ export const userService = {
             cache: 'no-store'
         });
         if (!response.ok) throw new Error('Failed to fetch current user');
+        return response.json();
+    },
+
+    async getCapabilityGrid(): Promise<CapabilityGrid> {
+        const response = await fetch(`${API_BASE_URL}/roles/capabilities`, {
+            headers: getHeaders()
+        });
+        if (!response.ok) throw new Error('Failed to load role capabilities');
         return response.json();
     },
 

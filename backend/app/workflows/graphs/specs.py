@@ -117,7 +117,7 @@ def stage_specs(request_type) -> list:
 
 
 def editable_states(request_type) -> list:
-    """Stages from which a platform_admin may Edit & Restart (platform_admin gates not marked ``editable: false``)."""
+    """Stages from which an Application Admin may Edit & Restart (platform_admin gates not marked ``editable: false``)."""
     key = getattr(request_type, "value", request_type)
     if key not in SPECS:
         return []

@@ -5,9 +5,9 @@ Admin CRUD for the data-driven tool registry: toggle each tool per usage context
 + SP/OBO identity, and register + sync Databricks MCP servers (discovered with the
 Service Principal).
 
-Per-tool gating writes require Platform/Governance Admin. MCP *source* management
-and discovery (which touch SP/OBO + external connections) require Platform Admin.
-Reads are available to those admin roles.
+Writes (per-tool gating, local sync, MCP *source* management and discovery, which
+touch SP/OBO + external connections) need ``tools.registry.manage``; reads need
+``tools.registry.view`` (see ``app.core.capabilities``).
 """
 import logging
 from typing import Any, Dict, List, Optional
@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-_WRITE_ROLES = ["Platform Admin", "Governance Admin"]
-_READ_ROLES = ["Platform Admin", "Governance Admin"]
+_WRITE_CAPABILITY = "tools.registry.manage"
+_READ_CAPABILITY = "tools.registry.view"
 
 
 def _require_feature() -> None:
@@ -94,7 +94,7 @@ class SourceUpdate(BaseModel):
 @router.get("")
 def list_registry(
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.require_any_role(_READ_ROLES)),
+    current_user: User = Depends(deps.require_capability(_READ_CAPABILITY)),
     _: None = Depends(_require_feature),
 ) -> Any:
     """Full registry view: every tool row + every MCP source."""
@@ -107,7 +107,7 @@ def list_registry(
 @router.post("/sync-local")
 def sync_local(
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
 ) -> Any:
     """Re-seed registry rows for locally-defined tools (idempotent)."""
@@ -120,7 +120,7 @@ def create_source(
     *,
     db: Session = Depends(deps.get_db),
     body: SourceCreate,
-    current_user: User = Depends(deps.require_role("Platform Admin")),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
 ) -> Any:
     try:
@@ -143,7 +143,7 @@ def quick_add_source(
     request: Request,
     db: Session = Depends(deps.get_db),
     body: SourceQuickAdd,
-    current_user: User = Depends(deps.require_role("Platform Admin")),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
 ) -> Any:
     """Register an MCP server, discover its tools, and enable read-only ones — in one call."""
@@ -167,7 +167,7 @@ def quick_add_source(
 def list_available_sources(
     request: Request,
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.require_role("Platform Admin")),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
 ) -> Any:
     """MCP servers discoverable in the workspace via the SDK (AI Gateway connections, Genie, MCP apps)."""
@@ -187,7 +187,7 @@ def update_source(
     source_id: str,
     db: Session = Depends(deps.get_db),
     body: SourceUpdate,
-    current_user: User = Depends(deps.require_role("Platform Admin")),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
 ) -> Any:
     try:
@@ -201,7 +201,7 @@ def update_source(
 def delete_source(
     source_id: str,
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.require_role("Platform Admin")),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
 ) -> Any:
     try:
@@ -216,7 +216,7 @@ def sync_source(
     source_id: str,
     request: Request,
     db: Session = Depends(deps.get_db),
-    current_user: User = Depends(deps.require_role("Platform Admin")),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
 ) -> Any:
     """Discover tools on a source (On-Behalf-Of the caller) and upsert them into the registry."""
@@ -235,7 +235,7 @@ def update_tool(
     tool_id: str,
     db: Session = Depends(deps.get_db),
     body: ToolUpdate,
-    current_user: User = Depends(deps.require_any_role(_WRITE_ROLES)),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
     _: None = Depends(_require_feature),
 ) -> Any:
     try:

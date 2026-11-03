@@ -44,7 +44,7 @@ execution model. Other useful docs: `DEVELOPER_QUICK_START.md`, `GOVERNANCE.md`,
 - **Use the logging library, never `print`.**
 - **Never hardcode the app/brand name.** In-code defaults live in
   `backend/app/core/default_config.py`, exposed as `settings.BRAND_*`
-  (`backend/app/core/config.py`); a Platform Admin can override them live.
+  (`backend/app/core/config.py`); an Application Admin can override them live.
 - **Prefer no-code over hardcoding.** New configuration should be editable in
   Admin → Settings (`settings_store.py`) or set in `databricks.yml` — not baked
   into code. Config layers: in-code defaults → env (`.env` / `databricks.yml`) →

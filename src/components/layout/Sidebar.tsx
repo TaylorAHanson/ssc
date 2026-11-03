@@ -37,11 +37,12 @@ import { CURRENT_VERSION } from '../../lib/releaseNotes';
 import { FeedbackModal } from '../feedback/FeedbackModal';
 
 import { useBrandingStore } from '../../stores/brandingStore';
-import { useUserStore } from '../../stores/userStore';
+import { hasCapability, matchesRoles, useUserStore } from '../../stores/userStore';
 import { useRequestStore } from '../../stores/requestStore';
 import { genieHomeUrl, workspaceHomeUrl } from '../../lib/databricksLinks';
 import { api } from '../../services/api';
 import { getWhoAmI } from '../../services/metadataApi';
+import { ROLE_PRIORITY } from '../../types';
 import type { UserPersona } from '../../types';
 
 // Explicit render order for sidebar groups. Groups not listed here fall to
@@ -94,9 +95,13 @@ interface NavItem {
   title: string;
   icon: React.ReactNode;
   group: string;
-  allowedPersonas?: UserPersona[]; // If undefined, allowed for all
-  // Shown by a backend permission check instead of persona (e.g. Access Rules,
-  // which approver-group members see without holding an admin role).
+  // Capability id(s) from GET /roles/me; holding any one shows the item. If
+  // undefined (and no gate), shown to everyone.
+  capability?: string | string[];
+  // Embedded apps only: the roles (by name) allowed to see the app.
+  allowedPersonas?: string[];
+  // Shown by a backend permission check instead (e.g. Access Rules, which
+  // approver-group members see without holding an admin role).
   gate?: 'access_rules' | 'metadata' | 'requests';
   // Exactly one of `path` (internal route) or `href` (external URL) should
   // be set. External items render as `<a target="_blank">` and pick up a
@@ -127,7 +132,7 @@ const navItems: NavItem[] = [
     icon: <CheckCircle2 className="w-5 h-5" />,
     path: '/governance/certification',
     group: 'Watch Tower',
-    allowedPersonas: ['Platform Admin', 'Governance Admin']
+    capability: 'governance.control_tower',
   },
   {
     id: 'odps',
@@ -135,7 +140,7 @@ const navItems: NavItem[] = [
     icon: <FileText className="w-5 h-5" />,
     path: '/governance/odps',
     group: 'Watch Tower',
-    allowedPersonas: ['Platform Admin', 'Governance Admin']
+    capability: 'governance.control_tower',
   },
   {
     id: 'allowlist',
@@ -143,7 +148,7 @@ const navItems: NavItem[] = [
     icon: <ShieldCheck className="w-5 h-5" />,
     path: '/governance/allowlist',
     group: 'Watch Tower',
-    allowedPersonas: ['Platform Admin', 'Governance Admin']
+    capability: 'allowlist.manage',
   },
   {
     id: 'sentinel',
@@ -151,7 +156,7 @@ const navItems: NavItem[] = [
     icon: <ShieldAlert className="w-5 h-5" />,
     path: '/governance/sentinel',
     group: 'Watch Tower',
-    allowedPersonas: ['Platform Admin', 'Governance Admin']
+    capability: 'sentinel.view',
   },
   {
     id: 'tag_management',
@@ -176,7 +181,7 @@ const navItems: NavItem[] = [
     icon: <Settings className="w-5 h-5" />,
     path: '/admin/dashboard',
     group: 'Control Tower',
-    allowedPersonas: ['Platform Admin']
+    capability: ['admin.hub', 'feedback.manage'],
   },
   {
     id: 'context_catalog',
@@ -184,7 +189,7 @@ const navItems: NavItem[] = [
     icon: <Library className="w-5 h-5" />,
     path: '/governance/context-catalog',
     group: 'Control Tower',
-    allowedPersonas: ['Platform Admin', 'Governance Admin']
+    capability: 'context_catalog.manage',
   },
   {
     id: 'workflows',
@@ -192,7 +197,7 @@ const navItems: NavItem[] = [
     icon: <Sparkles className="w-5 h-5" />,
     path: '/build/workflows',
     group: 'Control Tower',
-    allowedPersonas: ['Platform Admin', 'Governance Admin']
+    capability: 'workflows.author',
   },
   {
     id: 'tool_registry',
@@ -200,7 +205,7 @@ const navItems: NavItem[] = [
     icon: <Wrench className="w-5 h-5" />,
     path: '/build/tool-registry',
     group: 'Control Tower',
-    allowedPersonas: ['Platform Admin', 'Governance Admin']
+    capability: 'tools.registry.view',
   },
   {
     id: 'preview_features',
@@ -208,7 +213,7 @@ const navItems: NavItem[] = [
     icon: <FlaskConical className="w-5 h-5" />,
     path: '/build/preview-features',
     group: 'Control Tower',
-    allowedPersonas: ['Platform Admin', 'Governance Admin']
+    capability: 'preview_features.manage',
   },
   {
     id: 'training_admin',
@@ -216,7 +221,7 @@ const navItems: NavItem[] = [
     icon: <GraduationCap className="w-5 h-5" />,
     path: '/build/training',
     group: 'Control Tower',
-    allowedPersonas: ['Platform Admin', 'Governance Admin']
+    capability: 'training.manage',
   },
 ];
 
@@ -227,13 +232,10 @@ interface SidebarProps {
 
 // Personas that show up in the dev-mode role override list. Kept in
 // sync with the legacy Header component so behavior is identical.
-const DEV_MODE_PERSONAS: { label: string; value: UserPersona }[] = [
-  { label: 'Platform Admin', value: 'Platform Admin' },
-  { label: 'Governance Admin', value: 'Governance Admin' },
-  { label: 'Security Admin', value: 'Security Admin' },
-  { label: 'Finance Admin', value: 'Finance Admin' },
-  { label: 'User', value: 'User' },
-];
+const DEV_MODE_PERSONAS: { label: string; value: UserPersona }[] = ROLE_PRIORITY.map((role) => ({
+  label: role,
+  value: role,
+}));
 
 export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const location = useLocation();
@@ -262,49 +264,51 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const devFeaturesEnabled = useBrandingStore((s) => s.devFeaturesEnabled);
   const brandingLoaded = useBrandingStore((s) => s.hasLoaded);
 
+  // Permission checks are tagged with the role they were made for, so a stale
+  // answer is ignored while the check for a newly picked role is in flight.
+  const overrideRole = activeRoleOverride ?? '';
+
   const accessRulesTabOn = uiTabs?.access_rules !== false;
-  const [canViewAccessRules, setCanViewAccessRules] = useState(false);
+  const [accessRulesView, setAccessRulesView] = useState<{ role: string; ok: boolean } | null>(null);
   useEffect(() => {
-    if (!accessRulesTabOn || !currentUser) {
-      setCanViewAccessRules(false);
-      return;
-    }
+    if (!accessRulesTabOn || !currentUser) return;
     let cancelled = false;
     api
       .getRbacPermissions()
       .then((p) => {
-        if (!cancelled) setCanViewAccessRules(p.can_view);
+        if (!cancelled) setAccessRulesView({ role: overrideRole, ok: p.can_view });
       })
       .catch(() => {
-        if (!cancelled) setCanViewAccessRules(false);
+        if (!cancelled) setAccessRulesView({ role: overrideRole, ok: false });
       });
     return () => {
       cancelled = true;
     };
-  }, [accessRulesTabOn, currentUser, activeRoleOverride]);
+  }, [accessRulesTabOn, currentUser, overrideRole]);
+  const canViewAccessRules =
+    accessRulesTabOn && !!currentUser && accessRulesView?.role === overrideRole && accessRulesView.ok;
 
   // Data owners edit metadata without an admin role, so the link follows the
   // backend's browse scope (governance, or owners of at least one object)
-  // rather than the persona.
+  // rather than the persona; Ops Admins get it for sync history alone.
   const metadataTabOn = uiTabs?.tag_management !== false;
-  const metadataRole = activeRoleOverride ?? '';
   const [metadataBrowse, setMetadataBrowse] = useState<{ role: string; ok: boolean } | null>(null);
   useEffect(() => {
     if (!metadataTabOn || !currentUser) return;
     let cancelled = false;
     getWhoAmI()
       .then((w) => {
-        if (!cancelled) setMetadataBrowse({ role: metadataRole, ok: w.can_browse });
+        if (!cancelled) setMetadataBrowse({ role: overrideRole, ok: w.can_browse || !!w.can_view_runs });
       })
       .catch(() => {
-        if (!cancelled) setMetadataBrowse({ role: metadataRole, ok: false });
+        if (!cancelled) setMetadataBrowse({ role: overrideRole, ok: false });
       });
     return () => {
       cancelled = true;
     };
-  }, [metadataTabOn, currentUser, metadataRole]);
+  }, [metadataTabOn, currentUser, overrideRole]);
   const canBrowseMetadata =
-    metadataTabOn && !!currentUser && metadataBrowse?.role === metadataRole && metadataBrowse.ok;
+    metadataTabOn && !!currentUser && metadataBrowse?.role === overrideRole && metadataBrowse.ok;
 
   // Once branding confirms this is a non-dev environment, clear any stale
   // dev-mode override persisted in localStorage (e.g. carried over from a lower
@@ -319,6 +323,13 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   // User menu (account dropdown) is click-to-toggle for accessibility.
   // Close on outside click and on Escape.
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  // Close the user menu when the rail collapses or expands so it doesn't
+  // dangle in a stale position relative to its trigger.
+  const [menuRailCollapsed, setMenuRailCollapsed] = useState(collapsed);
+  if (menuRailCollapsed !== collapsed) {
+    setMenuRailCollapsed(collapsed);
+    setUserMenuOpen(false);
+  }
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
 
@@ -377,21 +388,15 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     };
   }, [userMenuOpen]);
 
-  // Close the user menu when the rail collapses or expands so it doesn't
-  // dangle in a stale position relative to its trigger.
-  useEffect(() => {
-    setUserMenuOpen(false);
-  }, [collapsed]);
-
   const userInitials =
     currentUser?.full_name
       ?.split(' ')
       .map((part) => part[0])
       .filter(Boolean)
       .slice(0, 2)
-      .join('') || 'TH';
-  const userDisplayName = currentUser?.full_name || 'Taylor Hanson';
-  const userEmail = currentUser?.email || 'taylor.hanson@example.com';
+      .join('') || currentUser?.email?.[0]?.toUpperCase() || '?';
+  const userDisplayName = currentUser?.full_name || currentUser?.email || 'Signed-in user';
+  const userEmail = currentUser?.email || '';
 
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(
     loadCollapsedGroups
@@ -479,8 +484,9 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     if (item.gate === 'requests') {
       return uiTabs?.my_requests !== false || uiTabs?.pending_approvals !== false;
     }
-    if (!item.allowedPersonas) return true;
-    return item.allowedPersonas.includes(currentPersona);
+    if (item.allowedPersonas && !matchesRoles(currentUser, item.allowedPersonas)) return false;
+    if (!item.capability) return true;
+    return hasCapability(currentUser, ...(Array.isArray(item.capability) ? item.capability : [item.capability]));
   });
 
   const groupedItems = filteredItems.reduce((acc, item) => {

@@ -30,6 +30,7 @@ import type {
   WorkflowTestRun,
 } from '../../services/api';
 import { HelpTip, LabelWithHelp, AskAgentHint } from '../ui/help-tip';
+import { errorMessage } from '../../lib/errors';
 
 const inputClass =
   'w-full border border-gray-300 rounded-md px-2.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent';
@@ -87,7 +88,7 @@ export default function WorkflowTestsPanel({
       }
       setRuns(seeded);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load tests');
+      setError(errorMessage(e, 'Failed to load tests'));
     } finally {
       setLoading(false);
     }
@@ -123,7 +124,7 @@ export default function WorkflowTestsPanel({
         }
       } catch (e) {
         setBusy(null);
-        setError(e instanceof Error ? e.message : 'Lost track of the test run');
+        setError(errorMessage(e, 'Lost track of the test run'));
       }
     },
     [workflowId],
@@ -150,7 +151,7 @@ export default function WorkflowTestsPanel({
       void pollGroup(run_group_id);
     } catch (e) {
       setBusy(null);
-      setError(e instanceof Error ? e.message : 'Failed to start the test run');
+      setError(errorMessage(e, 'Failed to start the test run'));
     }
   };
 
@@ -167,7 +168,7 @@ export default function WorkflowTestsPanel({
       );
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to propose cases');
+      setError(errorMessage(e, 'Failed to propose cases'));
     } finally {
       setBusy(null);
     }
@@ -189,7 +190,7 @@ export default function WorkflowTestsPanel({
       setDraft(null);
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to save the case');
+      setError(errorMessage(e, 'Failed to save the case'));
     }
   };
 
@@ -204,7 +205,7 @@ export default function WorkflowTestsPanel({
         enabled: changes.enabled,
       });
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to save the case');
+      setError(errorMessage(e, 'Failed to save the case'));
       await load();
     }
   };
@@ -215,7 +216,7 @@ export default function WorkflowTestsPanel({
       await api.deleteWorkflowTest(workflowId, test.id);
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to delete the case');
+      setError(errorMessage(e, 'Failed to delete the case'));
     }
   };
 
@@ -511,11 +512,18 @@ function TestCaseRow({
   const [question, setQuestion] = useState(test.question);
   const [expected, setExpected] = useState(test.expected_outcome);
 
-  useEffect(() => {
+  // Reset the drafts when the saved case changes underneath them.
+  const [synced, setSynced] = useState(test);
+  if (
+    synced.name !== test.name ||
+    synced.question !== test.question ||
+    synced.expected_outcome !== test.expected_outcome
+  ) {
+    setSynced(test);
     setName(test.name);
     setQuestion(test.question);
     setExpected(test.expected_outcome);
-  }, [test.name, test.question, test.expected_outcome]);
+  }
 
   const commit = () => {
     setEditing(false);

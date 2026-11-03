@@ -31,9 +31,55 @@ export interface User {
   created_at?: string;
   updated_at?: string;
   entitlements?: string[];
+  /** Capability ids the user holds (see GET /roles/capabilities). Only on /roles/me. */
+  capabilities?: string[];
 }
 
-export type UserPersona = 'Platform Admin' | 'Governance Admin' | 'Security Admin' | 'Finance Admin' | 'User';
+/** Display persona: the user's highest role. Access checks use capabilities. */
+export type UserPersona =
+  | 'Super Admin'
+  | 'Application Admin'
+  | 'Governance Admin'
+  | 'Security Admin'
+  | 'Finance Admin'
+  | 'Ops Admin'
+  | 'User';
+
+/** Roles in priority order, mirrored from the backend capability registry. */
+export const ROLE_PRIORITY: UserPersona[] = [
+  'Super Admin',
+  'Application Admin',
+  'Governance Admin',
+  'Security Admin',
+  'Finance Admin',
+  'Ops Admin',
+  'User',
+];
+
+/** One row of the read-only "What each role can do" grid. */
+export interface CapabilityInfo {
+  id: string;
+  label: string;
+  description: string;
+  group: string;
+  roles: string[];
+  also_from_setting?: { key: string; label: string; current_roles: string[] } | null;
+  note?: string | null;
+}
+
+export interface RoleInfo {
+  key: string;
+  label: string;
+  description: string;
+  mapped_identities: string[];
+}
+
+export interface CapabilityGrid {
+  roles: RoleInfo[];
+  groups: string[];
+  capabilities: CapabilityInfo[];
+  can_manage_roles: boolean;
+}
 
 export type Environment = 'dev' | 'test' | 'stage' | 'prod';
 
@@ -49,10 +95,20 @@ export interface Request {
   trainingCompleted?: boolean;
   environment?: Environment;
   requester_email?: string;
-  lastError?: any;
-  metadata?: Record<string, any>;
+  lastError?: RequestError | null;
+  metadata?: Record<string, unknown>;
   conversation?: ChatMessage[];
   approvals?: Approval[];
+}
+
+/** What the poller recorded when the request's last step failed (`last_error`). */
+export interface RequestError {
+  error?: string;
+  traceback?: string;
+  permanent?: boolean;
+  retry_count?: number;
+  worker_id?: string;
+  note?: string;
 }
 
 export interface ProgressInfo {
@@ -86,7 +142,7 @@ export interface State {
   gateLabel?: string | null;
   facts?: {
     type: string;
-    data: Record<string, any>;
+    data: Record<string, unknown>;
     timestamp: string;
   }[];
 }
@@ -153,14 +209,14 @@ export interface Approval {
   delegatedToEmail?: string;
   requestConversation?: ChatMessage[];
   /** Filtered workflow input parameters shown to the approver for context. */
-  workflowParameters?: Record<string, any>;
+  workflowParameters?: Record<string, unknown>;
   /** Explanation of why this approval was superseded by a parameter edit. */
   supersededNote?: string;
   /** The current user submitted this request. */
   isOwnRequest?: boolean;
   /** The current user can't approve it (their own request, with self-approval blocked). */
   selfApprovalBlocked?: boolean;
-  /** A Platform Admin may Edit & Restart the request from this approval. */
+  /** The caller (an Application Admin) may Edit & Restart the request from this approval. */
   canEditParameters?: boolean;
   /** Who approves, when the gate's group comes from a setting, e.g. "UC securables approvers: grp_x". */
   approverLabel?: string | null;
@@ -178,7 +234,7 @@ export interface ApprovalAction {
   note?: string;
   delegatedToEmail?: string;
   /** New parameters to apply when action is 'edit'. */
-  newParameters?: Record<string, any>;
+  newParameters?: Record<string, unknown>;
 }
 
 export interface ChatMessage {

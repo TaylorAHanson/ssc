@@ -212,7 +212,7 @@ class DraftOdcsInput(BaseModel):
     description="Draft an Open Data Contract Standard (ODCS) v3 YAML document for Unity Catalog datasets by fetching table schemas and generating contract structure. Only tables in the governed (scanned) catalogs can be drafted.",
     args_schema=DraftOdcsInput,
     # Reads metadata as the governance service principal, not as the caller.
-    required_role="governance_admin",
+    required_capability="governance.tools",
 )
 async def draft_odcs_contract(
     dataset_ids: List[str], 

@@ -6,11 +6,11 @@ import subprocess
 import sys
 import os
 import logging
-from app.api.deps import require_role
+from app.api.deps import require_capability
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(dependencies=[Depends(require_role("Platform Admin"))])
+router = APIRouter(dependencies=[Depends(require_capability("dev.tools"))])
 
 class TestRunRequest(BaseModel):
     path: Optional[str] = None

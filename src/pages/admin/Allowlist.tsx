@@ -7,6 +7,7 @@ import { Loader2, Plus, ShieldCheck, Trash2, Edit } from 'lucide-react';
 import { getAllowlist, createAllowlistEntry, deleteAllowlistEntry, updateAllowlistEntry, getTargetWorkspaces } from '../../services/api';
 import type { AllowlistEntry, AllowlistCreate, TargetWorkspace } from '../../services/api';
 import { format, parseISO } from 'date-fns';
+import { errorMessage } from '../../lib/errors';
 
 export function Allowlist() {
   const [entries, setEntries] = useState<AllowlistEntry[]>([]);
@@ -85,7 +86,7 @@ export function Allowlist() {
       
       setTimeout(() => setMessage(null), 3000);
     } catch (error) {
-      setMessage({ type: 'error', text: `Error: ${error instanceof Error ? error.message : 'Unknown error'}` });
+      setMessage({ type: 'error', text: `Error: ${errorMessage(error, 'Unknown error')}` });
     }
   };
 
@@ -109,7 +110,7 @@ export function Allowlist() {
       await loadEntries();
       setTimeout(() => setMessage(null), 3000);
     } catch (error) {
-      setMessage({ type: 'error', text: `Failed to delete: ${error instanceof Error ? error.message : 'Unknown error'}` });
+      setMessage({ type: 'error', text: `Failed to delete: ${errorMessage(error, 'Unknown error')}` });
     }
   };
 
@@ -196,7 +197,7 @@ export function Allowlist() {
                   <label className="text-sm font-medium">Status</label>
                   <select 
                     value={status} 
-                    onChange={(e) => setStatus(e.target.value as any)}
+                    onChange={(e) => setStatus(e.target.value as typeof status)}
                     className="w-full h-10 px-3 border border-gray-300 rounded-md bg-white text-sm"
                   >
                     <option value="approved">Approved</option>

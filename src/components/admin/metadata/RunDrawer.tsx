@@ -4,7 +4,8 @@ import type { PlanStatus } from '../../../types/metadata';
 import { Drawer, ErrorBanner, Notice, SectionTitle, Skeleton } from '../../rbac/ui';
 import { RunStatusBadge } from './badges';
 import { useMetadata } from './context';
-import { errorMessage, formatTime } from './format';
+import { formatTime } from './format';
+import { errorMessage } from '../../../lib/errors';
 import { PlanList } from './ObjectSections';
 import { useAsync } from './useAsync';
 

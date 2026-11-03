@@ -13,7 +13,7 @@ cp .env.example .env
 Edit `.env` and configure the following key sections:
 - **Database**: Defaults to local SQLite (`app_hub`) if `DATABASE_URL` is empty.
 - **Databricks**: Required for real infrastructure operations.
-- **Mock User**: Set `MOCK_USER_EMAIL` in `backend/.env` to simulate a logged-in user locally. To exercise admin-only features (e.g. workflow authoring), use the **dev role switcher** in the sidebar (non-production only) — it sends `X-Dev-Role-Override` (e.g. `Platform Admin`).
+- **Mock User**: Set `MOCK_USER_EMAIL` in `backend/.env` to simulate a logged-in user locally. To exercise admin-only features (e.g. workflow authoring), use the **dev role switcher** in the sidebar (non-production only) — it sends `X-Dev-Role-Override` (e.g. `Super Admin`; the old name `Platform Admin` is read as Application Admin).
 - **Governance & Observability (optional)**: all default to a safe local posture, so you don't need to set them to run locally.
   - `AGENT_TOOL_OPA_ENFORCE` (default `false`) — when `false`, the agent-tool OPA policy runs in **shadow** mode (decisions logged, never block). Deployed environments set this `true`. An embedded OPA server starts automatically unless `OPA_URL` is set.
   - `AI_GATEWAY_ENDPOINT` (default empty) — when set, agent LLM calls route through that AI Gateway endpoint instead of `MODEL_SERVING_AGENT_LLM_ENDPOINT` directly.

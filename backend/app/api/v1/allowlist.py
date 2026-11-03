@@ -93,10 +93,10 @@ def create_allowlist_entry(
     *,
     db: Session = Depends(deps.get_db),
     entry_in: AllowlistCreate,
-    current_user: User = Depends(deps.require_role("Platform Admin")),
+    current_user: User = Depends(deps.require_capability("allowlist.manage")),
 ) -> Any:
     """
-    Create new allowlist entry. Only accessible to platform admins.
+    Create new allowlist entry. Needs ``allowlist.manage``.
     """
     # Create the db model
     db_obj = AllowlistModel(
@@ -125,10 +125,10 @@ def update_allowlist_entry(
     db: Session = Depends(deps.get_db),
     id: str,
     entry_in: AllowlistUpdate,
-    current_user: User = Depends(deps.require_role("Platform Admin")),
+    current_user: User = Depends(deps.require_capability("allowlist.manage")),
 ) -> Any:
     """
-    Update an allowlist entry. Only accessible to platform admins.
+    Update an allowlist entry. Needs ``allowlist.manage``.
     """
     entry = db.query(AllowlistModel).filter(AllowlistModel.id == id).first()
     if not entry:
@@ -159,10 +159,10 @@ def delete_allowlist_entry(
     *,
     db: Session = Depends(deps.get_db),
     id: str,
-    current_user: User = Depends(deps.require_role("Platform Admin")),
+    current_user: User = Depends(deps.require_capability("allowlist.manage")),
 ) -> Any:
     """
-    Delete an allowlist entry. Only accessible to platform admins.
+    Delete an allowlist entry. Needs ``allowlist.manage``.
     """
     entry = db.query(AllowlistModel).filter(AllowlistModel.id == id).first()
     if not entry:

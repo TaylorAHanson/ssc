@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react';
 import { MetadataBlockedError, MetadataConflictError } from '../../../services/metadataApi';
 import type { ChangePreview, ChangeResult, VersionConflictItem } from '../../../types/metadata';
-import { errorMessage, newIdempotencyKey } from './format';
+import { newIdempotencyKey } from './format';
+import { errorMessage } from '../../../lib/errors';
 
 export type ReviewState<R> =
   | { step: 'idle' }

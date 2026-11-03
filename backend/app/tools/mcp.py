@@ -4,7 +4,7 @@ Fast MCP implementation for defining agent tools.
 import asyncio
 import inspect
 import functools
-from typing import Any, Callable, Dict, Optional, Type, get_type_hints, Union
+from typing import Any, Callable, Dict, List, Optional, Type, get_type_hints, Union
 from pydantic import BaseModel, create_model
 
 # Canonical side-effect classes used by the V2 ToolExecutor + the
@@ -49,7 +49,13 @@ class McpTool:
         requires_identity: bool = False,
         allow_service_principals: bool = False,
         available_when: Optional[Callable[[], bool]] = None,
+        required_capability: Optional[str] = None,
     ):
+        if required_capability:
+            from app.core.capabilities import get_capability
+
+            get_capability(required_capability)
+        self._required_capability = required_capability
         self._func = func
         self._args_schema = args_schema
         self._name = name or func.__name__
@@ -113,6 +119,20 @@ class McpTool:
     @property
     def required_role(self) -> Optional[str]:
         return self._required_role
+
+    @property
+    def required_capability(self) -> Optional[str]:
+        """Capability id (``app.core.capabilities``) a caller needs; seeds the registry's roles."""
+        return self._required_capability
+
+    @property
+    def required_roles(self) -> List[str]:
+        """Roles the tool is restricted to by default (empty = everyone). Super Admin always passes."""
+        if self._required_capability:
+            from app.core.capabilities import roles_for
+
+            return roles_for(self._required_capability, include_setting=False)
+        return [self._required_role] if self._required_role else []
 
     @property
     def feature_flag(self) -> Optional[str]:
@@ -338,6 +358,7 @@ def tool(
     requires_identity: bool = False,
     allow_service_principals: bool = False,
     available_when: Optional[Callable[[], bool]] = None,
+    required_capability: Optional[str] = None,
 ):
     """
     Decorator to register a function as a tool.
@@ -378,6 +399,10 @@ def tool(
     Set ``available_when`` to a no-argument predicate for a tool that should only be
     offered while some admin setting holds (see ``McpTool.is_available``). It is
     evaluated per request, unlike ``feature_flag``, which is read at startup.
+
+    Set ``required_capability`` (an id from ``app.core.capabilities``) to restrict
+    the tool to the roles holding it; the Tool Registry seeds its ``allowed_roles``
+    from that capability. ``required_role`` is the older single-role form.
     """
     def decorator(func: Callable) -> McpTool:
         # Determine schema
@@ -433,6 +458,7 @@ def tool(
             requires_identity=requires_identity,
             allow_service_principals=allow_service_principals,
             available_when=available_when,
+            required_capability=required_capability,
         )
         
     return decorator

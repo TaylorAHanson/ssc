@@ -1,6 +1,6 @@
 # Governance Operating Guide
 
-**Who this guide is for:** Governance and Platform Admins who run day-to-day governance on this platform. It is written for a governance professional, **not** a software engineer — no coding or infrastructure knowledge is assumed. Where a technical term is unavoidable, it is defined in plain language (see the [Glossary](#10-glossary) at the end).
+**Who this guide is for:** Governance Admins (and Super Admins) who run day-to-day governance on this platform. It is written for a governance professional, **not** a software engineer — no coding or infrastructure knowledge is assumed. Where a technical term is unavoidable, it is defined in plain language (see the [Glossary](#10-glossary) at the end).
 
 **What this guide is:** a set of *operating instructions* — what each governance tool does, where to click, and how to respond to what you see. It is not an architecture document. For how the system is built, see `ARCHITECTURE.md`. For authoring approval workflows, see the [Platform Administration Guide](./PLATFORM_ADMINISTRATION.md).
 
@@ -38,17 +38,19 @@ Two principles worth internalizing:
 
 ## 2. Roles: who can do what
 
-Roles are assigned per user (Platform Admins manage this — see [Settings](#7-settings-you-can-change-yourself)).
+Roles are assigned per user (Super Admins manage this under **Admin → Settings → Roles & Access**, which also shows a read-only grid of what each role can do).
 
 | Role | What they can do |
 | :--- | :--- |
-| **Platform Admin** | Everything. Full access to all governance tools **and** system settings, target workspaces, and user role assignment. |
-| **Governance Admin** | Run governance day-to-day: data certification, the Sentinel, allowlist exceptions, tags, data products, workflows, and the context library. Cannot change system settings. |
-| **Security Admin** | Security-focused access controls and audits. |
-| **Finance Admin** | Cost, budget, and billing views. |
+| **Super Admin** | Everything, including user role assignment and a break-glass override on any approval. |
+| **Application Admin** | Runs the app: system settings, the Admin pages, the Tool Registry, workflows. Formerly called Platform Admin. It no longer includes the governance tools below. |
+| **Governance Admin** | Run governance day-to-day: data certification, the Sentinel, allowlist exceptions, Access Rules, tags, data products, workflows, and the context library. Cannot change system settings. |
+| **Security Admin** | Security-focused approvals. Audit-log investigations happen in Databricks Genie Code. |
+| **Finance Admin** | Finance approvals. Cost and usage analysis happens in Databricks Genie Code. |
+| **Ops Admin** | Operations: every request and delegation, watching Sentinel runs and clearing stuck ones. |
 | **User** | Standard self-service: make requests, browse the catalog, take training. |
 
-Most of this guide applies to **Governance Admin** and **Platform Admin**. Where something is Platform-Admin-only, it's called out.
+Most of this guide applies to **Governance Admin** (and Super Admin, who can do everything). Where something needs another role, it's called out.
 
 ---
 
@@ -56,7 +58,7 @@ Most of this guide applies to **Governance Admin** and **Platform Admin**. Where
 
 Governance tools live in the left sidebar under two groups:
 
-**Watch Tower** — day-to-day governance (Governance Admin + Platform Admin):
+**Watch Tower** — day-to-day governance (Governance Admin + Super Admin; Ops Admins can also watch OmniGuard runs):
 
 | Menu item | What it's for |
 | :--- | :--- |
@@ -66,12 +68,12 @@ Governance tools live in the left sidebar under two groups:
 | **OmniGuard** | The Sentinel's page: run scans, read violation reports, and take action on findings. |
 | **Metadata Manager** | Manage the governance tags on data assets, and catalog and schema descriptions. |
 
-**Control Tower** — configuration and building (mostly Platform Admin):
+**Control Tower** — configuration and building (mostly Application Admin):
 
 | Menu item | What it's for |
 | :--- | :--- |
 | **Context Catalog** | The "house rules" and reference material the AI assistant reads. |
-| **Admin** | System settings, branding, target workspaces, users & roles. *(Platform Admin only.)* |
+| **Admin** | System settings, branding, target workspaces, users & roles. *(Super and Application Admins; role mappings are changed by Super Admins only.)* |
 | **Workflow Studio** | Build and edit approval workflows (no code). |
 | **Training Studio** | Author in-app training tracks, courses, and media. |
 | **Tool Registry** | The catalog of actions workflows and the assistant are allowed to take. |
@@ -124,7 +126,7 @@ Because the page searches the platform's own list, it answers instantly and neve
 - **Changes** — every change, with who made it, from where (this page, the assistant, a pipeline or the reconciler), its reason and each tag it touched. A change can be **reverted**, which saves the opposite change.
 - **Drift** — objects whose Unity Catalog tags or description differ from the list, and why.
 - **Reconciler runs** — what each run did or, in plan mode, would do, with any failures.
-- **System principals** *(Platform Admin)* — the pipelines and systems allowed to change tags through the API or MCP, and their scope.
+- **System principals** *(Super or Application Admin)* — the pipelines and systems allowed to change tags through the API or MCP, and their scope.
 
 **Who can edit what.** An object's owner tag (`data_owner` by default) names the groups that own it, and members of those groups may edit it. An object without the tag inherits the owner of its table, schema or catalog. Platform Admins, and any roles listed under **Editor roles**, may edit everything. Anyone else can still propose a change; it goes to the owners for approval.
 
@@ -205,13 +207,13 @@ This is a **configuration** problem, not a data problem, and it's almost always 
 
 | What you see | What it usually means | Who fixes it |
 | :--- | :--- | :--- |
-| `invalid_client` / authentication error | The workspace's service-principal credentials are wrong, expired, or belong to a different account. | Platform Admin (update the secret / service principal). |
-| "not entitled" / authorization error | The credentials are valid but the service principal isn't allowed on that workspace. | Platform Admin (grant the SP access to the workspace). |
-| Network / timeout | The app can't reach that workspace at all (networking). | Platform Admin / infrastructure. |
+| `invalid_client` / authentication error | The workspace's service-principal credentials are wrong, expired, or belong to a different account. | Application Admin (update the secret / service principal). |
+| "not entitled" / authorization error | The credentials are valid but the service principal isn't allowed on that workspace. | Application Admin (grant the SP access to the workspace). |
+| Network / timeout | The app can't reach that workspace at all (networking). | Application Admin / infrastructure. |
 
 As a Governance Admin, your job is to **notice the Issues flag and escalate** — don't treat a failed workspace as compliant. The fix lives in **Admin → Settings → Target Workspaces** and in Databricks itself; see the runbook in §9.
 
-### 5.6 Target workspaces (Platform Admin)
+### 5.6 Target workspaces (Application Admin)
 
 The Sentinel scans whatever is listed in **Admin → Settings → Target Workspaces**. Each entry names a workspace and the service principal it uses. If the list is **empty**, the Sentinel scans only the workspace the app itself runs in, using the app's own identity. Because Unity Catalog data is shared across a metastore (not per-workspace), **data certification runs once** against a single designated workspace, configurable there too.
 
@@ -241,7 +243,7 @@ The **Context Catalog** (*Control Tower → Context Catalog*) is where you keep 
 
 ## 7. Settings you can change yourself
 
-The platform is designed so you rarely need an engineer. **Admin → Settings** (Platform Admin) groups the changeable settings into the same sections as the sidebar (General, Discover & Analyze, Requests & Approvals, Learn & Share, Watch Tower, Control Tower, Platform); edits take effect immediately, no redeploy. Settings that belong to a feature which is switched off are collapsed under **Inactive settings** with a link to turn the feature on. The most governance-relevant pages:
+The platform is designed so you rarely need an engineer. **Admin → Settings** (Super and Application Admins) groups the changeable settings into the same sections as the sidebar (General, Discover & Analyze, Requests & Approvals, Learn & Share, Watch Tower, Control Tower, Platform); edits take effect immediately, no redeploy. Settings that belong to a feature which is switched off are collapsed under **Inactive settings** with a link to turn the feature on. The most governance-relevant pages:
 
 | Page | What you can change | Why it matters |
 | :--- | :--- | :--- |
@@ -369,9 +371,9 @@ Open the run in **Watch Tower → Sentinel**, find the violation, and use **Revi
 **Admin → Settings → OmniGuard** (under *Alerts & digest*): edit the recipient list (comma-separated), the digest hour, and the timezone. Takes effect immediately.
 
 **…figure out why a workspace shows "0 findings — not confirmed clean"?**
-Open the run and read the **Scan issues** panel. It states the network reachability, the credentials used, and the exact reason (e.g. `invalid_client`). Then, as Platform Admin: confirm the target workspace's service principal in **Admin → Settings → Target Workspaces**, and in Databricks verify the service principal exists in that workspace, its OAuth secret is current, and it's authorized there. Re-run the scan to confirm the panel clears. (If you're comfortable, you can test the exact credentials in a Databricks notebook before re-running — ask engineering for the snippet.)
+Open the run and read the **Scan issues** panel. It states the network reachability, the credentials used, and the exact reason (e.g. `invalid_client`). Then, as Application Admin: confirm the target workspace's service principal in **Admin → Settings → Target Workspaces**, and in Databricks verify the service principal exists in that workspace, its OAuth secret is current, and it's authorized there. Re-run the scan to confirm the panel clears. (If you're comfortable, you can test the exact credentials in a Databricks notebook before re-running — ask engineering for the snippet.)
 
-**…add a new workspace to be governed?** *(Platform Admin)*
+**…add a new workspace to be governed?** *(Application Admin)*
 In Databricks: create/choose the service principal, store its credential in the shared secret scope, and grant it access to the workspace. Then in **Admin → Settings → Target Workspaces**: add a row with the workspace name, host URL, environment, and the *key names* of its credentials. Run a manual Sentinel scan scoped to just that workspace to confirm it authenticates before relying on it.
 
 **…announce a change freeze or maintenance to everyone?**

@@ -37,7 +37,7 @@ const GROUP_STATUS: Record<RbacPlanePermission['group_status'], { label: string;
   not_found: {
     label: 'Not found in Databricks',
     dot: 'bg-red-500',
-    detail: 'No group in this workspace or the account has this exact name, so only Platform Admins get these approvals.',
+    detail: 'No group in this workspace or the account has this exact name, so only Application Admins get these approvals.',
   },
   unverified: {
     label: 'Couldn’t confirm',
@@ -63,7 +63,7 @@ export function ApproverStrip({ planes }: { planes: RbacPlanePermission[] }) {
         <p className="flex items-start gap-1.5 text-xs text-red-700">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
           <span>
-            {missing.map((p) => p.label).join(', ')}: the approver group isn’t in Databricks, so only Platform Admins
+            {missing.map((p) => p.label).join(', ')}: the approver group isn’t in Databricks, so only Application Admins
             get these approvals until it’s fixed in{' '}
             <Link to={SETTINGS_PATH} className="underline">Admin → Settings → Access Rules</Link>.
           </span>
@@ -95,7 +95,7 @@ function ApproverItem({ plane: p }: { plane: RbacPlanePermission }) {
           />
         </>
       ) : (
-        <span className="inline-flex items-center gap-1 text-amber-700" title="No approver group is set, so Platform Admins approve.">
+        <span className="inline-flex items-center gap-1 text-amber-700" title="No approver group is set, so Application Admins approve.">
           <AlertTriangle className="h-3 w-3" aria-hidden="true" /> Not set
         </span>
       )}
@@ -112,15 +112,15 @@ export function NoAccessPanel() {
           <p className="text-base font-semibold text-gray-900">You don’t have access to Access Rules</p>
           <p>This page is open to:</p>
           <ul className="list-disc space-y-1 pl-5">
-            <li>Platform Admins;</li>
-            <li>the viewer roles a Platform Admin has chosen;</li>
+            <li>Super and Governance Admins;</li>
+            <li>the viewer roles an Application Admin has chosen;</li>
             <li>
               members of an approver group. Each type (UC securables, UC metastore and workspace securables) has its
               own group, set in{' '}
               <Link to={SETTINGS_PATH} className="text-accent hover:underline">Admin → Settings → Access Rules</Link>.
             </li>
           </ul>
-          <p>To request access, ask a Platform Admin to add you to the right approver group.</p>
+          <p>To request access, ask a Governance Admin to add you to the right approver group.</p>
         </div>
       </div>
     </div>

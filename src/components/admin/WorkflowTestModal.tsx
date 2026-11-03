@@ -13,6 +13,7 @@ import { Button } from '../ui/button';
 import { api } from '../../services/api';
 import type { DryRunResult, WorkflowGraphSpec } from '../../services/api';
 import { collectVarPaths } from '../../lib/workflowSpec';
+import { errorMessage } from '../../lib/errors';
 
 interface Props {
   spec: WorkflowGraphSpec;
@@ -46,7 +47,7 @@ export function WorkflowTestModal({ spec, onClose }: Props) {
     try {
       setResult(await api.testSpec(spec, parsed));
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Dry-run failed');
+      setError(errorMessage(e, 'Dry-run failed'));
       setResult(null);
     } finally {
       setRunning(false);

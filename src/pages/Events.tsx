@@ -1,10 +1,11 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useEffectEvent } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Calendar, Clock, MapPin, Users, Mail, ChevronLeft, ChevronRight, Link2, CalendarPlus, RefreshCcw } from 'lucide-react';
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameMonth, isSameDay, addMonths, subMonths, addMinutes } from 'date-fns';
 import { getContent, triggerCalendarSync } from '../services/api';
 import { useUserStore } from '../stores/userStore';
+import { errorMessage } from '../lib/errors';
 
 interface Event {
   id: string;
@@ -63,8 +64,8 @@ const mockEvents: Event[] = [
   },
   {
     id: '3',
-    title: 'Platform Admin Office Hours',
-    description: 'Drop-in session for platform administrators to ask questions and get support.',
+    title: 'Application Admin Office Hours',
+    description: 'Drop-in session for application administrators to ask questions and get support.',
     date: getDate(10, 10), // 10 days from today at 10 AM
     time: '10:00 AM',
     duration: '1 hour',
@@ -306,7 +307,7 @@ export function Events() {
   const eventRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
   const { currentPersona, isDevMode } = useUserStore();
 
-  const isAdmin = ['Platform Admin', 'Governance Admin', 'Security Admin', 'Finance Admin'].includes(currentPersona);
+  const isAdmin = currentPersona !== 'User';
 
   const loadEvents = async (isRefresh: boolean = false) => {
     try {
@@ -323,9 +324,8 @@ export function Events() {
       const convertedEvents = apiEvents.map(convertApiEventToEvent);
       setEvents(convertedEvents);
     } catch (err: unknown) {
-      const errorObj = err as Error;
-      console.error('Failed to load events:', errorObj);
-      setError(errorObj.message || 'Failed to load events');
+      console.error('Failed to load events:', err);
+      setError(errorMessage(err, 'Failed to load events'));
 
       // Fallback to mock events ONLY if in dev mode
       if (isDevMode) {
@@ -338,10 +338,9 @@ export function Events() {
     }
   };
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    loadEvents();
-  }, []);
+  // Mount-only: `loadEvents` is re-created every render, so the effect calls it through an effect event.
+  const loadOnMount = useEffectEvent(() => { void loadEvents(); });
+  useEffect(() => { loadOnMount(); }, []);
 
 
   const monthStart = startOfMonth(currentDate);

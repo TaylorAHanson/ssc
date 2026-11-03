@@ -7,6 +7,7 @@ import type { OdpsDocument, DataContract } from '../../services/api';
 import { format, parseISO } from 'date-fns';
 import Editor from '@monaco-editor/react';
 import yaml from 'js-yaml';
+import { errorMessage } from '../../lib/errors';
 
 export function ODPS() {
   const [odpsList, setOdpsList] = useState<OdpsDocument[]>([]);
@@ -87,8 +88,8 @@ export function ODPS() {
       setEditingDoc(null);
       setIsDraftModalOpen(false);
       setIsEditorOpen(true);
-    } catch (e: any) {
-      setDraftError(e.message || 'Failed to draft ODPS');
+    } catch (e) {
+      setDraftError(errorMessage(e, 'Failed to draft ODPS'));
     } finally {
       setIsDrafting(false);
     }
@@ -109,8 +110,8 @@ export function ODPS() {
     try {
       await api.deleteOdps(id);
       await loadData();
-    } catch (e: any) {
-      alert('Failed to delete ODPS: ' + e.message);
+    } catch (e) {
+      alert('Failed to delete ODPS: ' + errorMessage(e, 'unknown error'));
     }
   };
 
@@ -120,8 +121,8 @@ export function ODPS() {
     try {
       yaml.load(val);
       setYamlError(null);
-    } catch (e: any) {
-      setYamlError(e.message);
+    } catch (e) {
+      setYamlError(errorMessage(e, 'Invalid YAML'));
     }
   };
 
@@ -132,8 +133,8 @@ export function ODPS() {
       await api.saveOdps(productName, yamlContent);
       setIsEditorOpen(false);
       await loadData();
-    } catch (e: any) {
-      setYamlError(e.message || 'Failed to save ODPS');
+    } catch (e) {
+      setYamlError(errorMessage(e, 'Failed to save ODPS'));
     } finally {
       setIsSaving(false);
     }

@@ -24,10 +24,10 @@ import {
 } from 'lucide-react';
 import { useBrandingStore } from '../stores/brandingStore';
 import type { EmbeddedApp } from '../stores/brandingStore';
-import { useUserStore } from '../stores/userStore';
+import { matchesRoles, useUserStore } from '../stores/userStore';
 import { genieHomeUrl /*, workspaceHomeUrl */ } from '../lib/databricksLinks';
 import { renderNavIcon } from '../lib/navIcons';
-import type { UserPersona } from '../types';
+import type { User } from '../types';
 
 // --------------------------------------------------------------------------
 // Welcome page content model
@@ -48,8 +48,8 @@ type WelcomeItem = {
   href?: string;
   /** When set, item is only shown when the URL is configured. */
   requireUrl?: string | null;
-  /** Optional persona gate, mirrors Sidebar's `allowedPersonas`. */
-  allowedPersonas?: UserPersona[];
+  /** Optional role gate, mirrors Sidebar's `allowedPersonas`. */
+  allowedPersonas?: string[];
 };
 
 type WelcomeGroup = {
@@ -66,7 +66,7 @@ const ICON_CLASS = 'w-4 h-4';
 function buildGroups(opts: {
   workspaceUrl: string;
   embeddedApps: EmbeddedApp[];
-  currentPersona: UserPersona;
+  currentUser: User | null;
 }): WelcomeGroup[] {
   const genieUrl = genieHomeUrl(opts.workspaceUrl);
   // const lakehouseUrl = workspaceHomeUrl(opts.workspaceUrl); // Lakehouse tile disabled
@@ -211,12 +211,9 @@ function buildGroups(opts: {
   // Merge config-driven embedded apps into the welcome grid. Each app lands
   // in the group named by its `group` field (default "Build & Customize"),
   // creating that group on the fly if the welcome page doesn't already define
-  // it. Persona-gated apps are hidden from users who lack the role.
+  // it. Role-gated apps are hidden from users who lack the role.
   for (const app of opts.embeddedApps) {
-    if (
-      app.allowedPersonas &&
-      !app.allowedPersonas.includes(opts.currentPersona)
-    ) {
+    if (app.allowedPersonas && !matchesRoles(opts.currentUser, app.allowedPersonas)) {
       continue;
     }
     const item: WelcomeItem = {
@@ -266,7 +263,7 @@ export function Welcome() {
   const brandName = useBrandingStore((s) => s.brandName);
   const workspaceUrl = useBrandingStore((s) => s.databricksWorkspaceUrl);
   const embeddedApps = useBrandingStore((s) => s.embeddedApps);
-  const currentPersona = useUserStore((s) => s.currentPersona);
+  const currentUser = useUserStore((s) => s.currentUser);
 
   const defaultHomePage = useUserStore((s) => s.defaultHomePage);
   const setDefaultHomePage = useUserStore((s) => s.setDefaultHomePage);
@@ -276,7 +273,7 @@ export function Welcome() {
       buildGroups({
         workspaceUrl,
         embeddedApps,
-        currentPersona,
+        currentUser,
       }).map((group) => ({
         ...group,
         items: group.items.filter((item) => {
@@ -285,7 +282,7 @@ export function Welcome() {
           return true;
         }),
       })),
-    [workspaceUrl, embeddedApps, currentPersona]
+    [workspaceUrl, embeddedApps, currentUser]
   );
 
   // Drop entire groups that ended up empty after filtering.

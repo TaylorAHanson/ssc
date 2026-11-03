@@ -1,5 +1,5 @@
 """Writes to shared governance documents, and the scans that run as the governance
-service principal, are limited to Platform Admin and Governance Admin.
+service principal, are limited to Super Admin and Governance Admin (``governance.control_tower``).
 
 Covers ``POST /data-contracts``, ``POST /data-contracts/sync``,
 ``POST /data-contracts/{id}/check-policy``, ``POST /odps`` and ``POST /odps/draft``. Each test gets a
@@ -34,11 +34,12 @@ def _user(email, roles=()):
     return User(id=email, email=email, full_name=email, roles=list(roles), is_active=True)
 
 
-PLATFORM_ADMIN = _user("admin@example.com", roles=["Platform Admin"])
+SUPER_ADMIN = _user("admin@example.com", roles=["Super Admin"])
+APPLICATION_ADMIN = _user("app@example.com", roles=["Application Admin"])
 GOVERNANCE_ADMIN = _user("gov@example.com", roles=["Governance Admin"])
 PLAIN_USER = _user("user@example.com", roles=["User"])
-USERS = {u.email: u for u in (PLATFORM_ADMIN, GOVERNANCE_ADMIN, PLAIN_USER)}
-ADMINS = [PLATFORM_ADMIN, GOVERNANCE_ADMIN]
+USERS = {u.email: u for u in (SUPER_ADMIN, APPLICATION_ADMIN, GOVERNANCE_ADMIN, PLAIN_USER)}
+ADMINS = [SUPER_ADMIN, GOVERNANCE_ADMIN]
 
 
 @pytest.fixture
@@ -79,8 +80,9 @@ def api(db):
 
 # --- POST /data-contracts -------------------------------------------------
 
-def test_plain_user_cannot_save_a_data_contract(api, db):
-    res = api(PLAIN_USER).post("/data-contracts", json={"dataset_id": DATASET, "yaml_content": CONTRACT_YAML})
+@pytest.mark.parametrize("user", [PLAIN_USER, APPLICATION_ADMIN], ids=lambda u: u.roles[0])
+def test_non_governance_user_cannot_save_a_data_contract(api, db, user):
+    res = api(user).post("/data-contracts", json={"dataset_id": DATASET, "yaml_content": CONTRACT_YAML})
 
     assert res.status_code == 403
     assert db.query(DataContractModel).count() == 0

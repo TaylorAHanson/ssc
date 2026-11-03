@@ -13,7 +13,7 @@ from app.db.session import get_db
 from app.db.data_contract import DataContractModel
 from app.db.data_asset import DataAssetModel
 from pydantic import BaseModel
-from app.api.deps import get_current_user, require_any_role
+from app.api.deps import ensure_capability, get_current_user, require_capability
 from app.services.certification_detail import DEFAULT_HISTORY_RUNS, build_certification_detail
 from app.services.odcs import contract_schema_objects, field_text, scope_contract_lineage_yaml
 
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 # Contracts are shared governance documents, and sync / policy checks run as the
 # governance service principal, so writes and scans are admin-only.
-_GOVERNANCE_ROLES = ["Platform Admin", "Governance Admin"]
+_GOVERNANCE_CAPABILITY = "governance.control_tower"
 
 # Guards the manual "Sync Data Contracts" job so repeated clicks can't stack up
 # multiple concurrent syncs (each of which drives the LLM + many Databricks SDK
@@ -415,7 +415,7 @@ def _empty_discovery_message(diagnostics: dict) -> str:
 async def sync_contracts(
     force: bool = False,
     dataset_id: Optional[str] = None,
-    current_user = Depends(require_any_role(_GOVERNANCE_ROLES)),
+    current_user = Depends(require_capability(_GOVERNANCE_CAPABILITY)),
     db: Session = Depends(get_db)
 ):
     try:
@@ -1061,7 +1061,7 @@ def get_contract_history(dataset_id: str, db: Session = Depends(get_db)):
 def create_contract(
     contract: DataContractCreate,
     db: Session = Depends(get_db),
-    current_user = Depends(require_any_role(_GOVERNANCE_ROLES)),
+    current_user = Depends(require_capability(_GOVERNANCE_CAPABILITY)),
 ):
     """Create a new version of a data contract."""
     # Validate YAML
@@ -1135,7 +1135,7 @@ def create_contract(
 def check_policy(
     dataset_id: str,
     background_tasks: BackgroundTasks,
-    current_user = Depends(require_any_role(_GOVERNANCE_ROLES)),
+    current_user = Depends(require_capability(_GOVERNANCE_CAPABILITY)),
     db: Session = Depends(get_db)
 ):
     """Run a policy check for a specific dataset."""
@@ -1179,8 +1179,7 @@ def delete_contract(
 ):
     """Delete all versions of a data contract and unset the asset contract_url."""
     # Check permissions - usually only admins or owners should delete contracts
-    if not current_user.has_role("platform_admin") and not current_user.has_role("governance_admin"):
-        raise HTTPException(status_code=403, detail="Not authorized to delete data contracts")
+    ensure_capability(current_user, _GOVERNANCE_CAPABILITY)
         
     contracts = db.query(DataContractModel).filter(DataContractModel.dataset_id == dataset_id).all()
     asset = db.query(DataAssetModel).filter(DataAssetModel.id == dataset_id).first()

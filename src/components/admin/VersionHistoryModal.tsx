@@ -3,6 +3,7 @@ import { History, Loader2, RotateCcw, Workflow as WorkflowIcon, X } from 'lucide
 import { Button } from '../ui/button';
 import { api } from '../../services/api';
 import type { Workflow, WorkflowVersion } from '../../services/api';
+import { errorMessage } from '../../lib/errors';
 
 interface Props {
   workflowId: string;
@@ -29,7 +30,7 @@ export function VersionHistoryModal({ workflowId, currentVersion, onRestored, on
     api
       .listWorkflowVersions(workflowId)
       .then((v) => !cancelled && setVersions(v))
-      .catch((e) => !cancelled && setError(e instanceof Error ? e.message : 'Failed to load history'));
+      .catch((e) => !cancelled && setError(errorMessage(e, 'Failed to load history')));
     return () => {
       cancelled = true;
     };
@@ -57,7 +58,7 @@ export function VersionHistoryModal({ workflowId, currentVersion, onRestored, on
       );
       onRestored(workflow);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to restore');
+      setError(errorMessage(e, 'Failed to restore'));
     } finally {
       setRestoring(null);
     }

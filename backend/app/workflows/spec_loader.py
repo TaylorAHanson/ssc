@@ -64,7 +64,7 @@ class SpecError(ValueError):
 _GATE_KEYS = {
     "kind", "name", "type", "waiting_status", "auto_approve", "approvers_from",
     "approver", "course_code", "course_name",
-    # false: Platform Admins can't Edit & Restart a request waiting here (what's
+    # false: Application Admins can't Edit & Restart a request waiting here (what's
     # approved must be exactly what was filed).
     "editable",
     # manual_task only: what the assignee has to actually do, and an optional

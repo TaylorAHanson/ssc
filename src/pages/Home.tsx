@@ -68,7 +68,7 @@ export function Home() {
         if (h < 18) return { greeting: 'Good afternoon', TimeIcon: Sun };
         return { greeting: 'Good evening', TimeIcon: Moon };
     }, []);
-    const [suggestions, setSuggestions] = useState<string[]>([]);
+    const [fetchedSuggestions, setFetchedSuggestions] = useState<string[]>([]);
 
     // Branding-driven header, using the compact `short_name` (e.g. "edh").
     // Shown only with the "enhanced landing page" feature, which is off by
@@ -80,23 +80,26 @@ export function Home() {
     // Pre-prompting: once we know who the user is, fetch a few personalized
     // starting prompts. Cached per session+persona so it's a single call per
     // login; failures silently fall back to the static welcome examples.
-    useEffect(() => {
-        if (!isInitialized || !onboardingEnabled) return;
-        let cancelled = false;
-        const cacheKey = `home_suggestions_${currentPersona}`;
-
+    const suggestionsCacheKey = `home_suggestions_${currentPersona}`;
+    const cachedSuggestions = useMemo((): string[] | null => {
+        if (!isInitialized || !onboardingEnabled) return null;
         try {
-            const cached = window.sessionStorage.getItem(cacheKey);
+            const cached = window.sessionStorage.getItem(suggestionsCacheKey);
             if (cached) {
-                const parsed = JSON.parse(cached);
-                if (Array.isArray(parsed) && parsed.length > 0) {
-                    setSuggestions(parsed);
-                    return;
-                }
+                const parsed: unknown = JSON.parse(cached);
+                if (Array.isArray(parsed) && parsed.length > 0) return parsed;
             }
         } catch {
             /* ignore cache read errors */
         }
+        return null;
+    }, [isInitialized, onboardingEnabled, suggestionsCacheKey]);
+    const suggestions = cachedSuggestions ?? fetchedSuggestions;
+
+    useEffect(() => {
+        if (!isInitialized || !onboardingEnabled || cachedSuggestions) return;
+        let cancelled = false;
+        const cacheKey = suggestionsCacheKey;
 
         // Recent topics come from the server-side transcript (falling back to the
         // local cache), so suggestions are personalized even on a device this
@@ -106,7 +109,7 @@ export function Home() {
             .then((res) => {
                 if (cancelled) return;
                 const prompts = (res.suggestions || []).map((s) => s.prompt).filter(Boolean);
-                setSuggestions(prompts);
+                setFetchedSuggestions(prompts);
                 try {
                     window.sessionStorage.setItem(cacheKey, JSON.stringify(prompts));
                 } catch {
@@ -120,7 +123,7 @@ export function Home() {
         return () => {
             cancelled = true;
         };
-    }, [isInitialized, currentPersona, onboardingEnabled]);
+    }, [isInitialized, onboardingEnabled, cachedSuggestions, suggestionsCacheKey]);
 
     // External deep-links can navigate to `/` (or `/request`) with
     // `state.autoQuery` to kick off a turn immediately. Forward that

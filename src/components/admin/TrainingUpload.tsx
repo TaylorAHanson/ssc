@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import { Button } from '../ui/button';
 import { Upload, Loader2, CheckCircle2, FileSpreadsheet } from 'lucide-react';
 import { uploadTrainingData } from '../../services/api';
+import { errorMessage } from '../../lib/errors';
 
 type UploadStats = {
   processed?: number;
@@ -35,7 +36,7 @@ export function TrainingUpload() {
       const result = await uploadTrainingData(file);
       setStats(result.stats || {});
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Upload failed');
+      setError(errorMessage(e, 'Upload failed'));
     } finally {
       setIsUploading(false);
     }

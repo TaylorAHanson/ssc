@@ -21,7 +21,7 @@ from app.tools.mcp import tool
         "(state context 'prepared_change'). Refuses a request spanning more than one type of rule (split "
         "by type) and a blocked change, listing the deny findings. A direct edit filed under the two-person "
         "rule (changes + plane on the request) is re-checked the same way. Returns plane (the type of rule, "
-        "which picks the approver group), approver_group (empty means Platform Admins approve) and "
+        "which picks the approver group), approver_group (empty means Application Admins approve) and "
         "report_markdown for the approval card."
     ),
 )

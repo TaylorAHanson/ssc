@@ -79,118 +79,11 @@ export interface FollowUpQuestion {
 }
 
 /**
- * Check agent health.
- */
-export async function checkAgentHealth(): Promise<any> {
-  const response = await fetch(`${API_BASE_URL}/agent/health`);
-  if (!response.ok) {
-    throw new Error(`Agent health check failed: ${response.statusText}`);
-  }
-  return response.json();
-}
-
-/**
- * Form management API
- */
-export interface FormInfo {
-  path: string;
-  title: string;
-  filename: string;
-}
-
-export interface FormVersionInfo {
-  filename: string;
-  date: string;
-  is_active: boolean;
-}
-
-export interface FormSchemaResponse {
-  path: string;
-  form_schema: Record<string, any>;  // Updated to match backend field name
-  schema?: Record<string, any>;  // Legacy field for backward compatibility
-}
-
-/**
- * List all available forms.
- */
-export async function listForms(): Promise<FormInfo[]> {
-  const response = await fetch(`${API_BASE_URL}/admin/forms`, {
-    headers: getHeaders()
-  });
-  if (!response.ok) {
-    throw new Error(`Failed to list forms: ${response.statusText}`);
-  }
-  return response.json();
-}
-
-/**
- * Get a specific form schema.
- */
-export async function getForm(formPath: string, version?: string): Promise<FormSchemaResponse> {
-  const url = new URL(`${API_BASE_URL}/admin/forms${formPath}`, window.location.origin);
-  if (version) {
-    url.searchParams.set('version', version);
-  }
-  const response = await fetch(url.toString(), {
-    headers: getHeaders()
-  });
-  if (!response.ok) {
-    throw new Error(`Failed to get form: ${response.statusText}`);
-  }
-  return response.json();
-}
-
-/**
- * Save a form schema.
- */
-export async function saveForm(
-  formPath: string,
-  schema: Record<string, any>,
-  createVersion: boolean = true
-): Promise<FormSchemaResponse> {
-  const response = await fetch(`${API_BASE_URL}/admin/forms${formPath}`, {
-    method: 'PUT',
-    headers: getHeaders(),
-    body: JSON.stringify({
-      form_schema: schema,
-      create_version: createVersion,
-    }),
-  });
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ detail: response.statusText }));
-    throw new Error(error.detail || `Failed to save form: ${response.statusText}`);
-  }
-  return response.json();
-}
-
-/**
- * Get all versions of a form.
- */
-export async function getFormVersions(formPath: string): Promise<FormVersionInfo[]> {
-  // Ensure path starts with / for consistency
-  const normalizedPath = formPath.startsWith('/') ? formPath : `/${formPath}`;
-  // FastAPI :path parameter should handle slashes, but we need to ensure the path is correct
-  // The path should be: /admin/forms{formPath}/versions
-  // where formPath can contain slashes like /paas/request/catalog
-  const url = `${API_BASE_URL}/admin/forms${normalizedPath}/versions`;
-  console.log('Fetching versions from:', url);
-  const response = await fetch(url, {
-    headers: getHeaders()
-  });
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => response.statusText);
-    console.error('Failed to get form versions:', response.status, errorText);
-    throw new Error(`Failed to get form versions: ${response.status} ${errorText}`);
-  }
-  return response.json();
-}
-
-/**
  * Content API (read-only). Content files (events, community links, training)
  * are edited in-repo / synced; the app only reads them here. `getContent` backs
  * the Events page and any other consumers.
  */
-export async function getContent(filename: string, version?: string, params?: Record<string, string>): Promise<Record<string, any> | any[]> {
+export async function getContent(filename: string, version?: string, params?: Record<string, string>): Promise<Record<string, unknown> | unknown[]> {
   const url = new URL(`${API_BASE_URL}/content/content/${filename}`, window.location.origin);
   if (version) {
     url.searchParams.set('version', version);
@@ -255,7 +148,7 @@ export async function createRequest(
   type: RequestType,
   title: string,
   environment?: Environment,
-  metadata?: Record<string, any>
+  metadata?: Record<string, unknown>
 ): Promise<Request> {
   const response = await fetch(`${API_BASE_URL}/requests`, {
     method: 'POST',
@@ -281,7 +174,7 @@ export async function createRequest(
   return getRequest(result.request_id);
 }
 
-/** `mine` limits a Platform Admin to their own requests (everyone else only ever gets theirs). */
+/** `mine` limits someone who sees every request to their own (everyone else only ever gets theirs). */
 export async function getRequests(options: { mine?: boolean } = {}): Promise<Request[]> {
   const response = await fetch(`${API_BASE_URL}/requests${options.mine ? '?mine=true' : ''}`, {
     headers: getHeaders()
@@ -702,7 +595,7 @@ export interface SettingsState {
   capability_sections: string[];
 }
 
-/** Get the editable settings spec + current values (Platform Admin only). */
+/** Get the editable settings spec + current values (Super and Application Admins). */
 export async function getSettings(): Promise<SettingsState> {
   const response = await fetch(`${API_BASE_URL}/settings`, { headers: getHeaders() });
   if (!response.ok) {
@@ -891,7 +784,7 @@ export async function listExecutions(subscriptionId?: string): Promise<Execution
 }
 
 // Training API
-export async function getTrainingStatus(): Promise<{ tracks: any, completed_codes: string[] }> {
+export async function getTrainingStatus(): Promise<{ tracks: TrainingTrackFull[]; completed_codes: string[] }> {
   const response = await fetch(`${API_BASE_URL}/training/me`, {
     headers: getHeaders()
   });
@@ -916,7 +809,16 @@ export async function listTrainingCourses(): Promise<TrainingCourse[]> {
   return response.json();
 }
 
-export async function uploadTrainingData(file: File): Promise<{ message: string, stats: any }> {
+/** `POST /training/upload`: counts from ingesting the completion CSV. */
+export interface TrainingUploadStats {
+  processed: number;
+  added: number;
+  updated: number;
+  skipped: number;
+  errors: number;
+}
+
+export async function uploadTrainingData(file: File): Promise<{ message: string; stats: TrainingUploadStats }> {
   const formData = new FormData();
   formData.append('file', file);
 
@@ -1233,7 +1135,7 @@ export async function adminTrainingConsumptionAnalytics(): Promise<CourseConsump
 
 export async function editRequestParameters(
   requestId: string,
-  parameters: Record<string, any>,
+  parameters: Record<string, unknown>,
   note?: string
 ): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/requests/${requestId}/edit-parameters`, {
@@ -1546,6 +1448,23 @@ export interface MetricKpi {
   description?: string;
 }
 
+/**
+ * An asset's `data_quality` JSON: free-form metrics from the catalog sync, plus
+ * the Sentinel certification pass's failed-rule summary. `reliability` is the
+ * legacy signal from before `failed_rule_count` (a number or a stringified one).
+ */
+export interface DataQuality {
+  failed_rule_count?: number;
+  failed_rules?: unknown[];
+  reliability?: number | string;
+  [metric: string]: unknown;
+}
+
+/**
+ * `GET /data-assets` row. The contract/quality/SLA/sync fields are always sent
+ * for cached assets but optional here, because Discover maps workspace objects
+ * (dashboards, jobs, apps, Genie spaces) onto this shape without them.
+ */
 export interface DataAsset {
   id: string;
   catalog: string;
@@ -1558,15 +1477,15 @@ export interface DataAsset {
   subdomain?: string | null;
   tags: string[];
   certified: boolean;
-  contract_url: string | null;
-  data_quality: any | null;
-  certification_violations: string[] | null;
-  sla: string | null;
+  contract_url?: string | null;
+  data_quality?: DataQuality | null;
+  certification_violations?: string[] | null;
+  sla?: string | null;
   kpis?: MetricKpi[] | null;
   upstream_tables?: Array<{ name: string; fqn: string; schema: string; type: string; description?: string }> | null;
-  downstream_dashboards?: Array<{ id: string; name: string; type: string; description?: string; owner?: string; views?: number; updated_at?: string; url?: string | null }> | null;
-  created_at: string | null;
-  last_synced_at: string;
+  downstream_dashboards?: Array<{ id: string; name: string; type: string; description?: string; owner?: string; views?: number; updated_at?: string; url?: string | null; workspace_id?: string | null; workspace_name?: string | null }> | null;
+  created_at?: string | null;
+  last_synced_at?: string;
 }
 
 export interface SubdomainMeta {
@@ -1644,7 +1563,7 @@ export async function getLegacyMappings(params?: {
   domain?: string;
   subdomain?: string;
   status?: string;
-  /** Platform Admins only: also return mappings whose metric view is hidden from Discover. */
+  /** Legacy dashboard admins only: also return mappings whose metric view is hidden from Discover. */
   include_hidden?: boolean;
 }): Promise<LegacyMapping[]> {
   const url = new URL(`${API_BASE_URL}/legacy-dashboards`, window.location.origin);
@@ -1839,7 +1758,7 @@ export interface DataContract {
   catalog?: string | null;
   schema_name?: string | null;
   table_name?: string | null;
-  data_quality?: any | null;
+  data_quality?: DataQuality | null;
   certification_violations?: string[] | null;
   certification_rule_results?: CertificationRuleResult[] | null;
   certified?: boolean;
@@ -2134,7 +2053,43 @@ export async function getSystemSchedules(): Promise<SystemSchedules> {
   return response.json();
 }
 
-export async function getDatabricksDashboards(): Promise<any[]> {
+// `/data-assets/databricks/*` rows: plain dicts built in
+// backend/app/api/v1/data_assets.py (no Pydantic model). Names come straight
+// from the workspace and can be null.
+
+export interface WorkspaceDashboard {
+  id: string;
+  name: string | null;
+  type: 'dashboard';
+  path?: string | null;
+}
+
+export interface WorkspaceJob {
+  id: string;
+  name: string | null;
+  type: 'job';
+  creator?: string | null;
+}
+
+export interface WorkspaceApp {
+  id: string;
+  name: string;
+  type: 'app';
+  creator?: string | null;
+  description?: string | null;
+  url?: string | null;
+  thumbnail_url?: string | null;
+  updated_at?: string | null;
+}
+
+export interface WorkspaceGenieSpace {
+  id: string;
+  name: string | null;
+  type: 'genie_space';
+  description?: string | null;
+}
+
+export async function getDatabricksDashboards(): Promise<WorkspaceDashboard[]> {
   const response = await fetch(`${API_BASE_URL}/data-assets/databricks/dashboards`, {
     headers: getHeaders()
   });
@@ -2144,7 +2099,7 @@ export async function getDatabricksDashboards(): Promise<any[]> {
   return response.json();
 }
 
-export async function getDatabricksJobs(): Promise<any[]> {
+export async function getDatabricksJobs(): Promise<WorkspaceJob[]> {
   const response = await fetch(`${API_BASE_URL}/data-assets/databricks/jobs`, {
     headers: getHeaders()
   });
@@ -2154,7 +2109,7 @@ export async function getDatabricksJobs(): Promise<any[]> {
   return response.json();
 }
 
-export async function getDatabricksApps(): Promise<any[]> {
+export async function getDatabricksApps(): Promise<WorkspaceApp[]> {
   const response = await fetch(`${API_BASE_URL}/data-assets/databricks/apps`, {
     headers: getHeaders()
   });
@@ -2164,7 +2119,7 @@ export async function getDatabricksApps(): Promise<any[]> {
   return response.json();
 }
 
-export async function getDatabricksGenieSpaces(): Promise<any[]> {
+export async function getDatabricksGenieSpaces(): Promise<WorkspaceGenieSpace[]> {
   const response = await fetch(`${API_BASE_URL}/data-assets/databricks/genie_spaces`, {
     headers: getHeaders()
   });
@@ -2250,6 +2205,7 @@ export type TablePreviewErrorKind =
   | 'not_found'
   | 'permission_denied'
   | 'broken_dependency'
+  | 'schema_changed'
   | 'no_warehouse'
   | 'no_obo'
   | 'error'
@@ -3091,7 +3047,7 @@ export type GateApprover =
     }
   /** The approver group set per type of access rule (Admin → Settings → Access
    *  Rules), picked by the request's type (`rule_type_from`, default `plane`).
-   *  Platform Admins approve when that type's group is blank. */
+   *  Application Admins approve when that type's group is blank. */
   | { source: 'access_rule_type'; rule_type_from?: SpecExpr | null };
 
 export interface WorkflowGateStage {

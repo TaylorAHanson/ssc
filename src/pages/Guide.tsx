@@ -15,8 +15,11 @@ import { NAV, NAV_LABELS, READING_ORDER, applyBrand, outline, pageBySlug, search
 import type { Brand, NavSection } from '../guide/content';
 import { useBrandingStore } from '../stores/brandingStore';
 import { useUserStore } from '../stores/userStore';
+import { ROLE_PRIORITY } from '../types';
+import type { UserPersona } from '../types';
 
-const ADMIN_PERSONAS = new Set(['Platform Admin', 'Governance Admin', 'Security Admin', 'Finance Admin']);
+// Every role but User.
+const ADMIN_PERSONAS = new Set<UserPersona>(ROLE_PRIORITY.filter((role) => role !== 'User'));
 
 function pathFor(slug: string, anchor = ''): string {
   return `/guide${slug ? `/${slug}` : ''}${anchor ? `#${anchor}` : ''}`;
