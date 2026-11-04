@@ -133,17 +133,11 @@ class TestDataAssetOwnerResolution:
         assert len(res) == 1
         assert res[0]["owner"] == "Sales & Revenue Team"
 
-    def test_list_metric_views_endpoint_resolves_owner(self):
+    def test_list_metric_views_endpoint_resolves_owner(self, db_session):
         """list_metric_views endpoint returns effective data owner."""
-        from unittest.mock import MagicMock
         from app.api.v1.data_assets import list_metric_views
 
-        mock_db = MagicMock()
-        mock_query = MagicMock()
-        mock_db.query.return_value = mock_query
-        mock_query.filter.return_value = mock_query
-
-        sample = DataAssetModel(
+        db_session.add(DataAssetModel(
             id="main.metrics.kpis",
             catalog="main",
             schema="metrics",
@@ -152,9 +146,9 @@ class TestDataAssetOwnerResolution:
             owner="sp-uuid-12345",
             tags=["data_owner=Analytics Guild"],
             last_synced_at=None,
-        )
-        mock_query.all.return_value = [sample]
+        ))
+        db_session.flush()
 
-        res = list_metric_views(db=mock_db)
+        res = list_metric_views(db=db_session)
         assert len(res) == 1
         assert res[0]["owner"] == "Analytics Guild"

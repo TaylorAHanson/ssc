@@ -17,6 +17,7 @@ from app.services import discover_visibility as dv
 from app.tools.self_service import get_table_list as gtl
 from app.tools.self_service.search_data_assets import search_data_assets
 from app.workers.tasks import sync_data_assets as sync
+from tests.factories.discover_domain_factory import add_domains
 
 ADMIN = User(id="admin", email="admin@x.com", full_name="Admin", entitlements=[], roles=["Platform Admin"])
 ALICE = User(id="alice", email="alice@x.com", full_name="Alice", entitlements=[], roles=[])
@@ -33,12 +34,13 @@ def hide_keys(monkeypatch):
 def _asset(asset_id, type_="MANAGED", tags=None, scope=None, **extra):
     catalog, schema, table = asset_id.split(".")
     return DataAssetModel(id=asset_id, catalog=catalog, schema=schema, table_name=table, type=type_,
-                          domain="Finance", subdomain="Revenue & Margin", tags=tags or [],
+                          tags=["Finance/Revenue & Margin", *(tags or [])],
                           scope_tag_keys=scope, **extra)
 
 
 @pytest.fixture
 def db(db_session):
+    add_domains(db_session)
     db_session.add_all([
         _asset("main.fin.visible"),
         _asset("main.fin.own_tag", tags=["HIDE_FROM_DISCOVER=true"]),
@@ -219,25 +221,30 @@ def _workspace_provider():
     return provider
 
 
-def test_workspace_listings_drop_tagged_dashboards_apps_genie_and_jobs(dashboard_tags):
+def test_workspace_listings_drop_tagged_dashboards_apps_genie_and_jobs(db, dashboard_tags):
     tags, calls = dashboard_tags
     tags[("apps", "app-hidden")] = {"hide_from_discover"}
     tags[("geniespaces", "g-hidden")] = {"HIDE_FROM_DISCOVER"}
+    tags[("dashboards", "d-ok")] = {"finance/revenue & margin"}
+    tags[("apps", "app-ok")] = {"Supply Chain"}
     with patch("app.providers.databricks.DatabricksProvider", return_value=_workspace_provider()):
-        assert [d["id"] for d in api.get_databricks_dashboards()] == ["d-ok"]
+        dashboards = api.get_databricks_dashboards(db=db)
+        assert [(d["id"], d["domains"], d["subdomains"]) for d in dashboards] == [
+            ("d-ok", ["Finance"], ["Finance/Revenue & Margin"])]
         assert [j["id"] for j in api.get_databricks_jobs()] == ["1"]
-        assert [a["id"] for a in api.get_databricks_apps()] == ["app-ok"]
-        assert [g["id"] for g in api.get_databricks_genie_spaces()] == ["g-ok"]
-        api.get_databricks_dashboards()
-    # Tag reads are cached: the second dashboards listing re-read nothing.
+        assert [(a["id"], a["domains"]) for a in api.get_databricks_apps(db=db)] == [("app-ok", ["Supply Chain"])]
+        assert [(g["id"], g["domains"]) for g in api.get_databricks_genie_spaces(db=db)] == [("g-ok", [])]
+        api.get_databricks_dashboards(db=db)
+    # Tag reads are cached and shared by the visibility and domain checks.
     assert calls.count(("dashboards", "d-ok")) == 1
 
 
-def test_workspace_listings_skip_tag_reads_when_off(monkeypatch, dashboard_tags):
+def test_workspace_listings_skip_tag_reads_when_off(monkeypatch, db_session, dashboard_tags):
+    # No hide keys and no Discover domains cached: nothing needs a workspace tag.
     monkeypatch.setattr(settings, "DISCOVER_HIDDEN_TAG_KEYS", [])
     _, calls = dashboard_tags
     with patch("app.providers.databricks.DatabricksProvider", return_value=_workspace_provider()):
-        assert len(api.get_databricks_dashboards()) == 2
+        assert len(api.get_databricks_dashboards(db=db_session)) == 2
     assert calls == []
 
 

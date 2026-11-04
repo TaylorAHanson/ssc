@@ -25,6 +25,7 @@ import { PinButton } from './PinButton';
 import { pinInputFromAsset } from '../../lib/usePinnedAssets';
 import { scrollContainerOf } from '../../hooks/useViewScroll';
 import { errorMessage } from '../../lib/errors';
+import { subdomainLabel } from '../../lib/discoverDomains';
 
 interface DashboardOrApp {
   id: string;
@@ -216,17 +217,17 @@ export function InlineMetricViewDetail({
               </span>
             )}
 
-            {asset.domain && (
-              <span className="text-[11px] px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-medium">
-                {asset.domain}
+            {asset.domains.map((d) => (
+              <span key={d} className="text-[11px] px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-medium">
+                {d}
               </span>
-            )}
+            ))}
 
-            {asset.subdomain && (
-              <span className="text-[11px] px-2 py-0.5 rounded-md bg-primary/10 text-primary font-medium">
-                {asset.subdomain}
+            {asset.subdomains.map((s) => (
+              <span key={s} className="text-[11px] px-2 py-0.5 rounded-md bg-primary/10 text-primary font-medium">
+                {subdomainLabel(s, asset.domains)}
               </span>
-            )}
+            ))}
           </div>
 
           <h3 className="text-2xl font-black text-slate-900 capitalize tracking-tight flex items-center gap-2">

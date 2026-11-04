@@ -81,7 +81,7 @@ def has_hidden_tag(tags: Any, keys: Optional[FrozenSet[str]] = None) -> bool:
     return bool(keys) and not keys.isdisjoint(tag_keys(tags))
 
 
-def _scope(scope_tag_keys: Any) -> Dict[str, Set[str]]:
+def scope_keys(scope_tag_keys: Any) -> Dict[str, Set[str]]:
     if isinstance(scope_tag_keys, str):
         try:
             scope_tag_keys = json.loads(scope_tag_keys)
@@ -129,7 +129,7 @@ class DiscoverVisibility:
             return False
         if self.is_hidden_id(getattr(asset, "id", None)):
             return True
-        scope = _scope(getattr(asset, "scope_tag_keys", None))
+        scope = scope_keys(getattr(asset, "scope_tag_keys", None))
         own = tag_keys(getattr(asset, "tags", None))
         return not self.keys.isdisjoint(own.union(*scope.values()) if scope else own)
 
@@ -162,7 +162,7 @@ def load_visibility(db) -> DiscoverVisibility:
         DataAssetModel.tags, DataAssetModel.scope_tag_keys,
     ).all()
     for asset_id, catalog, schema, tags, scope_raw in rows:
-        scope = _scope(scope_raw)
+        scope = scope_keys(scope_raw)
         cat, sch = _norm(catalog), _norm(schema)
         if cat and not keys.isdisjoint(scope.get("catalog", ())):
             vis.hidden_catalogs.add(cat)

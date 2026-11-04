@@ -4,6 +4,7 @@ import { MetricViewCard } from './MetricViewCard';
 import { AssetCard } from './AssetCard';
 import { Pagination } from './Pagination';
 import { usePagination } from './usePagination';
+import { domainPaths } from '../../lib/discoverDomains';
 
 interface DiscoverSearchResultsProps {
   term: string;
@@ -26,7 +27,7 @@ function plural(n: number, one: string, many = `${one}s`) {
   return `${n} ${n === 1 ? one : many}`;
 }
 
-const location = (a: DataAsset) => [a.domain, a.subdomain].filter(Boolean).join(' › ') || undefined;
+const location = (a: DataAsset) => domainPaths(a).join(', ') || undefined;
 
 /** Catalog-wide search results shown on the Discover landing page in place of the domain picker. */
 export function DiscoverSearchResults({

@@ -536,7 +536,6 @@ async def run_sync_contracts_background(dataset_groups: dict, force: bool, speci
                     table_name=dataset_name,
                     type="DATA_PRODUCT",
                     description=f"Data contract for {dataset_name}",
-                    domain="unknown",
                     contract_url=f"/governance/certification?dataset={dataset_name}"
                 )
                 db.add(asset)
@@ -1110,10 +1109,8 @@ def create_contract(
         try:
             parsed = yaml.safe_load(contract.yaml_content)
             description = parsed.get("description", {}).get("purpose", f"Data contract for {contract.dataset_id}")
-            domain = parsed.get("domain", "unknown")
         except:
             description = f"Data contract for {contract.dataset_id}"
-            domain = "unknown"
 
         asset = DataAssetModel(
             id=contract.dataset_id,
@@ -1122,7 +1119,6 @@ def create_contract(
             table_name=table,
             type="TABLE",
             description=description,
-            domain=domain,
             contract_url=f"/governance/certification?dataset={contract.dataset_id}"
         )
         db.add(asset)

@@ -10,8 +10,9 @@
  *   /discovery?asset=main.sales.orders
  *   /discovery?domain=finance&show=legacy
  *
- * Domains and subdomains have no ids in the API, so they are addressed by a
- * slug of their name; matching slugifies both sides, so a raw name works too.
+ * Domains and subdomains are addressed by a slug of their Discover tag key or
+ * subdomain name (the catch-all Other card is `other`); matching slugifies both
+ * sides, so a raw name works too.
  * `show` (comma-separated content kinds) picks what a domain view opens on,
  * overriding the remembered choice for that visit.
  */

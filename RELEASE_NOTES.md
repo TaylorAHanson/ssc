@@ -13,6 +13,14 @@ Format rules (the app parses this file, so keep to them):
   before), and what the reader will notice or should do now.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
 
+## 2.12.0 — 2026-11-04
+
+### Discover
+
+- **Discover's domains now come from Databricks Discover.** Before, Discover guessed each table's domain and subdomain from words in its catalog, schema and table names, and showed fixed descriptions, so assets could land in the wrong area and the domains didn't match what your organization had set up in Databricks. Now the domain cards are the domains and subdomains defined under Databricks Discover → Manage Domains, with their icon and subtitle. An asset is in a domain when it carries the domain's tag, or its catalog or schema does. A subdomain's assets also count in its parent, and an asset can be in more than one domain. Dashboards, apps and Genie spaces join a domain through their own workspace tags, and apps are no longer shown in every domain. The **Enterprise Data** card is gone unless it's defined in Databricks. The domain list is read at each catalog refresh. The identity the sync runs as needs the **MANAGE DISCOVER** permission; without it, Discover keeps the last list it read.
+- **Data that isn't in a domain is under a new Other card.** Untagged tables, views, metric views, dashboards and apps would otherwise drop out of the domain browser, which would make them hard to find while domains are still being rolled out. The **Other** card is always last, opens straight to its assets, and empties as data owners tag their data in Databricks. Until the first catalog refresh has read the domains, everything is under **Other**.
+- **The assistant uses the same domains.** When you ask for data in a domain or subdomain, the assistant filters by the Databricks Discover domains, including ones a catalog or schema passes down. Ask for **Other** to see data that isn't in any domain yet.
+
 ## 2.11.0 — 2026-11-03
 
 ### Roles and access

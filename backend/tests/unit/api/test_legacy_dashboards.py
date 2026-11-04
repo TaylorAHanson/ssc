@@ -15,20 +15,22 @@ from app.api.v1.legacy_dashboards import (
 from app.db.data_asset import DataAssetModel
 from app.models.user import User
 from app.tools.self_service.search_data_assets import search_metric_views
+from tests.factories.discover_domain_factory import add_domains
 
 ADMIN = User(id="admin", email="admin@x.com", full_name="Admin", entitlements=[], roles=["Platform Admin"])
 
 
 @pytest.fixture
 def db(db_session):
+    add_domains(db_session)
     db_session.add_all([
         DataAssetModel(id="c.sc.metric_demand_planning", catalog="c", schema="sc", table_name="metric_demand_planning",
-                       type="METRIC_VIEW", domain="Supply Chain", subdomain="Planning & Forecasting",
+                       type="METRIC_VIEW", tags=["supply chain/planning & forecasting"],
                        description="End-to-end demand planning"),
         DataAssetModel(id="c.fin.sem_revenue", catalog="c", schema="fin", table_name="sem_revenue",
-                       type="METRIC_VIEW", domain="Finance", subdomain="Revenue & Margin"),
+                       type="METRIC_VIEW", tags=["Finance/Revenue & Margin"]),
         DataAssetModel(id="c.sc.orders", catalog="c", schema="sc", table_name="orders", type="MANAGED",
-                       domain="Supply Chain"),
+                       tags=["Supply Chain"]),
     ])
     db_session.flush()
     return db_session
@@ -44,7 +46,7 @@ def test_create_takes_domain_from_the_metric_view(db):
     out = _create(db, status="migrating", owner=" FPA ", url="")
 
     assert out["status"] == "Migrating" and out["owner"] == "FPA" and out["url"] is None
-    assert (out["domain"], out["subdomain"]) == ("Supply Chain", "Planning & Forecasting")
+    assert (out["domains"], out["subdomains"]) == (["Supply Chain"], ["Supply Chain/Planning & Forecasting"])
     assert out["metric_view"] == "metric_demand_planning" and out["in_catalog"]
     assert out["metric_view_description"] == "End-to-end demand planning"
     assert out["updated_by"] == "admin@x.com"
@@ -80,8 +82,10 @@ def test_list_filters_by_the_views_domain_and_status(db):
         "Revenue Tracker", "Weekly Demand Review"]
     assert [r["dashboard"] for r in list_legacy_dashboards(domain="Finance", db=db, current_user=everyone)] == [
         "Revenue Tracker"]
-    assert [r["dashboard"] for r in list_legacy_dashboards(subdomain="Planning & Forecasting", db=db,
+    assert [r["dashboard"] for r in list_legacy_dashboards(subdomain="Supply Chain/Planning & Forecasting", db=db,
                                                            current_user=everyone)] == ["Weekly Demand Review"]
+    assert [r["dashboard"] for r in list_legacy_dashboards(domain="Supply Chain", subdomain="planning & forecasting",
+                                                           db=db, current_user=everyone)] == ["Weekly Demand Review"]
     assert [r["dashboard"] for r in list_legacy_dashboards(status="active", db=db, current_user=everyone)] == [
         "Weekly Demand Review"]
 
@@ -104,7 +108,7 @@ def test_mapping_to_a_view_that_left_the_catalog_still_lists(db):
     created = _create(db)
     db.query(DataAssetModel).filter(DataAssetModel.id == "c.sc.metric_demand_planning").delete()
     row = list_legacy_dashboards(db=db, current_user=ADMIN)[0]
-    assert row["id"] == created["id"] and not row["in_catalog"] and row["domain"] is None
+    assert row["id"] == created["id"] and not row["in_catalog"] and row["domains"] == []
     assert row["metric_view"] == "metric_demand_planning"
 
 

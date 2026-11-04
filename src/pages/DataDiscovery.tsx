@@ -8,7 +8,7 @@ import {
   Key, ExternalLink, Network, Activity, Sparkles,
   Users, Server, Eye
 } from 'lucide-react';
-import { api } from '../services/api';
+import { api, OTHER_DOMAIN } from '../services/api';
 import type { DataAsset, DataContract, LegacyMapping, TableDetailsResponse } from '../services/api';
 import {
   parseContractYaml,
@@ -55,7 +55,8 @@ import { PinButton } from '../components/discover/PinButton';
 import { pinInputFromAsset } from '../lib/usePinnedAssets';
 import { DomainStartView } from '../components/discover/DomainStartView';
 import { DomainFullView } from '../components/discover/DomainFullView';
-import { countDomainContent } from '../components/discover/contentKinds';
+import { countDomainContent, isCatalogTable } from '../components/discover/contentKinds';
+import { domainPaths, inDomain, inSubdomain } from '../lib/discoverDomains';
 import { DiscoverSearchResults } from '../components/discover/DiscoverSearchResults';
 import { SidePanel } from '../components/discover/SidePanel';
 import { DataPreview } from '../components/discover/DataPreview';
@@ -95,6 +96,17 @@ export function DataDiscovery() {
   );
   const selectedDomain = domainData?.domain ?? null;
   const selectedSubdomain = subdomainData?.name ?? null;
+  const selectedSubdomainKey = subdomainData?.tag_key ?? null;
+  // Where a metric view lives: its first domain (or the Other card) and, if it
+  // has one there, its subdomain.
+  const homeOf = (mv: DataAsset) => {
+    const key = mv.domains[0] ?? OTHER_DOMAIN;
+    const home = domainsHierarchy.find((d) => d.domain.toLowerCase() === key.toLowerCase());
+    return {
+      domain: home?.domain ?? null,
+      subdomain: home?.subdomains.find((sd) => sd.tag_key && inSubdomain(mv, sd.tag_key))?.name ?? null,
+    };
+  };
   const discoveryStage: 'start' | 'full' = selectedDomain ? 'full' : 'start';
   const resolvingLink = hierarchyLoading && Boolean(urlTarget.domain);
 
@@ -104,7 +116,7 @@ export function DataDiscovery() {
     const id = urlTarget.asset;
     if (!id || metricViewsLoading || hierarchyLoading) return null;
     const mv = (metricViewsData as DataAsset[]).find((v) => v.id === id);
-    if (mv && (domainData || domainsHierarchy.some((d) => d.domain === mv.domain))) {
+    if (mv && (domainData || domainsHierarchy.some((d) => inDomain(mv, d.domain)))) {
       return { kind: 'metric' as const, asset: mv };
     }
     const found = (datasets as DataAsset[]).find((d) => d.id === id) ?? mv;
@@ -214,11 +226,7 @@ export function DataDiscovery() {
       asset: selectedAsset ? urlTarget.asset : null,
     };
     if (selectedMetricView && !domainData) {
-      next.domain = selectedMetricView.domain;
-      const home = domainsHierarchy.find((d) => d.domain === selectedMetricView.domain);
-      next.subdomain = home?.subdomains.some((sd) => sd.name === selectedMetricView.subdomain)
-        ? selectedMetricView.subdomain
-        : null;
+      Object.assign(next, homeOf(selectedMetricView));
     }
     const search = withDiscoverParams(searchParams, next).toString();
     if (search !== searchParams.toString()) {
@@ -392,9 +400,9 @@ export function DataDiscovery() {
   const scopedLegacyMappings = useMemo(
     () =>
       legacyMappings.filter(
-        (m) => m.domain === selectedDomain && (!selectedSubdomain || m.subdomain === selectedSubdomain),
+        (m) => selectedDomain !== null && inDomain(m, selectedDomain) && (!selectedSubdomainKey || inSubdomain(m, selectedSubdomainKey)),
       ),
-    [legacyMappings, selectedDomain, selectedSubdomain],
+    [legacyMappings, selectedDomain, selectedSubdomainKey],
   );
 
   // Landing-page search is catalog-wide: it ignores any domain picked in step 1.
@@ -410,7 +418,7 @@ export function DataDiscovery() {
       if (has(a.table_name) || has(a.table_name?.replace(/_/g, ' '))) return 3;
       if (legacyNamesMatching(a.id).length > 0) return 3;
       if (has(a.description) || has(a.owner) || (a.kpis || []).some((k) => has(k.name))) return 2;
-      if (has(a.domain) || has(a.subdomain)) return 1;
+      if (has(domainPaths(a).join(' ')) || (a.subdomains ?? []).some(has)) return 1;
       return 0;
     };
     const rank = (items: DataAsset[]) =>
@@ -438,10 +446,10 @@ export function DataDiscovery() {
 
   const filteredMetricViews = useMemo(() => {
     return metricViewsData.filter((mv) => {
-      if (selectedDomain && mv.domain !== selectedDomain) {
+      if (selectedDomain && !inDomain(mv, selectedDomain)) {
         return false;
       }
-      if (selectedSubdomain && mv.subdomain !== selectedSubdomain) {
+      if (selectedSubdomainKey && !inSubdomain(mv, selectedSubdomainKey)) {
         return false;
       }
       if (showCertifiedOnly && !mv.certified) {
@@ -453,19 +461,19 @@ export function DataDiscovery() {
       if (effectiveSearchTerm.trim()) {
         const term = effectiveSearchTerm.toLowerCase();
         const kpiNames = (mv.kpis || []).map((k) => `${k.name || ''} ${k.value || ''}`).join(' ');
-        const hay = `${mv.table_name} ${mv.description || ''} ${mv.domain || ''} ${mv.subdomain || ''} ${kpiNames}`.toLowerCase();
+        const hay = `${mv.table_name} ${mv.description || ''} ${domainPaths(mv).join(' ')} ${kpiNames}`.toLowerCase();
         if (!hay.includes(term) && legacyNamesMatching(mv.id).length === 0) return false;
       }
       return true;
     });
-  }, [metricViewsData, selectedDomain, selectedSubdomain, showCertifiedOnly, showAccessibleOnly, accessibleAvailable, accessibleIds, effectiveSearchTerm, legacyNamesMatching]);
+  }, [metricViewsData, selectedDomain, selectedSubdomainKey, showCertifiedOnly, showAccessibleOnly, accessibleAvailable, accessibleIds, effectiveSearchTerm, legacyNamesMatching]);
 
   // Governed Lakehouse tables and views in this domain/subdomain (excluding metric views)
   const subdomainTables = useMemo(() => {
     return datasets.filter((ds) => {
-      if (selectedDomain && ds.domain !== selectedDomain) return false;
-      if (selectedSubdomain && ds.subdomain !== selectedSubdomain) return false;
-      if (ds.type === 'METRIC_VIEW') return false;
+      if (!isCatalogTable(ds)) return false;
+      if (selectedDomain && !inDomain(ds, selectedDomain)) return false;
+      if (selectedSubdomainKey && !inSubdomain(ds, selectedSubdomainKey)) return false;
       if (showCertifiedOnly && !ds.certified) return false;
       if (showAccessibleOnly && accessibleAvailable && !accessibleIds.has(ds.id)) return false;
       if (effectiveSearchTerm.trim()) {
@@ -475,7 +483,7 @@ export function DataDiscovery() {
       }
       return true;
     });
-  }, [datasets, selectedDomain, selectedSubdomain, showCertifiedOnly, showAccessibleOnly, accessibleAvailable, accessibleIds, effectiveSearchTerm]);
+  }, [datasets, selectedDomain, selectedSubdomainKey, showCertifiedOnly, showAccessibleOnly, accessibleAvailable, accessibleIds, effectiveSearchTerm]);
 
   const { dashboardsList, appsList, consumingSolutions } = useMemo(() => {
     const dList: Array<{
@@ -499,12 +507,13 @@ export function DataDiscovery() {
       thumbnail_url?: string | null;
     }> = [];
 
-    // Harvest from datasets. Workspace dashboards carry no domain, so they're
-    // only listed unscoped; within a domain, dashboards come from the lineage of
-    // its metric views below.
+    // Harvest from datasets: workspace dashboards and apps in the selected
+    // domain by their own tags; the lineage of its metric views adds more below.
+    const inScope = (ds: DataAsset) =>
+      (!selectedDomain || inDomain(ds, selectedDomain)) && (!selectedSubdomainKey || inSubdomain(ds, selectedSubdomainKey));
     for (const ds of datasets) {
       if (ds.type === 'dashboard') {
-        if (!selectedDomain) {
+        if (inScope(ds)) {
           dList.push({
             id: ds.id,
             name: ds.table_name,
@@ -515,8 +524,7 @@ export function DataDiscovery() {
           });
         }
       } else if (ds.type === 'app') {
-        const matchesDomain = !selectedDomain || ds.domain === selectedDomain || ds.domain === 'Engineering';
-        if (matchesDomain) {
+        if (inScope(ds)) {
           aList.push({
             id: ds.id,
             name: ds.table_name,
@@ -584,7 +592,7 @@ export function DataDiscovery() {
       appsList: aList,
       consumingSolutions: [...dList, ...aList],
     };
-  }, [datasets, filteredMetricViews, selectedDomain, databricksWorkspaceUrl]);
+  }, [datasets, filteredMetricViews, selectedDomain, selectedSubdomainKey, databricksWorkspaceUrl]);
 
   const submitAgentQuery = (q: string) => {
     const trimmed = q.trim();
@@ -725,7 +733,7 @@ export function DataDiscovery() {
             selectedAssetId={selectedDataset?.id ?? null}
             onOpenMetricView={(mv) => {
               setSearchTerm('');
-              navigateTo({ domain: mv.domain, subdomain: mv.subdomain, asset: mv.id });
+              navigateTo({ ...homeOf(mv), asset: mv.id });
             }}
             onOpenAsset={(asset) => openAsset(asset.id)}
             onClear={() => setSearchTerm('')}
@@ -744,7 +752,7 @@ export function DataDiscovery() {
           />
         ) : (
           <DomainFullView
-            domain={selectedDomain || domainsHierarchy[0]?.domain || 'Supply Chain'}
+            domain={selectedDomain ?? ''}
             domainsHierarchy={domainsHierarchy}
             onSelectDomain={(d) => navigateTo({ domain: d, subdomain: null, asset: null })}
             subdomain={selectedSubdomain}
@@ -1121,7 +1129,7 @@ function DetailsModal({
               <section>
                 <SectionHeading icon={<ShieldCheck className="w-4 h-4" />} title="Governance" />
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <MetaRow label="Domain" value={parsed?.domain || asset.domain} />
+                  <MetaRow label="Domain" value={parsed?.domain || domainPaths(asset).join(', ') || null} />
                   <MetaRow label="Owner" value={contractOwner || asset.owner} />
                   <MetaRow label="Type">
                     <span className="text-sm font-medium text-gray-900 bg-gray-100 px-2 py-0.5 rounded capitalize">{displayType}</span>

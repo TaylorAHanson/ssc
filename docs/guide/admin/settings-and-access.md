@@ -128,6 +128,11 @@ visit most often:
   remove in Unity Catalog applies after the next catalog refresh, and on
   dashboards, Genie spaces and apps within about ten minutes. Hiding isn't
   access control: people with access can still open the asset in Databricks.
+  Discover's domains and subdomains are the ones defined in Databricks
+  Discover (**Manage Domains**), read at each catalog refresh. The identity
+  the catalog sync runs as needs the **MANAGE DISCOVER** permission there;
+  without it, Discover keeps the last domains it read, and shows everything
+  under **Other** if it has never read any.
 - **Legacy Dashboards** (under **Discover & Analyze**): map dashboards people
   used before, for example in Tableau, to the metric views that replace them.
   People then find them in Discover under **Legacy Dashboards** and when they

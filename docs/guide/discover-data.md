@@ -16,9 +16,16 @@ the catalog. You can ask follow-up questions there.
 
 ## Browse by business area
 
-Data is organized into business domains, such as finance or sales, and each
-domain into subdomains. **Enterprise Data** always comes first and is
-highlighted. It holds shared data that isn't owned by a single business area.
+Data is organized into the business domains, such as finance or supply
+chain, and subdomains your organization defines in Databricks Discover. Each
+card shows the domain's icon and subtitle from Databricks. An asset belongs to
+a domain when it carries the domain's tag, or its catalog or schema does. An
+asset in a subdomain also counts in its parent domain, and an asset can be in
+several domains.
+
+Data that isn't in any domain yet is under **Other**, the last card, so it's
+still easy to find. To move it into a domain, ask a data owner to tag it in
+Databricks Discover; it moves at the next catalog refresh.
 
 1. Under **What domain are you interested in?**, pick a domain card.
 2. In **Step 2**, the left column lists the domain's subdomains. Click one to

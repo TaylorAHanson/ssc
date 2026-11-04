@@ -254,6 +254,7 @@ export function DomainFullView({
 }: DomainFullViewProps) {
   const currentDomainData = domainsHierarchy.find((d) => d.domain === domain) || domainsHierarchy[0];
   const currentSubdomainMeta = currentDomainData?.subdomains.find((sd) => sd.name === subdomain);
+  const domainLabel = currentDomainData?.label ?? domain;
   const showSubdomainPicker = currentDomainData?.has_subdomains !== false || !!subdomain;
 
   // Derive split dashboards and apps lists
@@ -386,7 +387,7 @@ export function DomainFullView({
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200/90 text-slate-800 text-xs font-bold transition-all cursor-pointer"
               >
                 <Layers className="w-3.5 h-3.5 text-slate-500" />
-                <span>{domain}</span>
+                <span>{domainLabel}</span>
                 <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform ${domainDropdownOpen ? 'rotate-180' : ''}`} />
               </button>
 
@@ -409,7 +410,7 @@ export function DomainFullView({
                         dom.domain === domain ? 'bg-primary/10 text-primary font-bold' : 'text-slate-700'
                       }`}
                     >
-                      <span>{dom.domain}</span>
+                      <span>{dom.label}</span>
                       <span className="text-[10px] text-slate-400 font-semibold">{plural(dom.metric_view_count, 'metric view')}</span>
                     </button>
                   ))}
@@ -503,7 +504,7 @@ export function DomainFullView({
               value={searchTerm}
               onChange={onSearchChange}
               onSubmitAgentQuery={onSubmitAgentQuery}
-              placeholder={`Search in ${subdomain || domain}…`}
+              placeholder={`Search in ${subdomain || domainLabel}…`}
               className="flex-1 min-w-[14rem] max-w-md"
               expandedWidth="w-full"
             />
@@ -545,7 +546,7 @@ export function DomainFullView({
           {viewLink && (
             <CopyLinkButton
               url={viewLink}
-              title={`Copy a link to ${subdomain || domain}`}
+              title={`Copy a link to ${subdomain || domainLabel}`}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border bg-white text-slate-600 border-slate-200 hover:bg-slate-50 transition-all cursor-pointer"
               iconClassName="w-3.5 h-3.5 text-slate-500"
               labelClassName="hidden 2xl:inline"
@@ -565,7 +566,7 @@ export function DomainFullView({
                 {currentSubdomainMeta.name}
               </h2>
               <p className="text-xs text-slate-600 max-w-3xl leading-relaxed">
-                {currentSubdomainMeta.description}
+                {currentSubdomainMeta.subtitle || currentSubdomainMeta.description}
               </p>
 
             </div>
@@ -627,8 +628,8 @@ export function DomainFullView({
             ) : (
               <EmptyNote>
                 {showHeadings
-                  ? `No metric views in ${subdomain || domain}.`
-                  : `No metric views in ${subdomain || domain}. Select Tables & Views to see its data.`}
+                  ? `No metric views in ${subdomain || domainLabel}.`
+                  : `No metric views in ${subdomain || domainLabel}. Select Tables & Views to see its data.`}
               </EmptyNote>
             )}
           </section>
@@ -654,7 +655,7 @@ export function DomainFullView({
                 <Pagination {...tablePages} onPageChange={tablePages.setPage} />
               </>
             ) : (
-              <EmptyNote>No tables or views in {subdomain || domain}.</EmptyNote>
+              <EmptyNote>No tables or views in {subdomain || domainLabel}.</EmptyNote>
             )}
           </section>
         )}
@@ -681,7 +682,7 @@ export function DomainFullView({
                 <Pagination {...dashboardPages} onPageChange={dashboardPages.setPage} />
               </>
             ) : (
-              <EmptyNote>No dashboards linked to {subdomain || domain}.</EmptyNote>
+              <EmptyNote>No dashboards linked to {subdomain || domainLabel}.</EmptyNote>
             )}
           </section>
         )}
@@ -698,7 +699,7 @@ export function DomainFullView({
                 onOpenMetricView={(id) => onOpenMetricViewById?.(id)}
               />
             ) : (
-              <EmptyNote>No legacy dashboards are mapped to metric views in {subdomain || domain}.</EmptyNote>
+              <EmptyNote>No legacy dashboards are mapped to metric views in {subdomain || domainLabel}.</EmptyNote>
             )}
           </section>
         )}
@@ -717,7 +718,7 @@ export function DomainFullView({
                 <Pagination {...appPages} onPageChange={appPages.setPage} />
               </>
             ) : (
-              <EmptyNote>No apps found for {subdomain || domain}.</EmptyNote>
+              <EmptyNote>No apps found for {subdomain || domainLabel}.</EmptyNote>
             )}
           </section>
         )}

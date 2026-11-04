@@ -16,6 +16,7 @@ import { legacyMappingsResource, useMetricViews } from '../../lib/catalogCache';
 import { LegacyStatusBadge } from '../../components/discover/LegacyMappingTable';
 import { LEGACY_STATUSES, legacyMatches, prettyMetricViewName } from '../../components/discover/legacyMappings';
 import { errorMessage } from '../../lib/errors';
+import { domainPaths } from '../../lib/discoverDomains';
 
 const EMPTY: LegacyMappingInput = { dashboard: '', metric_view: '', status: 'Active', owner: '', description: '', url: '' };
 
@@ -299,7 +300,7 @@ export function LegacyDashboards() {
                   <datalist id="legacy-metric-view-options">
                     {views.map((v) => (
                       <option key={v.id} value={v.id}>
-                        {[v.domain, v.subdomain].filter(Boolean).join(' › ')}
+                        {domainPaths(v).join(', ')}
                       </option>
                     ))}
                   </datalist>
@@ -308,7 +309,7 @@ export function LegacyDashboards() {
                   ) : resolved ? (
                     <p className="text-[11px] text-emerald-700">
                       {prettyMetricViewName(resolved.table_name)} ·{' '}
-                      {[resolved.domain, resolved.subdomain].filter(Boolean).join(' › ') || 'No domain'}
+                      {domainPaths(resolved).join(', ') || 'No domain'}
                     </p>
                   ) : (
                     <p className="text-[11px] text-amber-700">Not a metric view in the catalog.</p>
@@ -538,7 +539,7 @@ export function LegacyDashboards() {
                         {prettyMetricViewName(m.metric_view)}
                       </div>
                       {m.in_catalog ? (
-                        <div className="text-xs text-gray-500">{[m.domain, m.subdomain].filter(Boolean).join(' › ')}</div>
+                        <div className="text-xs text-gray-500">{domainPaths(m).join(', ')}</div>
                       ) : (
                         <div className="text-xs text-amber-700 inline-flex items-center gap-1" title={m.metric_view_id}>
                           <AlertTriangle className="w-3 h-3" /> No longer in the catalog — hidden in Discover

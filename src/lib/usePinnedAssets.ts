@@ -13,6 +13,7 @@ import { useCallback, useEffect, useSyncExternalStore } from 'react';
 import { api } from '../services/api';
 import type { DataAsset, PinnedAsset, PinnedAssetInput } from '../services/api';
 import { errorMessage } from './errors';
+import { domainPaths } from './discoverDomains';
 
 interface PinState {
   pins: PinnedAsset[];
@@ -166,10 +167,10 @@ async function unpin(assetId: string): Promise<void> {
  */
 export function pinInputFromAsset(
   asset: Pick<DataAsset, 'id' | 'type' | 'table_name' | 'catalog' | 'schema_name'> &
-    Partial<Pick<DataAsset, 'domain' | 'subdomain'>> & { url?: string | null },
+    Partial<Pick<DataAsset, 'domains' | 'subdomains'>> & { url?: string | null },
 ): PinnedAssetInput {
   const type = String(asset.type || 'table').toLowerCase();
-  const hierarchy = [asset.domain, asset.subdomain].filter(Boolean).join(' › ');
+  const hierarchy = domainPaths(asset).join(', ');
   const schema = [asset.catalog, asset.schema_name].filter(Boolean).join('.');
   return {
     asset_id: asset.id,

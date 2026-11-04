@@ -1766,7 +1766,6 @@ def _refresh_data_asset_quality(db, discovered_resources: List[Dict[str, Any]], 
                 table_name=dataset_id,
                 type="DATA_PRODUCT",
                 description=f"Data contract for {dataset_id}",
-                domain="unknown",
                 contract_url=f"/governance/certification?dataset={dataset_id}",
             )
             db.add(asset)
@@ -1838,7 +1837,6 @@ def _record_certification_violations(db, resource: Dict[str, Any], result: Dict[
             table_name=dataset_id,
             type="DATA_PRODUCT",
             description=f"Data contract for {dataset_id}",
-            domain="unknown",
             contract_url=f"/governance/certification?dataset={dataset_id}",
         )
         db.add(asset)

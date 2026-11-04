@@ -4,6 +4,7 @@ import type { LegacyMapping, LegacyStatus } from '../../services/api';
 import { LEGACY_STATUSES, legacyMatches, prettyMetricViewName } from './legacyMappings';
 import { LEGACY_DASHBOARD_PIN_TYPE } from '../../lib/usePinnedAssets';
 import { PinButton } from './PinButton';
+import { subdomainLabel } from '../../lib/discoverDomains';
 
 const STATUS_STYLES: Record<LegacyStatus, { Icon: typeof CheckCircle2; className: string }> = {
   Active: { Icon: CheckCircle2, className: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
@@ -135,7 +136,7 @@ export function LegacyMappingTable({ mappings, searchTerm = '', showSubdomain = 
                     </span>
                   </button>
                 </td>
-                {showSubdomain && <td className="py-3 px-4 text-primary font-medium whitespace-nowrap">{m.subdomain}</td>}
+                {showSubdomain && <td className="py-3 px-4 text-primary font-medium whitespace-nowrap">{m.subdomains.map((s) => subdomainLabel(s, m.domains)).join(', ')}</td>}
               </tr>
             ))}
           </tbody>

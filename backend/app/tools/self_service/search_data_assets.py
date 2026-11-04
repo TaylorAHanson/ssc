@@ -15,6 +15,15 @@ from app.tools.mcp import tool
 from app.db.session import get_db
 from app.db.data_asset import DataAssetModel
 from app.db.legacy_dashboard import LegacyDashboardMappingModel
+from app.services.discover_domains import (
+    EMPTY,
+    OTHER_LABEL,
+    DomainIndex,
+    Membership,
+    is_other,
+    load_domain_index,
+    membership_fields,
+)
 from app.services.discover_visibility import (
     DiscoverVisibility,
     hidden_linked_dashboards,
@@ -69,7 +78,8 @@ def _quality(asset: DataAssetModel) -> Optional[Dict[str, Any]]:
 
 def _serialize(asset: DataAssetModel, legacy: Optional[List[Dict[str, Any]]] = None,
                vis: Optional[DiscoverVisibility] = None,
-               hidden_dashboards: Optional[set] = None) -> Dict[str, Any]:
+               hidden_dashboards: Optional[set] = None,
+               membership: Membership = EMPTY) -> Dict[str, Any]:
     vis = vis or DiscoverVisibility()
     return {
         "id": asset.id,
@@ -79,8 +89,8 @@ def _serialize(asset: DataAssetModel, legacy: Optional[List[Dict[str, Any]]] = N
         "type": asset.type,
         "description": asset.description,
         "owner": asset.effective_owner,
-        "domain": asset.domain,
-        "subdomain": asset.subdomain,
+        # Databricks Discover domains (tag keys); a subdomain's members are in its parent too.
+        **membership_fields(membership),
         "kpis": asset.kpis or [],
         "downstream_dashboards": visible_dashboards(asset.downstream_dashboards or [], hidden_dashboards or set()),
         "upstream_tables": vis.visible_upstream(asset.upstream_tables or []),
@@ -97,6 +107,50 @@ def _serialize(asset: DataAssetModel, legacy: Optional[List[Dict[str, Any]]] = N
     }
 
 
+def _memberships(db, index: DomainIndex) -> Dict[str, Membership]:
+    """Domain membership of every cached asset that has one; empty when no domain is cached."""
+    if not index:
+        return {}
+    rows = db.query(DataAssetModel.id, DataAssetModel.tags, DataAssetModel.scope_tag_keys).all()
+    out = {asset_id: index.for_tags(tags, scope) for asset_id, tags, scope in rows}
+    return {k: m for k, m in out.items() if m}
+
+
+def _domain_scope(db, index: DomainIndex, memberships: Dict[str, Membership],
+                  domain: Optional[str], subdomain: Optional[str]) -> Optional[set]:
+    """Ids of assets in the named domain/subdomain, or None when neither is given.
+
+    "Other" (unless a real domain is called that) means assets in no domain.
+    """
+    if not domain and not subdomain:
+        return None
+    if is_other(domain) or (domain and domain.strip().lower() == OTHER_LABEL.lower() and not index.get(domain)):
+        if subdomain:
+            return set()
+        return {asset_id for (asset_id,) in db.query(DataAssetModel.id).all() if asset_id not in memberships}
+    tops = {d.tag_key for d in index.search(domain) if not d.is_subdomain} if domain else None
+    subs = None
+    if subdomain:
+        found = [d for d in index.search(subdomain) if d.is_subdomain]
+        if tops is not None:
+            found = [d for d in found if index.parent(d).tag_key in tops]
+        subs = {d.tag_key for d in found}
+    return {
+        asset_id for asset_id, m in memberships.items()
+        if (tops is None or tops.intersection(m.domains)) and (subs is None or subs.intersection(m.subdomains))
+    }
+
+
+def _membership_keys(m: Membership) -> List[str]:
+    return [k.lower() for k in (*m.domains, *m.subdomains)]
+
+
+def _domain_hits(memberships: Dict[str, Membership], token: str) -> list:
+    """An ``id IN (...)`` clause for assets whose domain names contain ``token``, if any do."""
+    ids = [i for i, m in memberships.items() if any(token in k for k in _membership_keys(m))]
+    return [DataAssetModel.id.in_(ids)] if ids else []
+
+
 class SearchDataAssetsInput(BaseModel):
     query: str = Field(
         ...,
@@ -105,7 +159,7 @@ class SearchDataAssetsInput(BaseModel):
             "Keywords or asset name to search the local data catalog for "
             "(e.g. 'demand planning', 'forecast accuracy', 'sales orders', 'customer retention'). "
             "Matched against the table name, metric views, KPIs, description, "
-            "owner, catalog, schema, domain, subdomain, and tags."
+            "owner, catalog, schema, Discover domain and subdomain names, and tags."
         ),
     )
     asset_type: Optional[str] = Field(
@@ -114,11 +168,18 @@ class SearchDataAssetsInput(BaseModel):
     )
     domain: Optional[str] = Field(
         default=None,
-        description="Optional domain filter (e.g. 'Supply Chain', 'Finance', 'Sales & Commercial').",
+        description=(
+            "Optional Databricks Discover domain filter: the domain's tag key or name, as returned in "
+            "an asset's `domains` (e.g. 'supplychain'). Includes assets in its subdomains. "
+            "'Other' finds assets that aren't in any domain."
+        ),
     )
     subdomain: Optional[str] = Field(
         default=None,
-        description="Optional subdomain filter (e.g. 'Planning & Forecasting', 'Order Management').",
+        description=(
+            "Optional Discover subdomain filter: its full tag key (e.g. 'supplychain/procurement') "
+            "or its name within the domain (e.g. 'procurement')."
+        ),
     )
     certified_only: bool = Field(
         default=False,
@@ -163,8 +224,6 @@ def search_data_assets(
             DataAssetModel.owner,
             DataAssetModel.catalog,
             DataAssetModel.schema,
-            DataAssetModel.domain,
-            DataAssetModel.subdomain,
             # Tags are JSON (SQLite) / JSONB (Postgres); cast to text so a plain
             # ILIKE works the same on both — matches the tag NAMES we store.
             cast(DataAssetModel.tags, String),
@@ -175,12 +234,13 @@ def search_data_assets(
         vis = load_visibility(db)
         if vis.hidden_asset_ids:
             q = q.filter(DataAssetModel.id.notin_(vis.hidden_asset_ids))
+        index = load_domain_index(db)
+        memberships = _memberships(db, index)
+        in_scope = _domain_scope(db, index, memberships, domain, subdomain)
+        if in_scope is not None:
+            q = q.filter(DataAssetModel.id.in_(in_scope))
         if asset_type:
             q = q.filter(DataAssetModel.type.ilike(f"%{asset_type}%"))
-        if domain:
-            q = q.filter(DataAssetModel.domain.ilike(f"%{domain}%"))
-        if subdomain:
-            q = q.filter(DataAssetModel.subdomain.ilike(f"%{subdomain}%"))
         if certified_only:
             q = q.filter(DataAssetModel.certified.is_(True))
 
@@ -190,7 +250,8 @@ def search_data_assets(
             # tokens hit so e.g. "cancel pushout" surfaces a table named
             # ...cancel_pushout above tables matching only one word.
             token_clauses = [
-                or_(*[col.ilike(f"%{tok}%") for col in search_cols]) for tok in tokens
+                or_(*[col.ilike(f"%{tok}%") for col in search_cols], *_domain_hits(memberships, tok))
+                for tok in tokens
             ]
             q = q.filter(or_(*token_clauses))
         else:
@@ -233,10 +294,8 @@ def search_data_assets(
             extra = db.query(DataAssetModel).filter(DataAssetModel.id.in_(missing))
             if asset_type:
                 extra = extra.filter(DataAssetModel.type.ilike(f"%{asset_type}%"))
-            if domain:
-                extra = extra.filter(DataAssetModel.domain.ilike(f"%{domain}%"))
-            if subdomain:
-                extra = extra.filter(DataAssetModel.subdomain.ilike(f"%{subdomain}%"))
+            if in_scope is not None:
+                extra = extra.filter(DataAssetModel.id.in_(in_scope))
             if certified_only:
                 extra = extra.filter(DataAssetModel.certified.is_(True))
             candidates.extend(extra.all())
@@ -259,8 +318,7 @@ def search_data_assets(
                     asset.effective_owner,
                     asset.catalog,
                     asset.schema,
-                    asset.domain,
-                    asset.subdomain,
+                    " ".join(_membership_keys(memberships.get(asset.id, EMPTY))),
                     tag_text,
                     kpi_text,
                 )
@@ -291,7 +349,8 @@ def search_data_assets(
         candidates.sort(key=_score, reverse=True)
         top = candidates[:limit]
         hidden_dashboards = hidden_linked_dashboards(top)
-        assets = [_serialize(a, legacy_by_mv.get(a.id), vis, hidden_dashboards) for a in top]
+        assets = [_serialize(a, legacy_by_mv.get(a.id), vis, hidden_dashboards, memberships.get(a.id, EMPTY))
+                  for a in top]
 
         if assets:
             note = (
@@ -326,11 +385,11 @@ class SearchMetricViewsInput(BaseModel):
     )
     domain: Optional[str] = Field(
         default=None,
-        description="Optional domain filter (e.g. 'Supply Chain', 'Finance', 'Sales & Commercial').",
+        description="Optional Databricks Discover domain filter: tag key or name (e.g. 'supplychain').",
     )
     subdomain: Optional[str] = Field(
         default=None,
-        description="Optional subdomain filter (e.g. 'Planning & Forecasting', 'Procurement').",
+        description="Optional Discover subdomain filter: full tag key or name within the domain (e.g. 'procurement').",
     )
     limit: int = Field(default=10, ge=1, le=30, description="Max metric views to return.")
 

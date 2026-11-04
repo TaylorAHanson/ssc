@@ -15,80 +15,6 @@ from app.core.exceptions import AuthenticationError
 
 logger = logging.getLogger(__name__)
 
-# Catch-all subdomain for assets nothing more specific was inferred for.
-DEFAULT_SUBDOMAIN = "General Analytics"
-
-def infer_domain_and_subdomain(catalog: str, schema: str, table_name: str, tags: list[str]) -> tuple[str, str]:
-    """Extract or infer domain and subdomain for a data asset."""
-    domain = None
-    subdomain = None
-
-    # 1. Parse from tags if present (e.g., 'domain=Supply Chain', 'subdomain=Planning & Forecasting')
-    for t in (tags or []):
-        if not isinstance(t, str):
-            continue
-        lower_t = t.lower()
-        if lower_t.startswith("domain="):
-            domain = t.split("=", 1)[1].strip()
-        elif lower_t.startswith("domain:"):
-            domain = t.split(":", 1)[1].strip()
-        elif lower_t.startswith("subdomain="):
-            subdomain = t.split("=", 1)[1].strip()
-        elif lower_t.startswith("subdomain:"):
-            subdomain = t.split(":", 1)[1].strip()
-
-    if domain and subdomain:
-        return domain, subdomain
-
-    # 2. Heuristic inference based on catalog, schema, table_name
-    text = f"{catalog} {schema} {table_name}".lower()
-
-    if any(k in text for k in ["supply", "lumentum", "uct", "sandisk", "procure", "demand", "leadtime", "wafer", "foundry", "wip", "yield", "lot_"]):
-        inferred_domain = "Supply Chain"
-        if any(k in text for k in ["demand", "forecast", "planning"]):
-            inferred_subdomain = "Planning & Forecasting"
-        elif any(k in text for k in ["order", "fulfillment", "po_"]):
-            inferred_subdomain = "Order Management"
-        elif any(k in text for k in ["procure", "purchase", "vendor", "supplier", "quotation", "leadtime"]):
-            inferred_subdomain = "Procurement"
-        elif any(k in text for k in ["manufactur", "wip", "scrap", "workcenter", "chipwip", "cost_posting"]):
-            inferred_subdomain = "Manufacturing & WIP"
-        elif any(k in text for k in ["yield", "foundry", "wafer_capacity", "rf360"]):
-            inferred_subdomain = "Yield & Foundry"
-        elif any(k in text for k in ["inventory", "lot", "stock", "genealogy", "traceability"]):
-            inferred_subdomain = "Inventory & Lot Tracking"
-        else:
-            inferred_subdomain = "Planning & Forecasting"
-    elif any(k in text for k in ["finance", "budget", "billing", "revenue", "opex", "cost", "fiscal", "actuals"]):
-        inferred_domain = "Finance"
-        if any(k in text for k in ["plan", "budget", "forecast", "attainment"]):
-            inferred_subdomain = "Planning & Budgeting"
-        elif any(k in text for k in ["revenue", "margin", "topline"]):
-            inferred_subdomain = "Revenue & Margin"
-        elif any(k in text for k in ["cost", "opex", "expense"]):
-            inferred_subdomain = "Cost Management"
-        else:
-            inferred_subdomain = "Financial Reporting"
-    elif any(k in text for k in ["sales", "gtm", "retail", "customer", "marketing", "merch", "sephora"]):
-        inferred_domain = "Sales & Commercial"
-        if any(k in text for k in ["customer", "c360", "retention", "churn"]):
-            inferred_subdomain = "Customer Analytics"
-        elif any(k in text for k in ["retail", "store", "merch", "omnichannel"]):
-            inferred_subdomain = "Retail & Merchandising"
-        else:
-            inferred_subdomain = "Sales Execution"
-    elif any(k in text for k in ["risk", "kyc", "compliance", "audit", "fraud"]):
-        inferred_domain = "Risk & Compliance"
-        inferred_subdomain = "Governance & Audit"
-    elif any(k in text for k in ["iot", "grid", "facility", "facilities", "rosendin", "data_center"]):
-        inferred_domain = "Operations & Facilities"
-        inferred_subdomain = "Site & Asset Performance"
-    else:
-        inferred_domain = "Enterprise Data"
-        inferred_subdomain = DEFAULT_SUBDOMAIN
-
-    return domain or inferred_domain, subdomain or inferred_subdomain
-
 
 def _is_certified_in_tags(tags: list) -> bool:
     """Check if any tag indicates certification status, supporting both bare and key=value tags."""
@@ -541,6 +467,19 @@ async def _refresh_workspace_cache(provider=None) -> None:
         logger.error(f"Error refreshing the workspace cache: {e}", exc_info=True)
 
 
+def _refresh_domains(client) -> None:
+    """Re-read the Discover domains into the cache, as the same identity as the asset sync."""
+    from app.services.discover_domains import refresh_domain_cache
+
+    db = get_lakebase_session()
+    try:
+        refresh_domain_cache(client, db)
+    except Exception as e:  # noqa: BLE001 - the cached list stays; never fail the sync
+        logger.error(f"Error caching Discover domains: {e}", exc_info=True)
+    finally:
+        db.close()
+
+
 async def sync_data_assets_task(force: bool = False):
     """
     Task to sync data assets from Databricks Information Schema into local Lakebase cache.
@@ -682,13 +621,7 @@ async def sync_data_assets_task(force: bool = False):
                             tags = []
                     if not tags:
                         tags = []
-                    
-                    domain, subdomain = infer_domain_and_subdomain(
-                        row.get("catalog", ""),
-                        row.get("schema", ""),
-                        row.get("table_name", ""),
-                        tags,
-                    )
+
                     certified = _is_certified_in_tags(tags)
 
                     asset = db.query(DataAssetModel).filter(DataAssetModel.id == asset_id).first()
@@ -709,8 +642,6 @@ async def sync_data_assets_task(force: bool = False):
                         asset.scope_tag_keys, scope_tags,
                         row.get("catalog"), row.get("schema"), row.get("table_name"),
                     )
-                    asset.domain = domain
-                    asset.subdomain = subdomain
 
                     # KPIs and source tables come from the metric view's definition,
                     # which is read as the viewing user when the view is opened
@@ -784,7 +715,9 @@ async def sync_data_assets_task(force: bool = False):
                     logger.warning(
                         "Data asset sync diagnostic (visible catalogs) failed: %s", _diag_e
                     )
-            
+
+        await asyncio.to_thread(_refresh_domains, provider.client)
+
     except AuthenticationError as e:
         # Expected environmental condition (e.g. the workspace IP access list is
         # blocking this host's egress IP, or the SP lost a grant). Retrying won't

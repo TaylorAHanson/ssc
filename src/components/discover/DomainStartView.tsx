@@ -1,24 +1,18 @@
-import { useRef, useEffect, useMemo } from 'react';
+import { useRef, useEffect } from 'react';
 import {
-  Truck,
-  Landmark,
-  ShoppingBag,
-  Factory,
-  ShieldCheck,
   Database,
   Layers,
   TrendingUp,
   ArrowRight,
-  Building2,
   Check,
   ChevronRight,
-  Sparkles,
   X,
 } from 'lucide-react';
 import type { DomainHierarchy, SubdomainMeta } from '../../services/api';
 import { scrollContainerOf } from '../../hooks/useViewScroll';
 import { CONTENT_KINDS, type ContentKind, type ContentKindCounts } from './contentKinds';
 import { PinnedAssetsStrip } from './PinnedAssetsStrip';
+import { domainIconFor } from './domainIcon';
 
 interface DomainStartViewProps {
   domains: DomainHierarchy[];
@@ -34,9 +28,6 @@ interface DomainStartViewProps {
   onOpenAsset: (assetId: string) => void;
 }
 
-/** The shared foundation every other domain builds on; always listed first. */
-const ENTERPRISE_DOMAIN = 'Enterprise Data';
-
 // Whole-domain shortcuts, most asked-for first.
 const SHORTCUT_ORDER: ContentKind[] = ['legacy', 'tables', 'dashboards', 'metrics', 'apps'];
 const SHORTCUT_HINTS: Record<ContentKind, string> = {
@@ -51,72 +42,6 @@ function plural(n: number, one: string, many = `${one}s`) {
   return `${n} ${n === 1 ? one : many}`;
 }
 
-function getDomainMeta(domain: string) {
-  const d = domain.toLowerCase();
-  if (domain === ENTERPRISE_DOMAIN) {
-    return {
-      icon: Building2,
-      accent: 'primary',
-      badge: 'bg-primary/10 text-primary border-primary/20',
-      activeBorder: 'border-primary ring-2 ring-primary/20 bg-primary/5',
-      iconBg: 'bg-primary text-white',
-      featured: true,
-    };
-  }
-  if (d.includes('supply')) {
-    return {
-      icon: Truck,
-      accent: 'primary',
-      badge: 'bg-primary/10 text-primary border-primary/20',
-      activeBorder: 'border-primary ring-2 ring-primary/20 bg-primary/5',
-      iconBg: 'bg-primary/10 text-primary',
-    };
-  }
-  if (d.includes('finance')) {
-    return {
-      icon: Landmark,
-      accent: 'indigo',
-      badge: 'bg-indigo-50 text-indigo-800 border-indigo-200',
-      activeBorder: 'border-indigo-500 ring-2 ring-indigo-500/20 bg-indigo-50/20',
-      iconBg: 'bg-indigo-100 text-indigo-700',
-    };
-  }
-  if (d.includes('sales') || d.includes('commercial')) {
-    return {
-      icon: ShoppingBag,
-      accent: 'blue',
-      badge: 'bg-blue-50 text-blue-800 border-blue-200',
-      activeBorder: 'border-blue-500 ring-2 ring-blue-500/20 bg-blue-50/20',
-      iconBg: 'bg-blue-100 text-blue-700',
-    };
-  }
-  if (d.includes('operation') || d.includes('facilit')) {
-    return {
-      icon: Factory,
-      accent: 'amber',
-      badge: 'bg-amber-50 text-amber-800 border-amber-200',
-      activeBorder: 'border-amber-500 ring-2 ring-amber-500/20 bg-amber-50/20',
-      iconBg: 'bg-amber-100 text-amber-700',
-    };
-  }
-  if (d.includes('risk') || d.includes('complian') || d.includes('govern')) {
-    return {
-      icon: ShieldCheck,
-      accent: 'rose',
-      badge: 'bg-rose-50 text-rose-800 border-rose-200',
-      activeBorder: 'border-rose-500 ring-2 ring-rose-500/20 bg-rose-50/20',
-      iconBg: 'bg-rose-100 text-rose-700',
-    };
-  }
-  return {
-    icon: Database,
-    accent: 'slate',
-    badge: 'bg-slate-100 text-slate-800 border-slate-200',
-    activeBorder: 'border-slate-800 ring-2 ring-slate-800/10 bg-slate-50/50',
-    iconBg: 'bg-slate-200 text-slate-700',
-  };
-}
-
 export function DomainStartView({
   domains,
   selectedDomain,
@@ -127,10 +52,6 @@ export function DomainStartView({
   kindCounts = {},
   onOpenAsset,
 }: DomainStartViewProps) {
-  const orderedDomains = useMemo(
-    () => [...domains].sort((a, b) => Number(b.domain === ENTERPRISE_DOMAIN) - Number(a.domain === ENTERPRISE_DOMAIN)),
-    [domains],
-  );
   const currentDomainData = domains.find((d) => d.domain === selectedDomain);
   // Kinds known to be empty are left out; unknown counts (still loading) still get a shortcut.
   const shortcuts = SHORTCUT_ORDER.map((key) => ({
@@ -180,10 +101,14 @@ export function DomainStartView({
 
       {/* Step 1: Big Domain Cards / Boxes */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-        {orderedDomains.map((dom) => {
+        {domains.length === 0 && (
+          <p className="col-span-full text-center text-sm text-slate-500 bg-slate-50 rounded-2xl border border-slate-200 px-6 py-10">
+            Nothing to browse yet. Data appears here after the catalog sync has run.
+          </p>
+        )}
+        {domains.map((dom) => {
           const isSelected = dom.domain === selectedDomain;
-          const config = getDomainMeta(dom.domain);
-          const Icon = config.icon;
+          const { Icon, style: iconStyle } = domainIconFor(dom);
           const opensDirectly = dom.has_subdomains === false;
 
           return (
@@ -205,18 +130,13 @@ export function DomainStartView({
               className={`relative rounded-2xl p-6 border transition-all cursor-pointer group flex flex-col justify-between ${
                 isSelected
                   ? 'border-primary ring-2 ring-primary/20 bg-primary/5 shadow-md'
-                  : config.featured
-                    ? 'bg-gradient-to-br from-primary/10 via-white to-white border-primary/30 shadow-sm hover:border-primary/60 hover:shadow-md'
-                    : 'bg-white border-slate-200 hover:border-primary/40 hover:shadow-md'
+                  : 'bg-white border-slate-200 hover:border-primary/40 hover:shadow-md'
               }`}
             >
-              {config.featured && (
-                <span aria-hidden className="absolute inset-x-6 top-0 h-1 rounded-b-full bg-gradient-to-r from-primary to-primary/30" />
-              )}
               <div>
                 <div className="flex items-start justify-between gap-3 mb-4">
                   <div className="flex items-center gap-2.5 min-w-0">
-                    <div className={`w-11 h-11 shrink-0 rounded-xl flex items-center justify-center ${config.iconBg} shadow-2xs`}>
+                    <div className="w-11 h-11 shrink-0 rounded-xl flex items-center justify-center shadow-2xs" style={iconStyle}>
                       <Icon className="w-5 h-5" />
                     </div>
                   </div>
@@ -244,21 +164,16 @@ export function DomainStartView({
                   )}
                 </div>
 
-                {config.featured && (
-                  <span className="mb-2 inline-flex items-center gap-1 px-2 py-0.5 rounded-full border bg-primary/10 text-primary border-primary/20 text-[10px] font-bold uppercase tracking-wider whitespace-nowrap">
-                    <Sparkles className="w-3 h-3" /> Shared foundation
-                  </span>
-                )}
                 <h3 className="text-xl font-bold text-slate-900 group-hover:text-primary transition-colors mb-1.5">
-                  {dom.domain}
+                  {dom.label}
                 </h3>
                 <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed mb-4">
-                  {dom.description}
+                  {dom.subtitle || dom.description}
                 </p>
               </div>
 
               {/* Bottom Meta Stats */}
-              <div className={`pt-4 border-t flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 text-xs text-slate-500 ${config.featured ? 'border-primary/10' : 'border-slate-100'}`}>
+              <div className="pt-4 border-t border-slate-100 flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 text-xs text-slate-500">
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-medium">
                   {!opensDirectly && (
                     <>
@@ -269,10 +184,19 @@ export function DomainStartView({
                       <span className="text-slate-300">•</span>
                     </>
                   )}
-                  <span className="inline-flex items-center gap-1 text-primary font-semibold whitespace-nowrap">
-                    <TrendingUp className="w-3.5 h-3.5" />
-                    {plural(dom.metric_view_count, 'metric view')}
-                  </span>
+                  {(dom.metric_view_count > 0 || dom.table_count === 0) && (
+                    <span className="inline-flex items-center gap-1 text-primary font-semibold whitespace-nowrap">
+                      <TrendingUp className="w-3.5 h-3.5" />
+                      {plural(dom.metric_view_count, 'metric view')}
+                    </span>
+                  )}
+                  {dom.metric_view_count > 0 && dom.table_count > 0 && <span className="text-slate-300">•</span>}
+                  {dom.table_count > 0 && (
+                    <span className="inline-flex items-center gap-1 whitespace-nowrap">
+                      <Database className="w-3.5 h-3.5 text-slate-400" />
+                      {plural(dom.table_count, 'table')}
+                    </span>
+                  )}
                 </div>
 
                 <div className="inline-flex items-center gap-1 text-slate-400 group-hover:text-primary group-hover:translate-x-0.5 transition-all font-semibold text-xs whitespace-nowrap">
@@ -298,7 +222,7 @@ export function DomainStartView({
               <span>Choose where to start</span>
             </div>
             <h3 className="text-2xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
-              <span>Explore {currentDomainData.domain}</span>
+              <span>Explore {currentDomainData.label}</span>
               <button
                 type="button"
                 onClick={() => {
@@ -361,7 +285,7 @@ export function DomainStartView({
                             <div className="text-sm font-bold text-slate-900 group-hover:text-primary transition-colors truncate">
                               {sd.name}
                             </div>
-                            <p className="text-xs text-slate-500 truncate">{sd.description}</p>
+                            <p className="text-xs text-slate-500 truncate">{sd.subtitle || sd.description}</p>
                             <div className="sm:hidden mt-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500 whitespace-nowrap">
                               {counts}
                             </div>
@@ -385,7 +309,7 @@ export function DomainStartView({
             {/* Whole-domain shortcuts, one per content kind */}
             <aside aria-labelledby="discover-step2-shortcuts" className="min-w-0">
               <h4 id="discover-step2-shortcuts" className="mb-2 px-1 text-[11px] font-bold uppercase tracking-wider text-slate-400 truncate">
-                All of {currentDomainData.domain}
+                All of {currentDomainData.label}
               </h4>
               <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs p-2">
                 <ul className="space-y-0.5">
@@ -420,7 +344,7 @@ export function DomainStartView({
                     shortcuts.length ? 'mt-2' : ''
                   }`}
                 >
-                  <span className="truncate">Explore all {currentDomainData.domain}</span>
+                  <span className="truncate">Explore all {currentDomainData.label}</span>
                   <ArrowRight className="w-3.5 h-3.5 shrink-0" />
                 </button>
               </div>

@@ -442,9 +442,9 @@ def run_startup_migrations(engine: Engine) -> None:
             "sentinel_findings",
             ["resource_id", "kind"],
         )
-        # Metric Views / Domain hierarchy enrichment
-        _add_column(engine, "data_assets", "subdomain", "VARCHAR")
-        _add_index(engine, "ix_data_assets_subdomain", "data_assets", ["subdomain"])
+        # Metric Views enrichment. Domains come from Databricks Discover
+        # (discover_domains), so the old data_assets.domain/subdomain columns
+        # are left in place but no longer read or written.
         _add_column(engine, "data_assets", "kpis", _json_ddl)
         _add_column(engine, "data_assets", "upstream_tables", _json_ddl)
         _add_column(engine, "data_assets", "downstream_dashboards", _json_ddl)

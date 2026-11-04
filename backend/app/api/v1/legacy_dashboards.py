@@ -2,8 +2,8 @@
 
 Users coming from the old BI estate (e.g. Tableau) look up a dashboard they know
 and find the governed metric view that replaces it. Admins curate the list in
-Admin → Settings → Legacy Dashboards; everyone can read it. Domain and subdomain are taken
-from the mapped metric view so a mapping follows the view if it's recategorized.
+Admin → Settings → Legacy Dashboards; everyone can read it. Domains and subdomains are taken
+from the mapped metric view so a mapping follows the view if it's retagged.
 """
 import logging
 import uuid
@@ -18,6 +18,7 @@ from app.api import deps
 from app.db.data_asset import DataAssetModel
 from app.db.legacy_dashboard import LegacyDashboardMappingModel
 from app.models.user import User
+from app.services.discover_domains import EMPTY, DomainIndex, Membership, load_domain_index, membership_fields
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +88,7 @@ def _resolve_metric_view(db: Session, ref: str) -> Optional[DataAssetModel]:
     return by_name[0] if len(by_name) == 1 else None
 
 
-def _serialize(m: LegacyDashboardMappingModel, mv: Optional[DataAssetModel]) -> Dict[str, Any]:
+def _serialize(m: LegacyDashboardMappingModel, mv: Optional[DataAssetModel], index: DomainIndex) -> Dict[str, Any]:
     return {
         "id": m.id,
         "dashboard": m.dashboard,
@@ -98,8 +99,7 @@ def _serialize(m: LegacyDashboardMappingModel, mv: Optional[DataAssetModel]) -> 
         "metric_view_id": m.metric_view_id,
         "metric_view": mv.table_name if mv else m.metric_view_id.split(".")[-1],
         "metric_view_description": mv.description if mv else None,
-        "domain": mv.domain if mv else None,
-        "subdomain": mv.subdomain if mv else None,
+        **membership_fields(index.for_asset(mv) if mv else EMPTY),
         # False when the view has left the catalog since the mapping was made.
         "in_catalog": mv is not None,
         "updated_by": m.updated_by,
@@ -111,7 +111,8 @@ def _serialize_all(db: Session, mappings: Iterable[LegacyDashboardMappingModel])
     mappings = list(mappings)
     ids = {m.metric_view_id for m in mappings}
     views = {a.id: a for a in db.query(DataAssetModel).filter(DataAssetModel.id.in_(ids)).all()} if ids else {}
-    return [_serialize(m, views.get(m.metric_view_id)) for m in mappings]
+    index = load_domain_index(db)
+    return [_serialize(m, views.get(m.metric_view_id), index) for m in mappings]
 
 
 def mappings_by_metric_view(db: Session, metric_view_ids: Iterable[str]) -> Dict[str, List[Dict[str, Any]]]:
@@ -163,7 +164,8 @@ def list_legacy_dashboards(
     db: Session = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_user),
 ) -> List[Dict[str, Any]]:
-    """All mappings, optionally scoped to the metric view's domain / subdomain.
+    """All mappings, optionally scoped to the metric view's domain / subdomain (tag key, id, or
+    the subdomain's name within ``domain``).
 
     Mappings to a metric view hidden from Discover by tag are left out, except
     for a legacy-dashboard admin passing ``include_hidden`` (the admin editor), who sees
@@ -181,10 +183,12 @@ def list_legacy_dashboards(
         for r in rows:
             r["hidden_from_discover"] = vis.is_hidden_id(r["metric_view_id"])
         rows = [r for r in rows if keep_hidden or not r["hidden_from_discover"]]
-    if domain:
-        rows = [r for r in rows if r["domain"] == domain]
-    if subdomain:
-        rows = [r for r in rows if r["subdomain"] == subdomain]
+    if domain or subdomain:
+        index = load_domain_index(db)
+        rows = [
+            r for r in rows
+            if index.matches(Membership(tuple(r["domains"]), tuple(r["subdomains"])), domain=domain, subdomain=subdomain)
+        ]
     return rows
 
 
@@ -201,7 +205,7 @@ def create_legacy_dashboard(
     db.commit()
     db.refresh(m)
     logger.info("Legacy dashboard mapping created by %s: %s -> %s", current_user.email, m.dashboard, m.metric_view_id)
-    return _serialize(m, mv)
+    return _serialize(m, mv, load_domain_index(db))
 
 
 @router.put("/{mapping_id}")
@@ -218,7 +222,7 @@ def update_legacy_dashboard(
     db.commit()
     db.refresh(m)
     logger.info("Legacy dashboard mapping %s updated by %s", mapping_id, current_user.email)
-    return _serialize(m, mv)
+    return _serialize(m, mv, load_domain_index(db))
 
 
 @router.delete("/{mapping_id}")

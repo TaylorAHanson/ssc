@@ -48,8 +48,6 @@ class DataAssetModel(Base):
     type = Column(String, nullable=False) # Table, View, Model, etc
     description = Column(String, nullable=True)
     owner = Column(String, nullable=True)
-    domain = Column(String, nullable=True, index=True)
-    subdomain = Column(String, nullable=True, index=True)
     kpis = Column(JSONType, nullable=True) # e.g. [{"name": "Forecast Accuracy", "value": "94.2%"}]
     upstream_tables = Column(JSONType, nullable=True) # e.g. ["catalog.schema.table", ...]
     downstream_dashboards = Column(JSONType, nullable=True) # e.g. [{"id": "...", "name": "...", "type": "dashboard"}]
@@ -57,7 +55,8 @@ class DataAssetModel(Base):
     tags = Column(JSONType, default=list)
     # Tag keys on the asset's catalog, schema and columns, stamped by the sync:
     # {"catalog": [...], "schema": [...], "column": [...]}. Drives the Discover
-    # hide-by-tag filter (app/services/discover_visibility.py).
+    # hide-by-tag filter (app/services/discover_visibility.py) and inherited
+    # domain membership (app/services/discover_domains.py).
     scope_tag_keys = Column(JSONType, nullable=True)
     certified = Column(Boolean, default=False)
     contract_url = Column(String, nullable=True)

@@ -1473,8 +1473,10 @@ export interface DataAsset {
   type: string;
   description: string | null;
   owner: string | null;
-  domain: string | null;
-  subdomain?: string | null;
+  /** Databricks Discover domain tag keys, direct or inherited (a subdomain's parent included). */
+  domains: string[];
+  /** Discover subdomain tag keys, e.g. `supplychain/procurement`. */
+  subdomains: string[];
   tags: string[];
   certified: boolean;
   contract_url?: string | null;
@@ -1488,9 +1490,27 @@ export interface DataAsset {
   last_synced_at?: string;
 }
 
-export interface SubdomainMeta {
+/** A Discover domain icon, as set in Databricks (Discover → Domains). */
+export interface DomainIcon {
+  name?: string;
+  color?: string;
+}
+
+/** Shared by domains and subdomains: what Databricks Discover says about them. */
+interface DomainSummary {
+  /** Display name: the tag key for a domain, the part after `parent/` for a subdomain. */
+  label: string;
+  domain_id: string | null;
+  tag_key: string | null;
+  subtitle: string | null;
+  description: string | null;
+  icon: DomainIcon | null;
+  technical_owners: string[];
+  business_owners: string[];
+}
+
+export interface SubdomainMeta extends DomainSummary {
   name: string;
-  description: string;
   metric_views_count: number;
   tables_count: number;
   metric_views: string[];
@@ -1498,11 +1518,14 @@ export interface SubdomainMeta {
   kpis?: MetricKpi[];
 }
 
-export interface DomainHierarchy {
+/** `domain` key of the catch-all card for assets in no Discover domain. */
+export const OTHER_DOMAIN = '__other__';
+
+export interface DomainHierarchy extends DomainSummary {
+  /** Filter key: the domain's tag key, or `OTHER_DOMAIN`. */
   domain: string;
-  description: string;
   subdomain_count: number;
-  // False when every asset is in the catch-all subdomain.
+  // False when no subdomain holds assets.
   has_subdomains?: boolean;
   metric_view_count: number;
   table_count: number;
@@ -1523,8 +1546,8 @@ export interface LegacyMapping {
   metric_view_id: string;
   metric_view: string;
   metric_view_description: string | null;
-  domain: string | null;
-  subdomain: string | null;
+  domains: string[];
+  subdomains: string[];
   /** False when the mapped view is no longer in the catalog. */
   in_catalog: boolean;
   /** Set when a hide-from-Discover tag key is configured; true = its metric view is hidden. */
@@ -2057,7 +2080,13 @@ export async function getSystemSchedules(): Promise<SystemSchedules> {
 // backend/app/api/v1/data_assets.py (no Pydantic model). Names come straight
 // from the workspace and can be null.
 
-export interface WorkspaceDashboard {
+/** Discover domains a dashboard, app or Genie space is tagged with in its workspace. */
+interface WorkspaceDomains {
+  domains?: string[];
+  subdomains?: string[];
+}
+
+export interface WorkspaceDashboard extends WorkspaceDomains {
   id: string;
   name: string | null;
   type: 'dashboard';
@@ -2071,7 +2100,7 @@ export interface WorkspaceJob {
   creator?: string | null;
 }
 
-export interface WorkspaceApp {
+export interface WorkspaceApp extends WorkspaceDomains {
   id: string;
   name: string;
   type: 'app';
@@ -2082,7 +2111,7 @@ export interface WorkspaceApp {
   updated_at?: string | null;
 }
 
-export interface WorkspaceGenieSpace {
+export interface WorkspaceGenieSpace extends WorkspaceDomains {
   id: string;
   name: string | null;
   type: 'genie_space';

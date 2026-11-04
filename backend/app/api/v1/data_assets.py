@@ -9,9 +9,17 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel, ConfigDict
 from app.db.session import get_db
 from app.db.data_asset import DataAssetModel
-from app.workers.tasks.sync_data_assets import DEFAULT_SUBDOMAIN, is_metric_view
+from app.workers.tasks.sync_data_assets import is_metric_view
 from app.api.deps import get_current_user
 from app.services.data_asset_owner import resolve_data_asset_owner
+from app.services.discover_domains import (
+    OTHER_DOMAIN,
+    OTHER_LABEL,
+    Domain,
+    load_domain_index,
+    membership_fields,
+    workspace_entity_memberships,
+)
 from app.services.discover_visibility import (
     has_hidden_tag,
     hidden_linked_dashboards,
@@ -42,8 +50,9 @@ class DataAssetResponse(BaseModel):
     type: str
     description: Optional[str] = None
     owner: Optional[str] = None
-    domain: Optional[str] = None
-    subdomain: Optional[str] = None
+    # Databricks Discover domain tag keys (a subdomain's members included) and subdomain tag keys.
+    domains: List[str] = []
+    subdomains: List[str] = []
     tags: List[str] = []
     certified: bool = False
     contract_url: Optional[str] = None
@@ -70,16 +79,15 @@ def list_data_assets(
     db: Session = Depends(get_db)
 ):
     """
-    List cached data assets for discovery.
+    List cached data assets for discovery. ``domain`` is a Discover domain's tag
+    key or id and includes the members of its subdomains.
     """
     query = db.query(DataAssetModel)
     vis = load_visibility(db)
     if vis.hidden_asset_ids:
         query = query.filter(DataAssetModel.id.notin_(vis.hidden_asset_ids))
+    index = load_domain_index(db)
 
-    if domain:
-        query = query.filter(DataAssetModel.domain == domain)
-        
     if certified is not None:
         query = query.filter(DataAssetModel.certified == certified)
         
@@ -94,20 +102,24 @@ def list_data_assets(
                 DataAssetModel.id.in_(db.query(DataContractModel.dataset_id))
             )
         )
-        
-    if offset > 0:
-        query = query.offset(offset)
-        
-    if limit is not None:
-        query = query.limit(limit)
-        
-    assets = vis.visible(query.all())
-    hidden_dashboards = hidden_linked_dashboards(assets)
+
+    if domain:
+        # Membership comes from tags, so the domain filter (and the page after it) runs here.
+        members = [(a, index.for_asset(a)) for a in vis.visible(query.order_by(DataAssetModel.id).all())]
+        members = [(a, m) for a, m in members if index.matches(m, domain=domain)]
+        members = members[offset:offset + limit if limit is not None else None]
+    else:
+        if offset > 0:
+            query = query.offset(offset)
+        if limit is not None:
+            query = query.limit(limit)
+        members = [(a, index.for_asset(a)) for a in vis.visible(query.all())]
+    hidden_dashboards = hidden_linked_dashboards(a for a, _ in members)
 
     # Map 'schema' column to 'schema_name' for the Pydantic model since 'schema' is a reserved field name in BaseModel in pydantic sometimes,
     # actually let's just construct the response properly.
     result = []
-    for asset in assets:
+    for asset, membership in members:
         result.append({
             "id": asset.id,
             "catalog": asset.catalog,
@@ -116,8 +128,7 @@ def list_data_assets(
             "type": asset.type,
             "description": asset.description,
             "owner": resolve_data_asset_owner(asset.owner, asset.tags),
-            "domain": asset.domain,
-            "subdomain": asset.subdomain,
+            **membership_fields(membership),
             "tags": asset.tags if asset.tags else [],
             "certified": asset.certified,
             "contract_url": asset.contract_url,
@@ -135,117 +146,102 @@ def list_data_assets(
     return result
 
 
+def _domain_summary(d: Domain) -> dict:
+    return {
+        "label": d.name,
+        "domain_id": d.id,
+        "tag_key": d.tag_key,
+        "subtitle": d.subtitle,
+        "description": d.description,
+        "icon": d.icon,
+        "technical_owners": list(d.technical_owners),
+        "business_owners": list(d.business_owners),
+    }
+
+
+_OTHER_SUMMARY = {
+    "label": OTHER_LABEL,
+    "domain_id": None,
+    "tag_key": None,
+    "subtitle": "Data not yet tagged with a Databricks Discover domain",
+    "description": None,
+    "icon": None,
+    "technical_owners": [],
+    "business_owners": [],
+}
+
+
+def _domain_entry(key: str, summary: dict, s: dict, subdomains: list) -> dict:
+    return {
+        "domain": key,
+        **summary,
+        "subdomain_count": len(subdomains),
+        # False when no subdomain has assets, so the UI can open the domain's
+        # assets directly instead of an empty subdomain list.
+        "has_subdomains": bool(subdomains),
+        "metric_view_count": len(s["metric_views"]),
+        "table_count": s["tables"],
+        "dashboard_count": len(s["dashboards"]),
+        "subdomains": subdomains,
+    }
+
+
 @router.get("/domains")
 def get_domains_hierarchy(db: Session = Depends(get_db)):
-    """Return hierarchical summary of domains, subdomains, metric views, and headline KPIs."""
+    """Databricks Discover domains holding at least one visible asset, with their subdomains.
+
+    Domains and subdomains are defined in Databricks (Discover → Domains) and
+    cached by the data-asset sync. An asset counts under every domain whose tag
+    it carries or inherits from its catalog or schema; a subdomain's assets also
+    count in its parent. Assets in no domain count under a last ``OTHER_DOMAIN``
+    entry, which holds everything until a sync has read the domains.
+    """
+    index = load_domain_index(db)
     assets = load_visibility(db).visible(db.query(DataAssetModel).all())
     hidden_dashboards = hidden_linked_dashboards(assets)
-    domain_map: dict[str, dict] = {}
 
-    domain_descriptions = {
-        "Supply Chain": "Enterprise supply-chain semantic layer covering planning, procurement, manufacturing, and logistics",
-        "Finance": "Core financial models, budget tracking, revenue variance, and OpEx forecasting",
-        "Sales & Commercial": "Customer retention, sales pipeline execution, omnichannel demand, and merchandising",
-        "Operations & Facilities": "Facility operations, power delivery, data center metrics, and IoT sensor streams",
-        "Risk & Compliance": "Governance enforcement, KYC audits, data contract adherence, and fraud detection",
-        "Enterprise Data": "Core shared lakehouse infrastructure, master data, and central analytical schemas",
-    }
-
-    subdomain_descriptions = {
-        "Planning & Forecasting": "Demand planning, wafer capacity, sales forecasts, and supply-demand outlook",
-        "Order Management": "Sales orders, order fulfillment, purchase forecasts, and order lifecycle management",
-        "Procurement": "Direct and indirect procurement, purchase orders, quotations, supplier lead time, and receipts",
-        "Manufacturing & WIP": "Manufacturing operations, WIP tracking, cost posting, cycle times, and bill of materials",
-        "Yield & Foundry": "Yield analytics, foundry intelligence, wafer capacity planning, and quality metrics",
-        "Inventory & Lot Tracking": "Inventory management, lot genealogy, traceability, and lot movements",
-        "Planning & Budgeting": "Financial planning, OpEx budgets, entity plan attainment, and cost center variance",
-        "Revenue & Margin": "Top-line revenue, contribution margins, product line profitability, and discount analysis",
-        "Cost Management": "Standard vs actual cost variance, cost centers, expense run-rates, and scrap accounting",
-        "Customer Analytics": "Customer 360, retention cohorts, subscriber churn, and lifetime value modeling",
-        "Retail & Merchandising": "Omnichannel store analytics, catalog pricing rules, inventory sell-through, and promo tracking",
-        "Sales Execution": "Deal intelligence, sales order conversion, rep attainment, and pipeline velocity",
-        "Governance & Audit": "Access controls, certification violations, data contract compliance, and audit logs",
-        "Site & Asset Performance": "Data center MW delivered, energy efficiency, equipment telemetry, and uptime SLAs",
-        DEFAULT_SUBDOMAIN: "General enterprise analytics, staging tables, and operational views",
-    }
-
+    stats: dict[str, dict] = {}
     for a in assets:
-        d = a.domain or "Enterprise Data"
-        sd = a.subdomain or DEFAULT_SUBDOMAIN
+        membership = index.for_asset(a)
         is_metric = is_metric_view(a.type)
-
-        if d not in domain_map:
-            domain_map[d] = {
-                "domain": d,
-                "description": domain_descriptions.get(d, f"Curated semantic layer for {d}"),
-                "subdomains": {},
-                "metric_view_count": 0,
-                "table_count": 0,
-                "dashboard_count": 0,
-            }
-
-        dom_entry = domain_map[d]
-        if is_metric:
-            dom_entry["metric_view_count"] += 1
-            if a.downstream_dashboards:
-                dom_entry["dashboard_count"] += len(visible_dashboards(a.downstream_dashboards, hidden_dashboards))
-        else:
-            dom_entry["table_count"] += 1
-
-        if sd not in dom_entry["subdomains"]:
-            dom_entry["subdomains"][sd] = {
-                "name": sd,
-                "description": subdomain_descriptions.get(sd, f"Subdomain covering {sd}"),
-                "metric_views_count": 0,
-                "tables_count": 0,
-                "metric_views": [],
-                "schemas": set(),
-                "kpis": [],
-            }
-
-        sub_entry = dom_entry["subdomains"][sd]
-        if not is_metric:
-            sub_entry["tables_count"] += 1
-        if a.schema:
-            sub_entry["schemas"].add(a.schema)
-        if is_metric:
-            sub_entry["metric_views_count"] += 1
-            sub_entry["metric_views"].append(a.table_name)
+        dashboards = {
+            d.get("id") or d.get("name")
+            for d in visible_dashboards(a.downstream_dashboards or [], hidden_dashboards)
+            if isinstance(d, dict) and (d.get("id") or d.get("name"))
+        } if is_metric else set()
+        buckets = [index.get(k).id for k in (*membership.domains, *membership.subdomains)] or [OTHER_DOMAIN]
+        for bucket in buckets:
+            s = stats.setdefault(bucket, {"metric_views": [], "tables": 0, "schemas": set(), "dashboards": set()})
+            if is_metric:
+                s["metric_views"].append(a.table_name)
+                s["dashboards"] |= dashboards
+            else:
+                s["tables"] += 1
+            if a.schema:
+                s["schemas"].add(a.schema)
 
     results = []
-    priority_order = ["Enterprise Data", "Supply Chain", "Finance", "Sales & Commercial", "Operations & Facilities", "Risk & Compliance"]
-    sorted_domains = sorted(domain_map.keys(), key=lambda x: priority_order.index(x) if x in priority_order else 99)
-
-    for d in sorted_domains:
-        data = domain_map[d]
-        subdomains_list = []
-        for sd_name, sd_data in data["subdomains"].items():
-            subdomains_list.append({
-                "name": sd_data["name"],
-                "description": sd_data["description"],
-                "metric_views_count": max(sd_data["metric_views_count"], len(sd_data["metric_views"])),
-                "tables_count": sd_data["tables_count"],
-                "metric_views": sd_data["metric_views"][:8],
-                "schemas": sorted(list(sd_data["schemas"]))[:3],
-                "kpis": sd_data["kpis"],
-            })
-
-        subdomains_list.sort(key=lambda x: (x["metric_views_count"], x["tables_count"]), reverse=True)
-
-        real_subdomains = [sd for sd in subdomains_list if sd["name"] != DEFAULT_SUBDOMAIN]
-        results.append({
-            "domain": data["domain"],
-            "description": data["description"],
-            "subdomain_count": len(subdomains_list),
-            # False when every asset sits in the catch-all bucket, so the UI can
-            # open the domain's assets directly instead of a one-item subdomain list.
-            "has_subdomains": bool(real_subdomains),
-            "metric_view_count": data["metric_view_count"],
-            "table_count": data["table_count"],
-            "dashboard_count": data["dashboard_count"],
-            "subdomains": subdomains_list,
-        })
-
+    for d in sorted(index.top_level, key=lambda x: x.name.lower()):
+        s = stats.get(d.id)
+        if not s:
+            continue
+        subdomains = [
+            {
+                "name": sub.name,
+                **_domain_summary(sub),
+                "metric_views_count": len(stats[sub.id]["metric_views"]),
+                "tables_count": stats[sub.id]["tables"],
+                "metric_views": stats[sub.id]["metric_views"][:8],
+                "schemas": sorted(stats[sub.id]["schemas"])[:3],
+                "kpis": [],
+            }
+            for sub in index.children(d.id)
+            if sub.id in stats
+        ]
+        subdomains.sort(key=lambda x: (-x["metric_views_count"], -x["tables_count"], x["name"].lower()))
+        results.append(_domain_entry(d.tag_key, _domain_summary(d), s, subdomains))
+    if OTHER_DOMAIN in stats:
+        results.append(_domain_entry(OTHER_DOMAIN, _OTHER_SUMMARY, stats[OTHER_DOMAIN], []))
     return results
 
 
@@ -257,17 +253,18 @@ def list_metric_views(
     certified: Optional[bool] = None,
     db: Session = Depends(get_db),
 ):
-    """Return all governed metric views matching filters."""
+    """Return all governed metric views matching filters.
+
+    ``domain`` / ``subdomain`` are Discover tag keys or ids; ``subdomain`` may
+    also be the subdomain's name within ``domain``.
+    """
     from sqlalchemy import or_
 
     q = db.query(DataAssetModel).filter(DataAssetModel.type == "METRIC_VIEW")
     vis = load_visibility(db)
     if vis.hidden_asset_ids:
         q = q.filter(DataAssetModel.id.notin_(vis.hidden_asset_ids))
-    if domain:
-        q = q.filter(DataAssetModel.domain == domain)
-    if subdomain:
-        q = q.filter(DataAssetModel.subdomain == subdomain)
+    index = load_domain_index(db)
     if certified is not None:
         q = q.filter(DataAssetModel.certified == certified)
     if query:
@@ -280,10 +277,12 @@ def list_metric_views(
             )
         )
 
-    assets = vis.visible(q.all())
-    hidden_dashboards = hidden_linked_dashboards(assets)
+    members = [(a, index.for_asset(a)) for a in vis.visible(q.all())]
+    if domain or subdomain:
+        members = [(a, m) for a, m in members if index.matches(m, domain=domain, subdomain=subdomain)]
+    hidden_dashboards = hidden_linked_dashboards(a for a, _ in members)
     results = []
-    for a in assets:
+    for a, membership in members:
         results.append({
             "id": a.id,
             "catalog": a.catalog,
@@ -292,8 +291,7 @@ def list_metric_views(
             "type": "METRIC_VIEW",
             "description": a.description,
             "owner": resolve_data_asset_owner(a.owner, a.tags),
-            "domain": a.domain,
-            "subdomain": a.subdomain,
+            **membership_fields(membership),
             "tags": a.tags or [],
             "certified": bool(a.certified),
             # None = not loaded: read as the user via /metric_views/definitions.
@@ -575,8 +573,17 @@ async def get_accessible_assets(
     return AccessibleAssetsResponse(available=True, mode="obo", accessible_ids=accessible_ids)
 
 
+_NO_DOMAINS = {"domains": [], "subdomains": []}
+
+
+def _entity_domains(db: Session, discover_type: str, ids, client) -> dict:
+    """``domains`` / ``subdomains`` per dashboard, app or Genie space id, from its workspace tags."""
+    found = workspace_entity_memberships(load_domain_index(db), discover_type, ids, client)
+    return {i: membership_fields(m) for i, m in found.items()}
+
+
 @router.get("/databricks/dashboards")
-def get_databricks_dashboards():
+def get_databricks_dashboards(db: Session = Depends(get_db)):
     """Fetch available Lakeview dashboards from Databricks."""
     from app.providers.databricks import DatabricksProvider
     from app.core.config import settings
@@ -593,9 +600,12 @@ def get_databricks_dashboards():
         )
         dashboards = list(provider.client.lakeview.list())
         hidden = hidden_workspace_entities("dashboard", [d.dashboard_id for d in dashboards], provider.client)
+        dashboards = [d for d in dashboards if d.dashboard_id not in hidden]
+        domains = _entity_domains(db, "dashboard", [d.dashboard_id for d in dashboards], provider.client)
         return [
-            {"id": d.dashboard_id, "name": d.display_name, "type": "dashboard", "path": d.parent_path}
-            for d in dashboards if d.dashboard_id not in hidden
+            {"id": d.dashboard_id, "name": d.display_name, "type": "dashboard", "path": d.parent_path,
+             **domains.get(d.dashboard_id, _NO_DOMAINS)}
+            for d in dashboards
         ]
     except Exception as e:
         logger.error(f"Failed to fetch dashboards: {e}")
@@ -627,7 +637,7 @@ def get_databricks_jobs():
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/databricks/apps")
-def get_databricks_apps():
+def get_databricks_apps(db: Session = Depends(get_db)):
     """Fetch available apps from Databricks."""
     from app.providers.databricks import DatabricksProvider
     from app.core.config import settings
@@ -654,6 +664,8 @@ def get_databricks_apps():
             if not page_token:
                 break
         hidden = hidden_workspace_entities("app", [a.get("name") for a in apps], provider.client)
+        apps = [a for a in apps if a.get("name") and a["name"] not in hidden]
+        domains = _entity_domains(db, "app", [a["name"] for a in apps], provider.client)
         return [
             {
                 "id": a["name"],
@@ -664,9 +676,9 @@ def get_databricks_apps():
                 "url": a.get("url") or None,
                 "thumbnail_url": a.get("thumbnail_url") or None,
                 "updated_at": a.get("update_time"),
+                **domains.get(a["name"], _NO_DOMAINS),
             }
             for a in apps
-            if a.get("name") and a["name"] not in hidden
         ]
     except Exception as e:
         logger.error(f"Failed to fetch apps: {e}")
@@ -978,7 +990,7 @@ def get_databricks_table_lineage(table_name: str, req: Request, db: Session = De
 
 
 @router.get("/databricks/genie_spaces")
-def get_databricks_genie_spaces():
+def get_databricks_genie_spaces(db: Session = Depends(get_db)):
     """Fetch available Genie Spaces from Databricks."""
     from app.providers.databricks import DatabricksProvider
     from app.core.config import settings
@@ -1017,7 +1029,9 @@ def get_databricks_genie_spaces():
             if not page_token:
                 break
         hidden = hidden_workspace_entities("genie_space", [r["id"] for r in results], provider.client)
-        return [r for r in results if r["id"] not in hidden]
+        results = [r for r in results if r["id"] not in hidden]
+        domains = _entity_domains(db, "genie_space", [r["id"] for r in results], provider.client)
+        return [{**r, **domains.get(r["id"], _NO_DOMAINS)} for r in results]
     except Exception as e:
         logger.error(f"Failed to fetch genie spaces: {e}")
         return []
