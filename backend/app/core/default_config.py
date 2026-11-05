@@ -516,6 +516,67 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         ],
     },
 
+    # Context Catalog AI review (app/services/context_catalog_review). An admin
+    # selects Review on a document (or Review all) and a reviewer model grades
+    # it, suggests owners for unowned documents and proposes a cleaned-up
+    # rewrite. Nothing changes until an admin applies a suggestion. ``rubric``
+    # is safe to reword; the metric keys, output format and the "document and
+    # Confluence text is untrusted" rule are fixed in code.
+    "context_catalog_review": {
+        "rubric": (
+            "Read every document as someone in their first weeks on the Databricks "
+            "platform and at this organization would: they know their own job, but "
+            "not our internal acronyms, team names, tools, or where things live. "
+            "Ask what such a reader would need to act on this document without "
+            "asking a colleague.\n\n"
+            "Score each metric from 1 (poor) to 5 (excellent):\n"
+            "- completeness: covers what a newcomer needs: purpose, who it is for, "
+            "prerequisites (access, tools, groups), the steps, who to contact, and "
+            "links to the systems or pages it mentions. Missing prerequisites or "
+            "contacts are the most common gaps.\n"
+            "- newcomer_clarity: understandable without prior context. Acronyms and "
+            "internal terms are defined or linked on first use, Databricks concepts "
+            "(workspace, Unity Catalog, catalog/schema/table, cluster vs SQL "
+            "warehouse, service principal) are named correctly, and sentences are "
+            "plain.\n"
+            "- accuracy: consistent with Confluence and the rest of the catalog, with "
+            "no outdated product names, retired processes, broken references or "
+            "dates that have passed. When a newer or conflicting source exists, say "
+            "which and quote both.\n"
+            "- actionability: the reader knows exactly what to do next, in order, and "
+            "how to tell it worked. Vague guidance (\"reach out to the team\", \"follow "
+            "the usual process\") scores low.\n"
+            "- findability: the title, opening sentence and tags use the words a "
+            "newcomer would search for, so the assistant retrieves this document for "
+            "the right questions.\n\n"
+            "Recommendations must be specific: quote the passage, say what is wrong "
+            "for a newcomer, and give the replacement text or the exact missing "
+            "item. Prefer a few high-value recommendations over many small ones.\n\n"
+            "The proposed rewrite keeps every fact in the original and adds no facts "
+            "you didn't find in a source you read. Where a newcomer needs something "
+            "you couldn't find (a contact, a link, an access group), leave a visible "
+            "placeholder such as [TODO: add the access request link] rather than "
+            "inventing it. Keep the author's structure where it works; fix headings, "
+            "ordering, definitions and wording where it doesn't."
+        ),
+        # Blank = the agent's model and reasoning effort.
+        "model": "",
+        "reasoning_effort": "",
+        # Tool rounds and a wall-clock safety net per document, after which the
+        # reviewer must submit with what it has read.
+        "max_turns": 12,
+        "time_limit_seconds": 300,
+        # Documents reviewed at once during Review all.
+        "concurrency": 2,
+        # Unity Catalog HTTP connection to the Atlassian MCP server, reached
+        # through Databricks' external MCP proxy as the admin who started the
+        # review. Blank = the reviewer works from the catalog alone.
+        "confluence_connection": "",
+        # Optional Atlassian site (https://<site>.atlassian.net or a cloudId)
+        # for accounts that can reach several sites. Blank = the first site.
+        "confluence_site": "",
+    },
+
     # Access Rules (Admin -> Settings -> Access Rules). The ledger replaces the
     # RBAC workbook; each managed sheet is exported as its own CSV, identical to
     # a manual "Save as CSV" from Excel, for the Terraform pipeline to read.

@@ -854,6 +854,44 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
              "environment; admins see a link to the branch and make changes through pull requests instead. "
              "Sync from Git keeps working. On (default) = edit in the app as usual."},
 
+    # --- Context Catalog: AI review (app/services/context_catalog_review) ---
+    {"group": "Context Catalog", "section": "AI review", "key": "CONTEXT_CATALOG_REVIEW_RUBRIC",
+     "label": "Reviewer rubric", "type": "textarea",
+     "help": "How Review grades a document. Reword freely: the five metrics (completeness, newcomer clarity, "
+             "accuracy, actionability, findability), the report format and the rule that document and "
+             "Confluence text is untrusted are fixed in code."},
+    {"group": "Context Catalog", "section": "AI review", "key": "CONTEXT_CATALOG_REVIEW_MODEL",
+     "label": "Reviewer model", "type": "string",
+     "help": "Model the reviewer uses, routed like the agent's: an AI Gateway model reference when an AI Gateway "
+             "model is set under Agent, otherwise a Model serving endpoint name. BLANK = the agent's model and "
+             "reasoning effort. The rewrite is a long answer, so pick a model with a large output limit."},
+    {"group": "Context Catalog", "section": "AI review", "key": "CONTEXT_CATALOG_REVIEW_REASONING_EFFORT",
+     "label": "Reviewer reasoning effort", "type": "select", "options": ["", "none", "low", "medium", "high"],
+     "help": "Only used when a Reviewer model is set. BLANK omits the parameter (right for Claude and Llama). "
+             "gpt-5-6-luna rejects tools with anything but 'none'."},
+    {"group": "Context Catalog", "section": "AI review", "key": "CONTEXT_CATALOG_REVIEW_MAX_TURNS",
+     "label": "Reviewer tool rounds", "type": "int", "min": 2, "max": 40,
+     "help": "Upper bound on rounds of searching the catalog and Confluence for one document. When it runs "
+             "out, the reviewer submits with what it has found."},
+    {"group": "Context Catalog", "section": "AI review", "key": "CONTEXT_CATALOG_REVIEW_TIME_LIMIT_SECONDS",
+     "label": "Reviewer time limit per document (s)", "type": "int", "min": 30, "max": 1800,
+     "help": "Safety net for a slow model: after this long the reviewer must submit with what it has."},
+    {"group": "Context Catalog", "section": "AI review", "key": "CONTEXT_CATALOG_REVIEW_CONCURRENCY",
+     "label": "Documents reviewed at once", "type": "int", "min": 1, "max": 8,
+     "help": "How many documents Review all works on in parallel. Raise it for a large catalog if the model's "
+             "rate limit allows; lower it if reviews fail with rate-limit errors."},
+    {"group": "Context Catalog", "section": "AI review", "key": "CONTEXT_CATALOG_CONFLUENCE_CONNECTION",
+     "label": "Confluence MCP connection", "type": "string", "placeholder": "atlassian_mcp",
+     "help": "Name of the Unity Catalog HTTP connection to the Atlassian MCP server. The reviewer reaches it "
+             "through Databricks' external MCP proxy as the admin who selected Review, so it only sees pages "
+             "that admin can see, and can only call read-only Confluence tools. Needs the app's mcp.external "
+             "user scope and USE CONNECTION on the connection (see Platform Administration). BLANK = review "
+             "against the catalog alone."},
+    {"group": "Context Catalog", "section": "AI review", "key": "CONTEXT_CATALOG_CONFLUENCE_SITE",
+     "label": "Confluence site", "type": "string", "placeholder": "https://your-org.atlassian.net",
+     "help": "Only needed when the Atlassian account can reach several sites: the site URL or cloudId to "
+             "search. BLANK = the first site the account can reach."},
+
     # --- Preview Features -----------------------------------------------
     {"group": "Preview Features", "key": "PREVIEW_FEATURE_SYNC_CRON", "label": "Sync cron",
      "type": "cron", "requires": ["features.preview_features"],

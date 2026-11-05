@@ -15,7 +15,7 @@ leaves room to add vector embeddings later without a breaking change.
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Column, String, DateTime, Text, Integer, JSON, ForeignKey
+from sqlalchemy import Boolean, Column, String, DateTime, Text, Integer, JSON, ForeignKey
 from sqlalchemy.orm import Mapped, relationship
 
 from app.db.base import Base
@@ -124,3 +124,63 @@ class ContextChunkModel(Base):
     chunk_index: Mapped[int] = Column(Integer, nullable=False, default=0, comment="Order of the chunk within the document")
     content: Mapped[str] = Column(Text, nullable=False, comment="Plain text/markdown content of the chunk")
     created_at: Mapped[datetime] = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ContextDocumentReviewModel(Base):
+    """One AI review run of a document: grades, recommendations, owner
+    suggestions and a proposed rewrite. Suggestions only; nothing here changes
+    the document until an admin applies it. The newest row per document is the
+    one shown. See app/services/context_catalog_review/.
+    """
+
+    __tablename__ = "context_document_reviews"
+
+    id: Mapped[str] = Column(String, primary_key=True, comment="Unique UUID for the review run")
+    document_id: Mapped[str] = Column(
+        String, ForeignKey("context_documents.id"), nullable=False, index=True,
+        comment="Reviewed document id",
+    )
+    batch_id: Mapped[Optional[str]] = Column(
+        String, nullable=True, index=True, comment="Review all run this belongs to; null for a single review",
+    )
+    status: Mapped[str] = Column(
+        String, nullable=False, default="queued", index=True,
+        comment="queued | running | completed | failed",
+    )
+    requested_by: Mapped[Optional[str]] = Column(String, nullable=True, comment="Email of the admin who asked")
+    created_at: Mapped[datetime] = Column(DateTime, default=datetime.utcnow, nullable=False)
+    started_at: Mapped[Optional[datetime]] = Column(DateTime, nullable=True)
+    finished_at: Mapped[Optional[datetime]] = Column(DateTime, nullable=True)
+    content_hash: Mapped[Optional[str]] = Column(
+        String, nullable=True, comment="Hash of the title + body reviewed, to spot later edits",
+    )
+    model: Mapped[Optional[str]] = Column(String, nullable=True, comment="Model that wrote the review")
+    overall_score: Mapped[Optional[int]] = Column(Integer, nullable=True, comment="0-100, from the metric scores")
+    grade: Mapped[Optional[str]] = Column(String, nullable=True, comment="A-F, from overall_score")
+    scores: Mapped[Optional[list]] = Column(JSON, nullable=True, comment="[{metric, score 1-5, rationale}]")
+    summary: Mapped[Optional[str]] = Column(Text, nullable=True)
+    recommendations: Mapped[Optional[list]] = Column(
+        JSON, nullable=True, comment="[{metric, priority, issue, suggestion, excerpt}]",
+    )
+    suggested_owners: Mapped[Optional[list]] = Column(
+        JSON, nullable=True, comment="[{name, email, reason, source, confidence}]",
+    )
+    related_sources: Mapped[Optional[list]] = Column(
+        JSON, nullable=True, comment="[{title, url, kind, relation, note}]",
+    )
+    proposed_title: Mapped[Optional[str]] = Column(String, nullable=True)
+    proposed_body_markdown: Mapped[Optional[str]] = Column(Text, nullable=True)
+    proposed_tags: Mapped[Optional[list]] = Column(JSON, nullable=True)
+    rewrite_summary: Mapped[Optional[str]] = Column(Text, nullable=True, comment="What the proposed rewrite changes")
+    confluence_status: Mapped[Optional[str]] = Column(
+        String, nullable=True, comment="available | not_configured | unavailable",
+    )
+    confluence_note: Mapped[Optional[str]] = Column(Text, nullable=True, comment="Why Confluence wasn't used")
+    tool_calls: Mapped[int] = Column(Integer, nullable=False, default=0, server_default="0")
+    forced: Mapped[bool] = Column(
+        Boolean, nullable=False, default=False, server_default="0",
+        comment="The tool-round or time budget ran out before the reviewer finished",
+    )
+    error: Mapped[Optional[str]] = Column(Text, nullable=True)
+    applied_at: Mapped[Optional[datetime]] = Column(DateTime, nullable=True, comment="When the rewrite was applied")
+    applied_by: Mapped[Optional[str]] = Column(String, nullable=True)

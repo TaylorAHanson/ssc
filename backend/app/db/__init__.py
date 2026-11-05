@@ -23,7 +23,12 @@ from app.db.discover_domain import DiscoverDomainModel
 from app.db.workspace_cache import CachedWorkspaceModel
 from app.db.data_contract import DataContractModel
 from app.db.legacy_dashboard import LegacyDashboardMappingModel
-from app.db.context_catalog import ContextDomainModel, ContextDocumentModel, ContextChunkModel
+from app.db.context_catalog import (
+    ContextChunkModel,
+    ContextDocumentModel,
+    ContextDocumentReviewModel,
+    ContextDomainModel,
+)
 from app.db.context_catalog_git import ContextCatalogGitStateModel
 from app.db.feedback import FeedbackModel
 from app.db.workflow import WorkflowModel, WorkflowVersionModel, WorkflowTombstoneModel

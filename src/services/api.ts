@@ -2646,6 +2646,171 @@ export function sendContextStaleTestMessage(): Promise<{ ok: boolean; status_cod
   return contextStalenessRequest('/staleness/test', 'POST', 'send test message');
 }
 
+// --- Context Catalog AI review ---
+
+export type ContextReviewMetric =
+  | 'completeness'
+  | 'newcomer_clarity'
+  | 'accuracy'
+  | 'actionability'
+  | 'findability';
+
+export interface ContextReviewScore {
+  metric: ContextReviewMetric;
+  score: number;
+  rationale: string;
+}
+
+export interface ContextReviewRecommendation {
+  metric: ContextReviewMetric;
+  priority: 'high' | 'medium' | 'low';
+  issue: string;
+  suggestion: string;
+  excerpt: string;
+  excerpt_found: boolean;
+}
+
+export interface ContextReviewOwnerSuggestion {
+  name: string;
+  email: string | null;
+  reason: string;
+  source: 'confluence' | 'catalog' | 'domain' | 'document_history' | 'other';
+  confidence: number;
+}
+
+export interface ContextReviewSource {
+  title: string;
+  url: string | null;
+  kind: 'confluence' | 'catalog' | 'other';
+  document_id: string | null;
+  domain_id: string | null;
+  relation: 'source' | 'overlaps' | 'conflicts' | 'newer' | 'related';
+  note: string;
+}
+
+export interface ContextReviewSummary {
+  id: string;
+  document_id: string;
+  batch_id: string | null;
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  requested_by: string | null;
+  created_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  grade: string | null;
+  overall_score: number | null;
+  scores: ContextReviewScore[];
+  summary: string | null;
+  error: string | null;
+  forced: boolean;
+  has_rewrite: boolean;
+  recommendation_count: number;
+  owner_suggestion_count: number;
+  applied_at: string | null;
+  applied_by: string | null;
+  /** The document's title or body changed after this review. */
+  is_outdated: boolean;
+}
+
+export interface ContextReview extends ContextReviewSummary {
+  model: string | null;
+  recommendations: ContextReviewRecommendation[];
+  suggested_owners: ContextReviewOwnerSuggestion[];
+  related_sources: ContextReviewSource[];
+  proposed_title: string | null;
+  proposed_tags: string[] | null;
+  proposed_body_markdown: string | null;
+  rewrite_summary: string | null;
+  confluence_status: 'available' | 'not_configured' | 'unavailable' | null;
+  confluence_note: string | null;
+  tool_calls: number;
+  original_title: string | null;
+  original_body_markdown: string | null;
+  original_tags: string[] | null;
+}
+
+export interface ContextReviewProgress {
+  batch_id: string;
+  total: number;
+  queued: number;
+  running: number;
+  completed: number;
+  failed: number;
+  done: number;
+  requested_by: string | null;
+  started_at: string | null;
+}
+
+export interface ContextReviewOverview {
+  reviews: ContextReviewSummary[];
+  progress: ContextReviewProgress | null;
+  confluence: { configured: boolean; connection: string | null };
+}
+
+export interface ContextReviewRunResult {
+  batch_id: string;
+  queued: number;
+  skipped_unchanged: number;
+  already_running: number;
+}
+
+async function contextReviewRequest<T>(path: string, init: RequestInit, what: string): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}/context${path}`, { ...init, headers: getHeaders() });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(typeof error.detail === 'string' ? error.detail : `Failed to ${what}: ${response.status}`);
+  }
+  return response.json();
+}
+
+/** The newest AI review of every document, and the progress of the newest Review all. */
+export function getContextReviews(): Promise<ContextReviewOverview> {
+  return contextReviewRequest('/reviews', { method: 'GET' }, 'load reviews');
+}
+
+/** Review every document (or one domain's), skipping ones unchanged since their last review. */
+export function runContextReviews(
+  opts: { domainId?: string; documentIds?: string[]; skipUnchanged?: boolean } = {},
+): Promise<ContextReviewRunResult> {
+  return contextReviewRequest(
+    '/reviews/run',
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        domain_id: opts.domainId ?? null,
+        document_ids: opts.documentIds ?? null,
+        skip_unchanged: opts.skipUnchanged ?? true,
+      }),
+    },
+    'start reviews',
+  );
+}
+
+/** Start an AI review of one document (runs in the background). */
+export function reviewContextDocument(documentId: string): Promise<{ review: ContextReview }> {
+  return contextReviewRequest(`/documents/${documentId}/ai-review`, { method: 'POST' }, 'start the review');
+}
+
+/** The newest AI review of one document, if any. */
+export function getContextDocumentReview(documentId: string): Promise<{ review: ContextReview | null }> {
+  return contextReviewRequest(`/documents/${documentId}/ai-review`, { method: 'GET' }, 'load the review');
+}
+
+/** Apply the chosen parts of a review's proposal to its document. */
+export function applyContextReview(
+  reviewId: string,
+  parts: { title?: boolean; body?: boolean; tags?: boolean },
+): Promise<{ document: ContextDocument; review: ContextReview | null }> {
+  return contextReviewRequest(
+    `/reviews/${reviewId}/apply`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ title: !!parts.title, body: !!parts.body, tags: !!parts.tags }),
+    },
+    'apply the suggestion',
+  );
+}
+
 // --- Context Catalog Git sync ---
 
 export interface ContextGitPendingChange {
@@ -4230,6 +4395,11 @@ export const api = {
   getContextStaleness,
   runContextStaleReminders,
   sendContextStaleTestMessage,
+  getContextReviews,
+  runContextReviews,
+  reviewContextDocument,
+  getContextDocumentReview,
+  applyContextReview,
   getContextCatalogGitStatus,
   syncContextCatalogFromGit,
   getAgentSuggestions,

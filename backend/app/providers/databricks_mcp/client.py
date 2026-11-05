@@ -19,6 +19,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Awaitable, Callable, Dict, Optional, Tuple
+from urllib.parse import quote
 
 # Progress-notification callback shape used by the MCP SDK's ``call_tool``.
 # The server may emit zero or more of these mid-call (progress, total,
@@ -162,6 +163,25 @@ def build_dbsql_mcp_url(host: Optional[str] = None) -> str:
             "DATABRICKS_WORKSPACE_URL before invoking the DBSQL MCP tool."
         )
     return f"{base}/api/2.0/mcp/sql"
+
+
+def build_external_mcp_url(connection_name: str, host: Optional[str] = None) -> str:
+    """Databricks' proxy URL for an external MCP server registered as a UC connection.
+
+    The proxy adds the connection's credential (for a per-user OAuth connection,
+    the caller's own sign-in to that service). Needs the ``mcp.external`` user
+    scope and USE CONNECTION on the connection.
+    """
+    base = _normalize_host(host or settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL)
+    if not base:
+        raise ValueError(
+            "Databricks host is not configured. Set DATABRICKS_HOST or "
+            "DATABRICKS_WORKSPACE_URL before calling an external MCP server."
+        )
+    name = (connection_name or "").strip()
+    if not name:
+        raise ValueError("An external MCP connection name is required.")
+    return f"{base}/api/2.0/mcp/external/{quote(name, safe='')}"
 
 
 # Environments where we allow the SP fallback. Used as a *secondary*
@@ -538,6 +558,7 @@ __all__ = [
     "GENIE_ONE_MCP",
     "build_genie_mcp_url",
     "build_dbsql_mcp_url",
+    "build_external_mcp_url",
     "describe_genie_failure",
     "open_mcp_session",
     "call_genie_tool",

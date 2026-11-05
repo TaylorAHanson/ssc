@@ -13,6 +13,14 @@ Format rules (the app parses this file, so keep to them):
   before), and what the reader will notice or should do now.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
 
+## 2.13.0 — 2026-11-04
+
+### Context Catalog
+
+- **An AI reviewer now grades catalog documents the way someone new to Databricks would read them.** Until now, you could only tell whether a document was out of date. Nothing told you whether a newcomer could follow it, whether it matched Confluence, or what was missing. Open a document and select **Review** in the new **AI review** box, or select **Review all** at the top of the catalog. Each document is scored from 1 to 5 on completeness, newcomer clarity, accuracy, actionability and findability, with a reason for each. The scores make an overall score out of 100 and a letter grade, which also appears next to the document in the list. **Review all** skips documents that haven't changed since their last review, so running it again is cheap.
+- **Reviews come with specific fixes, owner suggestions and a cleaned-up rewrite you can compare line by line.** A grade alone doesn't tell you what to do, so each recommendation quotes the passage it means and says what to change. A document with no owner gets suggested owners, with the reason each person fits. The reviewer also proposes a rewritten version, and a better title and tags where they help. The rewrite keeps every fact and marks gaps with `[TODO: ...]` rather than inventing details. You can compare it with the original as a diff or a preview. Nothing changes until you choose: tick what you want and select **Apply selected**, select **Edit before saving** to adjust it in the editor first, or select **Set as owner** on a suggested owner. If the document was edited after the review, you're asked to review it again before applying.
+- **The reviewer checks documents against Confluence.** Catalog content often repeats, or contradicts, pages in Confluence, and nobody had a quick way to spot that. Once your platform administrator connects Confluence, the reviewer searches it as you, so it only sees pages you can see. It lists the pages it compared against and flags conflicting or newer ones, and it can only read Confluence, never change it. Each admin signs in to Atlassian once on the Confluence connection in Databricks. Without a connection, reviews still run against the catalog alone and say so. The reviewer's instructions, model and limits are under **Admin → Settings → Context Catalog → AI review**. After this update you may be asked to approve the app's permissions again, because it now asks for access to external MCP connections.
+
 ## 2.12.0 — 2026-11-04
 
 ### Discover

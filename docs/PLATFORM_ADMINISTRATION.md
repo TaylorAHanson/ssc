@@ -209,6 +209,31 @@ These are DB overrides, so each environment can be set independently. Changing t
 
 To lock an environment so it is managed only from Git, turn off **Allow editing in the app** there (typically prod). Admins then see a banner linking to the branch, and all changes go through PRs. **Sync from Git** and the schedule still apply them.
 
+### AI review and the Confluence connection
+
+**Review** (in a document) and **Review all** (page header) run a reviewer agent that grades documents from a newcomer's perspective (completeness, newcomer clarity, accuracy, actionability, findability), recommends specific fixes, suggests owners for unowned documents and proposes a rewrite. It only suggests: an admin applies a suggestion explicitly, and an apply is refused (409) if the document changed since the review. Applying goes through the normal document save, so it respects **Allow editing in the app** and is committed to Git like any other edit. Implementation: `backend/app/services/context_catalog_review/`; reviews are stored in `context_document_reviews`.
+
+The reviewer can search and read the rest of the catalog, and Confluence through the Databricks **external MCP proxy** (`/api/2.0/mcp/external/<connection>`) to the Atlassian Rovo MCP server. Calls use the signed-in admin's own token (on-behalf-of), so it sees only what that admin can see in Confluence. Only read tools are exposed to the model (an allowlist in code), so the agent can't create or edit pages even if the connection allows it. Without a connection, reviews run against the catalog only and say so.
+
+**1. Create the connection.** In Catalog Explorer, **External data → Connections → Create connection**, type **HTTP**, using the Atlassian managed OAuth option (or a custom OAuth app for `https://mcp.atlassian.com/v1/mcp`) with **per-user (U2M)** authentication, and **Is MCP connection** checked. Per-user auth is what keeps Confluence permissions per admin. A shared bot credential would let every catalog admin read whatever the bot can.
+
+**2. Grant access.** Each catalog admin (or a group they're in) needs `USE CONNECTION` on it, and each signs in to Atlassian once from the connection's page. The app requests the `mcp.external` user API scope (`databricks.yml` → `user_api_scopes`). After deploying a version that adds the scope, users are asked to consent again the next time they open the app.
+
+**3. Configure.** *Admin → Settings → Context Catalog → AI review*:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `CONTEXT_CATALOG_CONFLUENCE_CONNECTION` | — | UC connection name. Blank = catalog-only reviews. Also settable by env. |
+| `CONTEXT_CATALOG_CONFLUENCE_SITE` | — | Atlassian site (cloud id, URL or host) when the account sees several; blank = first. |
+| `CONTEXT_CATALOG_REVIEW_RUBRIC` | newcomer rubric | What the reviewer checks and how it writes recommendations and rewrites. The output format, untrusted-content and provenance rules are fixed in code. |
+| `CONTEXT_CATALOG_REVIEW_MODEL` | — | Serving endpoint; blank = the agent's model. |
+| `CONTEXT_CATALOG_REVIEW_REASONING_EFFORT` | — | For reasoning models. |
+| `CONTEXT_CATALOG_REVIEW_MAX_TURNS` | `12` | Tool rounds before the reviewer must submit. |
+| `CONTEXT_CATALOG_REVIEW_TIME_LIMIT_SECONDS` | `300` | Per-document time limit before it must submit. |
+| `CONTEXT_CATALOG_REVIEW_CONCURRENCY` | `2` | Documents reviewed in parallel by **Review all**. |
+
+**Guards.** Document text and Confluence content are treated as untrusted data, not instructions. A suggested owner's email and any source link are kept only if they appeared in something the reviewer actually read, so it can't invent contacts or URLs. A review that runs out of rounds or time is marked as forced. Reviews run in the background in the app process. A restart marks in-flight reviews failed, and the admin can run them again.
+
 ---
 
 ## 7. Monitoring & Day-to-Day Operations

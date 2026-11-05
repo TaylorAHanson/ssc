@@ -175,6 +175,9 @@ resources:
         - "genie"
         - "mcp.functions"
         - "ai-gateway"
+        # Context Catalog AI review: Confluence through a UC connection to the
+        # Atlassian MCP server (/api/2.0/mcp/external/<connection>).
+        - "mcp.external"
 
       permissions:
         - level: CAN_MANAGE

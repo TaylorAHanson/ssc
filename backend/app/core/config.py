@@ -38,6 +38,7 @@ _duplicate_check = _yaml_config.get("duplicate_check", {}) or {}
 _rbac = _yaml_config.get("rbac", {}) or {}
 _metadata = _yaml_config.get("metadata", {}) or {}
 _context_catalog_git = _yaml_config.get("context_catalog_git", {}) or {}
+_context_catalog_review = _yaml_config.get("context_catalog_review", {}) or {}
 
 
 def _slugify_brand(value: str) -> str:
@@ -149,6 +150,18 @@ class Settings(BaseSettings):
     # GIT_TOKEN_SECRET_SCOPE. Blank = reuse the GitHub PAT (GIT_TOKEN_SECRET_KEY).
     CONTEXT_CATALOG_GIT_TOKEN: str = ""  # SECRET: Set in .env
     CONTEXT_CATALOG_GIT_TOKEN_SECRET_KEY: str = os.getenv("CONTEXT_CATALOG_GIT_TOKEN_SECRET_KEY", "")
+    # AI review (app/services/context_catalog_review). Defaults and their
+    # rationale live in default_config.py; editable in Admin -> Settings.
+    CONTEXT_CATALOG_REVIEW_RUBRIC: str = _context_catalog_review.get("rubric", "")
+    CONTEXT_CATALOG_REVIEW_MODEL: str = _context_catalog_review.get("model", "")
+    CONTEXT_CATALOG_REVIEW_REASONING_EFFORT: str = _context_catalog_review.get("reasoning_effort", "")
+    CONTEXT_CATALOG_REVIEW_MAX_TURNS: int = _context_catalog_review.get("max_turns", 12)
+    CONTEXT_CATALOG_REVIEW_TIME_LIMIT_SECONDS: int = _context_catalog_review.get("time_limit_seconds", 300)
+    CONTEXT_CATALOG_REVIEW_CONCURRENCY: int = _context_catalog_review.get("concurrency", 2)
+    CONTEXT_CATALOG_CONFLUENCE_CONNECTION: str = os.getenv(
+        "CONTEXT_CATALOG_CONFLUENCE_CONNECTION", _context_catalog_review.get("confluence_connection", "")
+    )
+    CONTEXT_CATALOG_CONFLUENCE_SITE: str = _context_catalog_review.get("confluence_site", "")
 
     # Training / lightweight LMS
     # Admin-authored learning tracks + courses, with media/docs stored on a UC

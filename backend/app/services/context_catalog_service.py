@@ -23,6 +23,7 @@ from app.core.config import settings
 from app.db.context_catalog import (
     ContextChunkModel,
     ContextDocumentModel,
+    ContextDocumentReviewModel,
     ContextDomainModel,
 )
 from app.services.context_catalog_staleness import freshness_fields, normalize_owner
@@ -181,6 +182,10 @@ class ContextCatalogService:
             raise ValueError("Domain not found")
         ids = ContextCatalogService._descendant_ids(db, domain_id)
         db.query(ContextChunkModel).filter(ContextChunkModel.domain_id.in_(ids)).delete(synchronize_session=False)
+        doc_ids = db.query(ContextDocumentModel.id).filter(ContextDocumentModel.domain_id.in_(ids))
+        db.query(ContextDocumentReviewModel).filter(
+            ContextDocumentReviewModel.document_id.in_(doc_ids.scalar_subquery())
+        ).delete(synchronize_session=False)
         db.query(ContextDocumentModel).filter(ContextDocumentModel.domain_id.in_(ids)).delete(synchronize_session=False)
         db.query(ContextDomainModel).filter(ContextDomainModel.id.in_(ids)).delete(synchronize_session=False)
         db.commit()
@@ -283,6 +288,9 @@ class ContextCatalogService:
             raise ValueError("Document not found")
         storage_path = document.storage_path
         db.query(ContextChunkModel).filter(ContextChunkModel.document_id == document_id).delete(
+            synchronize_session=False
+        )
+        db.query(ContextDocumentReviewModel).filter(ContextDocumentReviewModel.document_id == document_id).delete(
             synchronize_session=False
         )
         db.query(ContextDocumentModel).filter(ContextDocumentModel.id == document_id).delete(

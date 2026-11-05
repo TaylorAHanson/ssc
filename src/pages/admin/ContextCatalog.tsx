@@ -25,6 +25,7 @@ import {
   TrendingUp,
   BellRing,
   CheckCheck,
+  Sparkles,
 } from 'lucide-react';
 import { api } from '../../services/api';
 import type {
@@ -32,10 +33,14 @@ import type {
   ContextDomainDetail,
   ContextDocument,
   ContextDocumentSummary,
+  ContextReviewProgress,
+  ContextReviewSummary,
   ContextSearchResult,
 } from '../../services/api';
 import { ImportContextCatalogModal } from '../../components/admin/ImportContextCatalogModal';
 import { ContextStalenessPanel } from '../../components/admin/ContextStalenessPanel';
+import { ContextReviewPanel } from '../../components/admin/ContextReviewPanel';
+import { gradeStyle } from '../../lib/contextReview';
 import { ContextCatalogGitPanel } from '../../components/admin/ContextCatalogGitPanel';
 import { errorMessage } from '../../lib/errors';
 
@@ -181,6 +186,9 @@ export function ContextCatalog() {
   const [docSort, setDocSort] = useState<DocSort>('updated_desc');
   const [docOwnerFilter, setDocOwnerFilter] = useState('');
   const [staleOnly, setStaleOnly] = useState(false);
+  const [reviewByDoc, setReviewByDoc] = useState<Record<string, ContextReviewSummary>>({});
+  const [reviewProgress, setReviewProgress] = useState<ContextReviewProgress | null>(null);
+  const [isStartingReviewAll, setIsStartingReviewAll] = useState(false);
   // Deep link from a Teams reminder: ?domain=<id>&doc=<id> opens that document.
   const pendingDocRef = useRef<string | null>(null);
 
@@ -222,6 +230,29 @@ export function ContextCatalog() {
     loadDomains(linkedDomain ?? undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const loadReviews = async () => {
+    try {
+      const overview = await api.getContextReviews();
+      setReviewByDoc(Object.fromEntries(overview.reviews.map((r) => [r.document_id, r])));
+      setReviewProgress(overview.progress);
+    } catch {
+      /* grade badges are a nicety; the catalog works without them */
+    }
+  };
+
+  useEffect(() => {
+    loadReviews();
+  }, []);
+
+  const reviewsInFlight = Object.values(reviewByDoc).some((r) => r.status === 'queued' || r.status === 'running');
+  useEffect(() => {
+    if (!reviewsInFlight) return;
+    const timer = window.setInterval(loadReviews, 5000);
+    return () => window.clearInterval(timer);
+  }, [reviewsInFlight]);
+
+  const reviewAllActive = !!reviewProgress && reviewProgress.done < reviewProgress.total;
 
   useEffect(() => {
     let mounted = true;
@@ -494,6 +525,67 @@ export function ContextCatalog() {
     }
   };
 
+  const reviewAll = async () => {
+    if (
+      !window.confirm(
+        'Review every document that changed since its last AI review? Each one is read by the reviewer model ' +
+          '(and checked against Confluence when connected), which takes a minute or two per document. Nothing is ' +
+          'changed until you apply a suggestion.'
+      )
+    )
+      return;
+    setIsStartingReviewAll(true);
+    setMessage(null);
+    try {
+      const run = await api.runContextReviews();
+      const parts = [`Reviewing ${run.queued} document${run.queued === 1 ? '' : 's'}`];
+      if (run.skipped_unchanged) parts.push(`${run.skipped_unchanged} unchanged since their last review skipped`);
+      if (run.already_running) parts.push(`${run.already_running} already in progress`);
+      setMessage({ type: 'success', text: parts.join(' · ') });
+      await loadReviews();
+    } catch (e) {
+      setMessage({ type: 'error', text: errorMessage(e, 'Failed to start the reviews') });
+    } finally {
+      setIsStartingReviewAll(false);
+    }
+  };
+
+  // The AI review panel saved the document (applied a suggestion or set an
+  // owner): load what was saved into the form as the new clean baseline.
+  const adoptSavedDoc = (doc: ContextDocument) => {
+    const form: DocFormState = {
+      id: doc.id,
+      title: doc.title,
+      status: doc.status,
+      body_markdown: doc.body_markdown || '',
+      owner: doc.owner || '',
+    };
+    setDocForm(form);
+    setDocMeta(doc);
+    docBaselineRef.current = docSnapshot(form);
+    refreshDetail().catch(() => undefined);
+    loadReviews();
+  };
+
+  const setOwnerFromReview = async (email: string) => {
+    if (!docForm?.id) return;
+    const saved = await api.updateContextDocument(docForm.id, { owner: email });
+    setDocMeta(saved);
+    const baseline = JSON.parse(docBaselineRef.current || '[]');
+    baseline[3] = email;
+    docBaselineRef.current = JSON.stringify(baseline);
+    setDocForm((f) => (f ? { ...f, owner: email } : f));
+    refreshDetail().catch(() => undefined);
+  };
+
+  const copyReviewToEditor = ({ title, body }: { title?: string; body?: string }) => {
+    setDocForm((f) =>
+      f ? { ...f, ...(title !== undefined ? { title } : {}), ...(body !== undefined ? { body_markdown: body } : {}) } : f
+    );
+    setMessage({ type: 'success', text: 'Suggestion copied into the editor. Adjust it, then Save.' });
+    editorRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   const saveDoc = async () => {
     if (!docForm || !detail) return;
     if (!docForm.title.trim()) {
@@ -528,6 +620,7 @@ export function ContextCatalog() {
       }
       setDocForm(null);
       await refreshDetail();
+      loadReviews();
     } catch (e) {
       setMessage({ type: 'error', text: errorMessage(e, 'Failed to save document') });
     } finally {
@@ -626,6 +719,26 @@ export function ContextCatalog() {
               </CardDescription>
             </div>
             <div className="flex items-center gap-2 shrink-0">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={reviewAll}
+                disabled={isStartingReviewAll || reviewAllActive || stats.totalDocs === 0}
+                title={
+                  reviewAllActive
+                    ? 'A Review all is in progress'
+                    : 'AI review of every document changed since its last review: grades, fixes, owner suggestions and rewrites'
+                }
+              >
+                {isStartingReviewAll || reviewAllActive ? (
+                  <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                ) : (
+                  <Sparkles className="w-4 h-4 mr-1" />
+                )}
+                {reviewAllActive && reviewProgress
+                  ? `Reviewing ${reviewProgress.done}/${reviewProgress.total}`
+                  : 'Review all'}
+              </Button>
               <Button
                 variant="outline"
                 size="sm"
@@ -982,6 +1095,7 @@ export function ContextCatalog() {
                                                   <AlertTriangle className="w-3 h-3" /> stale
                                                 </span>
                                               )}
+                                              <ReviewBadge review={reviewByDoc[doc.id]} />
                                               {isEditing && (
                                                 <span className="text-[10px] uppercase tracking-wide font-semibold text-accent">
                                                   editing
@@ -1271,6 +1385,18 @@ export function ContextCatalog() {
                     {canEdit ? 'Cancel' : 'Close'}
                   </Button>
                 </div>
+                {docForm.id && (
+                  <ContextReviewPanel
+                    documentId={docForm.id}
+                    canEdit={canEdit}
+                    isDirty={docSnapshot(docForm) !== docBaselineRef.current}
+                    onApplied={adoptSavedDoc}
+                    onSetOwner={setOwnerFromReview}
+                    onUseInEditor={copyReviewToEditor}
+                    onOpenDocument={openLinkedDoc}
+                    onReviewChanged={loadReviews}
+                  />
+                )}
               </CardContent>
             </Card>
           ) : !selectedId ? (
@@ -1345,6 +1471,35 @@ export function ContextCatalog() {
         />
       )}
     </div>
+  );
+}
+
+function ReviewBadge({ review }: { review?: ContextReviewSummary }) {
+  if (!review) return null;
+  if (review.status === 'queued' || review.status === 'running') {
+    return (
+      <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">
+        <Loader2 className="w-3 h-3 animate-spin" /> reviewing
+      </span>
+    );
+  }
+  if (review.status !== 'completed' || !review.grade) return null;
+  const extras = [
+    review.recommendation_count ? `${review.recommendation_count} recommendations` : '',
+    review.owner_suggestion_count ? 'owner suggestions' : '',
+    review.has_rewrite ? 'a proposed rewrite' : '',
+  ].filter(Boolean);
+  return (
+    <span
+      className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${gradeStyle(review.grade)} ${
+        review.is_outdated ? 'opacity-50' : ''
+      }`}
+      title={`AI review: ${review.overall_score}/100${extras.length ? `, with ${extras.join(', ')}` : ''}${
+        review.is_outdated ? ' (edited since)' : ''
+      }`}
+    >
+      {review.grade}
+    </span>
   );
 }
 

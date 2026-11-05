@@ -122,6 +122,62 @@ back to its domain's primary owner for reminders.
   **Mark reviewed**. That restarts its clock without changing the content.
 - Change the threshold under **Admin → Settings → Context Catalog**.
 
+### AI review
+
+An AI reviewer can read a document the way someone new to Databricks would,
+and tell you what to fix. It grades the document from 1 to 5 on five
+measures, with a reason for each:
+
+- **Completeness**: does it cover what someone needs, or leave steps, links,
+  prerequisites or contacts out?
+- **Newcomer clarity**: would someone new to the platform and to your
+  organization follow it, or does it assume jargon and context they don't
+  have?
+- **Accuracy**: is it consistent with Confluence and with the rest of the
+  catalog?
+- **Actionability**: does it say exactly what to do next and who to ask?
+- **Findability**: would the title, tags and headings match how a newcomer
+  searches?
+
+The scores add up to an overall score out of 100 and a letter grade, shown
+next to each document in the list. Hover over the grade for details. A faded
+grade means the document has been edited since it was reviewed.
+
+To review one document, open it and select **Review** in the **AI review**
+box under the editor. To review the whole catalog, select **Review all** at
+the top of the page. **Review all** skips documents that haven't changed
+since their last review, and the button shows its progress. A review usually
+takes a minute or two per document, and you can leave the page while it
+runs.
+
+A finished review shows:
+
+- **Recommendations**, most important first. Each one quotes the passage it
+  refers to and says what to change.
+- **Suggested owners**, when the document has no owner. Each suggestion says
+  why the person fits, such as owning the domain or a Confluence page on the
+  topic. Select **Set as owner** to assign one.
+- **Related sources** in Confluence or the catalog that the reviewer checked
+  against, marked as overlapping, conflicting, newer or the source.
+- **Proposed changes**: a cleaned-up rewrite of the document, plus a better
+  title and tags where useful. The rewrite keeps every fact from the original
+  and marks missing information with `[TODO: ...]` instead of inventing it.
+  Compare it with the original under **Changes** or **Full diff**, or read it
+  under **Preview**.
+
+Nothing changes until you choose. Tick the parts you want and select
+**Apply selected** to save them, or **Edit before saving** to copy them into
+the editor and adjust them first. If the document was edited after the
+review, review it again before applying.
+
+The reviewer reads Confluence as you, so it only sees pages you can see.
+Before your first review, sign in to Atlassian once on the Confluence
+connection in Databricks (your platform administrator can tell you which
+one). If Confluence isn't connected or can't be reached, the review still
+runs against the catalog alone, and a note in the review says why and how to
+fix it. The reviewer's instructions, model and limits are under
+**Admin → Settings → Context Catalog → AI review**.
+
 ### Teams reminders
 
 {{brand_name}} can post a weekly message to a Microsoft Teams channel that

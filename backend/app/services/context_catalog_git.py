@@ -50,7 +50,12 @@ import yaml
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.db.context_catalog import ContextChunkModel, ContextDocumentModel, ContextDomainModel
+from app.db.context_catalog import (
+    ContextChunkModel,
+    ContextDocumentModel,
+    ContextDocumentReviewModel,
+    ContextDomainModel,
+)
 from app.db.context_catalog_git import ContextCatalogGitStateModel
 from app.providers.context_catalog.git_repo import GitHubRepoClient, GitSyncError, RepoRef, parse_repo
 from app.services.context_catalog_service import ContextCatalogService
@@ -660,6 +665,9 @@ class _Applier:
         if doc.storage_path:
             self.storage_paths.append(doc.storage_path)
         self.db.query(ContextChunkModel).filter(ContextChunkModel.document_id == doc_id).delete(
+            synchronize_session=False
+        )
+        self.db.query(ContextDocumentReviewModel).filter(ContextDocumentReviewModel.document_id == doc_id).delete(
             synchronize_session=False
         )
         self.db.delete(doc)
