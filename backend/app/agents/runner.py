@@ -39,6 +39,7 @@ from app.agents.events import (
 )
 from app.agents import tracing
 from app.agents.prompts import get_agent_prompt
+from app.agents.restatement import collapse_restated_reply
 from app.agents.suggestions import split_suggestions, suggestions_enabled
 from app.core.config import settings
 from app.model_serving.agent_llm import AgentLLMClient
@@ -807,6 +808,7 @@ class AgentRunner:
             # is always stripped, even with the feature off, so a stray one from
             # the model can never reach the user's bubble.
             final_text, suggestions = split_suggestions(final_content or agent_message)
+            final_text = collapse_restated_reply(final_text)
             if not suggestions_enabled():
                 suggestions = []
             tracing.end_root_span(turn_span, outputs={"final_message": final_text})
