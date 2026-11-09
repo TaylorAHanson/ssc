@@ -44,6 +44,35 @@ def _possible_duplicates(db, workflow_type: str, parameters: Dict[str, Any], kwa
         return []
     return result.get("possible_duplicates") or []
 
+def _parameter_name_mismatch(spec: Optional[Dict[str, Any]], parameters: Dict[str, Any]) -> Optional[str]:
+    """Why ``parameters`` can't feed the workflow's steps, or None when they can.
+
+    Steps read their inputs by exact name, so ``catalog_name`` sent for ``catalog``
+    files a request whose first step fails on a missing value. Rejects only when a
+    name is unrecognised AND an input is missing: an optional input may be left
+    out. Compound workflows are skipped, since their child workflows read inputs
+    this spec doesn't list.
+    """
+    from app.workflows.instructions import _PLATFORM_VARS, _user_inputs
+    from app.workflows.spec_loader import subworkflow_refs
+
+    if not spec or subworkflow_refs(spec):
+        return None
+    expected = _user_inputs(spec)
+    if not expected:
+        return None
+    given = set(parameters or {})
+    unknown = sorted(given - set(expected) - _PLATFORM_VARS)
+    missing = [k for k in expected if k not in given]
+    if not unknown or not missing:
+        return None
+    return (
+        f"these parameter names don't match the workflow's inputs. Expected: {', '.join(expected)}. "
+        f"Missing: {', '.join(missing)}. Not recognised: {', '.join(unknown)}. "
+        "Call execute_workflow again with the same values under the expected names."
+    )
+
+
 @tool(
     name="execute_workflow",
     description="Initiate a governed self-service workflow (e.g. 'workspace_access', 'workspace_provision') with validated user parameters.",
@@ -90,12 +119,17 @@ def execute_workflow(
         from app.workflows.graphs.specs import SPECS
         from app.workflows.instructions import filed_by
 
-        filer = filed_by(published_graph_spec(db, workflow_type) or SPECS.get(workflow_type))
+        spec = published_graph_spec(db, workflow_type) or SPECS.get(workflow_type)
+        filer = filed_by(spec)
         if filer:
             return {
                 "success": False,
                 "error": f"'{workflow_type}' requests are filed by `{filer}`, not execute_workflow. Call `{filer}`.",
             }
+
+        mismatch = _parameter_name_mismatch(spec, parameters)
+        if mismatch:
+            return {"success": False, "error": f"Not submitted: {mismatch}"}
 
         duplicates = _possible_duplicates(db, workflow_type, parameters, kwargs)
         if duplicates and not acknowledge_duplicates:
