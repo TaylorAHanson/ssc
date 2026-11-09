@@ -190,22 +190,6 @@ resources:
         - level: CAN_USE
           group_name: "users"
 
-    # Example standalone MCP server (Streamable HTTP). The "mcp-" name prefix makes
-    # Databricks surface it under Workspace → AI Gateway → MCPs. Serves at <url>/mcp.
-    mcp-server:
-      name: "mcp-${var.app_name}"
-      description: "Example MCP server (Streamable HTTP) — discoverable in AI Gateway → MCPs"
-      source_code_path: "./mcp_app"
-      config:
-        command:
-          - python
-          - server.py
-      permissions:
-        - level: CAN_MANAGE
-          user_name: "${workspace.current_user.userName}"
-        - level: CAN_USE
-          group_name: "users"
-
   # Scheduled LLM-as-judge job: scores recent agent traces and writes an
   # LLM_JUDGE assessment keyed by trace_id, to compare against human feedback.
   jobs:
@@ -246,7 +230,6 @@ sync:
     - src/**
     - public/**
     - backend/**
-    - mcp_app/**
   exclude:
     # Frontend deps/build output (node_modules ~340MB stalls source download).
     - node_modules/**
@@ -489,10 +472,6 @@ targets:
           permissions:
             - level: CAN_USE
               group_name: "All account users"
-        mcp-server:
-          permissions:
-            - level: CAN_USE
-              group_name: "All account users"
 
   dev:
     mode: production
@@ -554,10 +533,6 @@ targets:
           #       logs_table: "${var.telemetry_catalog}.${var.telemetry_schema}.otel_logs"
           #       metrics_table: "${var.telemetry_catalog}.${var.telemetry_schema}.otel_metrics"
           #       traces_table: "${var.telemetry_catalog}.${var.telemetry_schema}.otel_spans"
-        mcp-server:
-          permissions:
-            - level: CAN_USE
-              group_name: "account users"
 
   stage:
     mode: production

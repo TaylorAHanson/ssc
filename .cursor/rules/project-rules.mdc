@@ -6,8 +6,8 @@ alwaysApply: true
 # Project Rules
 
 The canonical, tool-agnostic agent guide for this repo lives in **`AGENTS.md`**
-at the repo root, with nested `backend/AGENTS.md`, `src/AGENTS.md`, and
-`mcp_app/AGENTS.md` for area-specific detail. **Read the nearest `AGENTS.md`
+at the repo root, with nested `backend/AGENTS.md` and `src/AGENTS.md` for
+area-specific detail. **Read the nearest `AGENTS.md`
 before working**, plus `docs/ARCHITECTURE.md` before backend changes.
 
 Quick reminders (see `AGENTS.md` for the full context):

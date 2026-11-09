@@ -23,7 +23,6 @@ execution model. Other useful docs: `DEVELOPER_QUICK_START.md`, `GOVERNANCE.md`,
 |---|---|
 | `src/` | React + TypeScript SPA (Vite). See `src/AGENTS.md`. |
 | `backend/` | FastAPI + LangGraph backend, the agent, poller, tools, providers. See `backend/AGENTS.md`. |
-| `mcp_app/` | Small standalone MCP server, deployed as its own Databricks App. See `mcp_app/AGENTS.md`. |
 | `docs/` | Architecture + operator/developer guides. |
 | `databricks.yml` | Bundle config / per-target env vars for deployment. |
 | `dev.sh` | One-command local dev (backend + frontend). |

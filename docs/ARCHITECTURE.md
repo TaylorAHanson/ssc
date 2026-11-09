@@ -117,7 +117,7 @@ flowchart TB
 | **Unity Catalog + SQL warehouse** | Data plane: UC enforces grants on reads (OBO); the warehouse executes SQL. UC Volumes hold GitOps config, training media, and shared skills. |
 | **Secret scopes** | GitHub PAT, SES keys, per-target-workspace SP credentials, LMWS secrets — read at runtime by the App SP. |
 | **MLflow + scheduled jobs** | Tracing per agent turn; inference-table capture from the gateway; a scheduled **LLM-as-a-judge** job scores production quality. Other crons drive Sentinel scans and catalog syncs. |
-| **Optional MCP App** | A separate Databricks App (`mcp_app/`) can be registered under **AI Gateway → MCPs** for external agent discovery; the main app also exposes governed tools at `/mcp`. |
+| **MCP endpoint** | The main app exposes the tools an admin publishes in the Tool Registry as governed MCP tools at `/mcp`, which can be registered under **AI Gateway → MCPs** for external agents. |
 | **Command Center** | External authoring surface for `SKILL.md` folders on UC Volumes; this app loads them OBO at runtime. |
 
 ## 4. The Guardrail Stack
