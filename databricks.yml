@@ -167,6 +167,11 @@ resources:
         - "sql.statement-execution"
         - "sql.warehouses"
         - "catalog.connections"
+        # Live UC listings (get_catalog_list / get_schema_list / get_table_list …)
+        # run OBO; without these the token lacks the unity-catalog scope.
+        - "catalog.catalogs:read"
+        - "catalog.schemas:read"
+        - "catalog.tables:read"
         - "dashboards.genie"
         - "files.files"
         # Required for OBO PERSONAL skills under /Workspace/Users/<user>/.skills;

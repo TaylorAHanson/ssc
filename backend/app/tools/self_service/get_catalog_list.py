@@ -13,7 +13,14 @@ class GetCatalogListInput(BaseModel):
 
 @tool(
     name="get_catalog_list",
-    description="List accessible Unity Catalog catalogs. Supports filtering by exact name or glob pattern (e.g. '*dev*').",
+    description=(
+        "Live listing of Unity Catalog catalogs, read as the signed-in user: it returns only the catalogs the "
+        "user owns or holds USE CATALOG on (a metastore admin sees all), with each one's description, type and "
+        "owner. Use it for 'what catalogs can I access?', or when the user names a catalog that "
+        "search_data_assets didn't find. It calls Databricks, so it is slower than search_data_assets. A "
+        "catalog the user has no privilege on is absent, so an empty result doesn't prove a name is unused. "
+        "Filter by exact name or glob pattern (e.g. '*dev*')."
+    ),
     args_schema=GetCatalogListInput
 )
 def get_catalog_list(target_host: str, name_pattern: Optional[str] = None, _obo_token: Optional[str] = None) -> Dict[str, Any]:

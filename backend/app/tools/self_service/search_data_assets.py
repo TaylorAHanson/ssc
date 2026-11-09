@@ -196,11 +196,15 @@ class SearchDataAssetsInput(BaseModel):
 @tool(
     name="search_data_assets",
     description=(
-        "Search cached Unity Catalog data assets (Metric Views, tables, views, schemas) by keyword across name, "
-        "description, domain, subdomain, KPIs, tags, and owner. Positions governed Metric Views over raw tables. "
-        "Also returns each asset's service level, data-quality summary, owner and certification when known. "
-        "Fast local lookup for data discovery without live Databricks API calls. For an asset's columns, call "
-        "get_table_list with its exact table name."
+        "Keyword search over the app's cached copy of the data catalog: the Metric Views, tables and views in the "
+        "catalogs the app syncs on a schedule. Matches name, description, Discover domain and subdomain, KPIs, "
+        "tags and owner, ranks governed Metric Views first, and returns each match's owner, certification, "
+        "service level and data-quality summary. Use it FIRST for 'what data is there about X' or 'where is "
+        "table Y'; it is instant and makes no Databricks call. The cache is one shared view for every user, not "
+        "filtered to the user's grants, so it can't say whether this user has access. It returns tables, not a "
+        "list of catalogs or schemas, and has no columns. A catalog outside the synced set, a catalog or schema "
+        "with no tables, or anything created since the last sync is missing; use the live get_catalog_list, "
+        "get_schema_list or get_table_list for those, and get_table_list with the exact name for columns."
     ),
     args_schema=SearchDataAssetsInput,
     feature_flag="data_discovery",

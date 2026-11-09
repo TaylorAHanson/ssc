@@ -13,6 +13,12 @@ Format rules (the app parses this file, so keep to them):
   before), and what the reader will notice or should do now.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
 
+## 2.13.1 — 2026-11-06
+
+### Fixed
+
+- **The assistant can list catalogs, schemas and tables again.** Asking something like "what catalogs do you see" failed with a message that the connection was missing a Unity Catalog permission. The assistant looks these up as you, so it only shows what you're allowed to see, but the app had never asked Databricks for permission to read Unity Catalog for you. The app now asks for read-only access to catalogs, schemas and tables, and the lookups show your own grants as intended. After this update you may be asked to approve the app's permissions again the next time you open it.
+
 ## 2.13.0 — 2026-11-04
 
 ### Context Catalog
