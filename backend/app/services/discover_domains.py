@@ -244,9 +244,10 @@ def fetch_domains(client) -> List[dict]:
             query["page_token"] = token
         resp = client.api_client.do("GET", DOMAINS_API, query=query) or {}
         out.extend(d for d in resp.get("domains") or [] if isinstance(d, dict) and d.get("domain_id") and d.get("tag_key"))
-        token = resp.get("next_page_token")
-        if not token:
+        next_token = resp.get("next_page_token")
+        if not isinstance(next_token, str) or not next_token or next_token == token:
             return out
+        token = next_token
 
 
 def _principal_name(client, principal_id: int) -> Optional[str]:

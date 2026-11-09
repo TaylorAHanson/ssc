@@ -42,7 +42,7 @@ def test_quote_in_asset_name_cannot_break_out_of_the_literal():
     ))
 
     query = _query(provider)
-    assert "table_name = 'x'' OR ''1''=''1'" in query
+    assert "table_name = 'x\\' OR \\'1\\'=\\'1'" in query
     assert "OR '1'='1'" not in query
 
 
@@ -51,7 +51,7 @@ def test_quote_in_tag_names_is_escaped():
 
     asyncio.run(provider.get_asset_tags("catalog", "main", ["a', (SELECT 1) --"]))
 
-    assert "tag_name IN ('a'', (SELECT 1) --')" in _query(provider)
+    assert "tag_name IN ('a\\', (SELECT 1) --')" in _query(provider)
 
 
 def test_each_asset_type_uses_its_own_tags_view():

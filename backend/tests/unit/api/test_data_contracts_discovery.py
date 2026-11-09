@@ -50,7 +50,7 @@ def test_injection_in_dataset_id_stays_quoted():
     _groups, statements = _run("cat`--.sch'x.tbl")
     first = statements[0]
     assert "FROM `cat``--`.information_schema.table_tags" in first
-    assert "schema_name = 'sch''x'" in first
+    assert "schema_name = 'sch\\'x'" in first
 
 
 def test_tag_value_fallback_quotes_scanned_catalog_names():

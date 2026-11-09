@@ -59,7 +59,7 @@ def test_query_filters_metric_view_dashboard_reads_with_quoted_names(monkeypatch
     assert "FROM system.access.table_lineage" in sql
     assert "source_type = 'METRIC_VIEW'" in sql and "entity_type = 'DASHBOARD_V3'" in sql
     assert "INTERVAL 30 DAYS" in sql
-    assert "IN ('main.kpi.revenue', 'main.kpi.o''brien')" in sql
+    assert "IN ('main.kpi.revenue', 'main.kpi.o\\'brien')" in sql
     provider.client.lakeview.list.assert_not_called()  # nothing to resolve
 
 

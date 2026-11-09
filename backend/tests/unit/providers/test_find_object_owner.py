@@ -95,7 +95,7 @@ async def test_quote_in_name_is_escaped():
     provider = _provider(rows=[])
     await provider.find_object_owner("table", "main.sales.x' OR '1'='1")
     sql = _query(provider)
-    assert "LOWER(table_name) = 'x'' or ''1''=''1'" in sql
+    assert "LOWER(table_name) = 'x\\' or \\'1\\'=\\'1'" in sql
     assert "OR '1'='1'" not in sql
 
 

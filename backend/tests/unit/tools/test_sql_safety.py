@@ -17,9 +17,11 @@ from app.tools.sql_safety import (
 
 
 def test_quote_literal_escapes_single_quotes():
-    assert quote_literal("o'brien") == "'o''brien'"
+    assert quote_literal("o'brien") == "'o\\'brien'"
     # A break-out attempt is neutralized into a single quoted literal.
-    assert quote_literal("x' OR '1'='1") == "'x'' OR ''1''=''1'"
+    assert quote_literal("x' OR '1'='1") == "'x\\' OR \\'1\\'=\\'1'"
+    # A backslash can't escape the quote that follows it and end the literal.
+    assert quote_literal("x\\' OR 1=1 --") == "'x\\\\\\' OR 1=1 --'"
 
 
 def test_quote_identifier_escapes_backticks():

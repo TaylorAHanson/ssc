@@ -38,11 +38,13 @@ class SqlSafetyError(ValueError):
 def quote_literal(value: str) -> str:
     """Return ``value`` wrapped as a safe single-quoted SQL string literal.
 
-    Doubles embedded single quotes (the SQL escape) so the value can't terminate
-    the literal early. Backslashes are left as-is (Databricks SQL string literals
-    are not C-escaped by default).
+    Databricks SQL treats ``\\`` as an escape inside string literals, so doubling
+    quotes alone is unsafe: ``\\'`` would become ``\\''`` and close the literal.
+    Backslashes are escaped first, then quotes as ``\\'``; the lexer never ends a
+    literal on an escaped quote, whatever ``spark.sql.parser.escapedStringLiterals``
+    is set to.
     """
-    escaped = str(value).replace("'", "''")
+    escaped = str(value).replace("\\", "\\\\").replace("'", "\\'")
     return f"'{escaped}'"
 
 
