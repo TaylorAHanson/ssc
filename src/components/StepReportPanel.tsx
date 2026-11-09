@@ -5,7 +5,12 @@ import type { StepReport } from '../types';
 /** The report's first line as plain text (e.g. "Compliant · 92% confidence"), for the collapsed row. */
 function headline(markdown: string): string {
   const first = markdown.split('\n').find((line) => line.trim()) ?? '';
-  return first.replace(/^#+\s*/, '').replace(/[*_`]/g, '').trim();
+  // Emphasis marks only: an underscore inside a name (taylor_build.demo_schema) stays.
+  return first
+    .replace(/^#+\s*/, '')
+    .replace(/`/g, '')
+    .replace(/(?<!\w)[*_]+|[*_]+(?!\w)/g, '')
+    .trim();
 }
 
 /**

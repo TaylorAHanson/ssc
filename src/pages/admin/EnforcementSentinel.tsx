@@ -1,7 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { ShieldAlert, AlertTriangle, Search, CheckCircle2, Loader2, X, FileStack, ShieldCheck, ListChecks, ArrowRight, ChevronLeft, ChevronRight, ChevronDown, ClipboardList, SlidersHorizontal, Mail, Send, Clock, Trash2 } from 'lucide-react';
-import { api, type DigestInfo, type SystemSchedules, type TargetWorkspace } from '../../services/api';
+import { api, getHeaders, type DigestInfo, type SystemSchedules, type TargetWorkspace } from '../../services/api';
 import type { Request } from '../../types';
 import { CertificationChecklist, type ChecklistRuleRow } from '../../components/admin/CertificationChecklist';
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
@@ -428,13 +428,10 @@ export function EnforcementSentinel() {
         
         setActionLoading(v.resource_id);
         try {
-            // Need to pass the token. Typically auth handles via cookies or we need to add the auth header if the app uses one.
-            // The app uses API requests, which usually are authenticated implicitly if using cookies, or need a token.
-            // Let's just do a normal fetch, relying on standard browser behavior or interceptors if any exist.
             const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1';
             const res = await fetch(`${baseUrl}/requests/${runId}/enforcement-action`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: getHeaders(),
                 body: JSON.stringify({
                     resource_id: v.resource_id,
                     resource_type: v.resource_type,

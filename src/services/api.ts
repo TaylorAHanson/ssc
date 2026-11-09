@@ -22,7 +22,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000
 /**
  * Gets consistent headers including dev role override if active
  */
-function getHeaders(contentType: string = 'application/json'): Record<string, string> {
+export function getHeaders(contentType: string = 'application/json'): Record<string, string> {
   const headers: Record<string, string> = {};
   if (contentType) {
     headers['Content-Type'] = contentType;
@@ -277,10 +277,9 @@ export async function getRequestGraph(requestId: string): Promise<RequestGraph> 
 export async function approveRequest(requestId: string): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/requests/${requestId}/approve`, {
     method: 'POST',
+    headers: getHeaders(),
   });
-  if (!response.ok) {
-    throw new Error(`Failed to approve request: ${response.statusText}`);
-  }
+  if (!response.ok) throw await legacyError(response, 'approve request');
 }
 
 export interface BulkApproveResult {
@@ -315,9 +314,7 @@ export async function rejectRequest(requestId: string, reason?: string): Promise
     headers: getHeaders(),
     body: JSON.stringify({ rejection_note: reason }),
   });
-  if (!response.ok) {
-    throw new Error(`Failed to reject request: ${response.statusText}`);
-  }
+  if (!response.ok) throw await legacyError(response, 'reject request');
 }
 
 export async function getApprovals(status?: string): Promise<Approval[]> {
@@ -337,10 +334,9 @@ export async function getApprovals(status?: string): Promise<Approval[]> {
 export async function deleteRequest(requestId: string): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/requests/${requestId}`, {
     method: 'DELETE',
+    headers: getHeaders(),
   });
-  if (!response.ok) {
-    throw new Error(`Failed to delete request: ${response.statusText}`);
-  }
+  if (!response.ok) throw await legacyError(response, 'delete request');
 }
 
 export async function completeTraining(requestId: string): Promise<void> {
@@ -388,6 +384,7 @@ export async function createDelegation(delegation: DelegationCreate): Promise<De
 export async function deleteDelegation(delegationId: string): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/delegations/${delegationId}`, {
     method: 'DELETE',
+    headers: getHeaders(),
   });
   if (!response.ok) {
     throw new Error(`Failed to delete delegation: ${response.statusText}`);
@@ -1610,7 +1607,8 @@ async function legacyError(response: Response, action: string): Promise<Error> {
   if (Array.isArray(detail)) {
     return new Error(detail.map((d: { loc?: unknown[]; msg?: string }) => `${d.loc?.slice(-1)[0] ?? 'field'}: ${d.msg}`).join('; '));
   }
-  return new Error(detail || `Failed to ${action}: ${response.statusText}`);
+  // statusText is empty over HTTP/2, so fall back to the status code.
+  return new Error(detail || `Failed to ${action}: ${response.statusText || `HTTP ${response.status}`}`);
 }
 
 export async function createLegacyMapping(data: LegacyMappingInput): Promise<LegacyMapping> {

@@ -552,19 +552,26 @@ def _approve(db: Session, request_id: str, current_user: User, comment: Optional
     # Segregation of duties, ahead of the admin overrides below.
     requester_email = db.query(RequestModel.requester_email).filter(RequestModel.id == request_id).scalar()
     if self_approval_blocked(requester_email, current_user):
+        logger.info("Approval refused for %s: self-approval is blocked", request_id,
+                    extra={"data": {"actor": current_user.email}})
         raise HTTPException(status_code=403, detail=SELF_APPROVAL_DETAIL)
 
     # Find the first pending approval the user is authorized to act on
     approval = None
+    refusals: List[str] = []
     for pending in pending_approvals:
         try:
             _authorize_approval_actor(pending, current_user)
             approval = pending
             break
-        except HTTPException:
+        except HTTPException as exc:
+            refusals.append(f"{pending.approval_type}: {exc.detail}")
             continue
 
     if not approval:
+        logger.info("Approval refused for %s: not an approver", request_id,
+                    extra={"data": {"actor": current_user.email, "roles": list(current_user.roles or []),
+                                    "refusals": refusals}})
         raise HTTPException(status_code=403, detail="You are not authorized to approve this request")
 
     approved_by = current_user.email
