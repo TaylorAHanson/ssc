@@ -38,7 +38,14 @@ async def test_renamed_inputs_are_refused_before_a_request_is_filed(db):
     assert out["success"] is False
     assert "Missing: access_group, workspace" in out["error"]
     assert "Not recognised: group, workspace_name" in out["error"]
+    assert "workspace_name -> workspace" in out["error"]
     assert _count(db) == 0
+
+
+def test_unrelated_names_pass_when_steps_read_the_whole_request():
+    # Terraform steps take the request context wholesale, so its fields aren't $var inputs.
+    params = {"business_domain": "scm", "environment": "prod", "workspace_name": "ws-scm-prod"}
+    assert _parameter_name_mismatch(SPECS["workspace_provision"], params) is None
 
 
 @pytest.mark.asyncio

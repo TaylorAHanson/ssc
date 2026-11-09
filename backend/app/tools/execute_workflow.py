@@ -48,10 +48,11 @@ def _parameter_name_mismatch(spec: Optional[Dict[str, Any]], parameters: Dict[st
     """Why ``parameters`` can't feed the workflow's steps, or None when they can.
 
     Steps read their inputs by exact name, so ``catalog_name`` sent for ``catalog``
-    files a request whose first step fails on a missing value. Rejects only when a
-    name is unrecognised AND an input is missing: an optional input may be left
-    out. Compound workflows are skipped, since their child workflows read inputs
-    this spec doesn't list.
+    files a request whose first step fails on a missing value. Rejects only when an
+    unrecognised name looks like a variant of a missing input (one contains the
+    other): some steps read the whole request rather than named inputs, so an
+    unrecognised name alone proves nothing. Compound workflows are skipped, since
+    their child workflows read inputs this spec doesn't list.
     """
     from app.workflows.instructions import _PLATFORM_VARS, _user_inputs
     from app.workflows.spec_loader import subworkflow_refs
@@ -64,11 +65,16 @@ def _parameter_name_mismatch(spec: Optional[Dict[str, Any]], parameters: Dict[st
     given = set(parameters or {})
     unknown = sorted(given - set(expected) - _PLATFORM_VARS)
     missing = [k for k in expected if k not in given]
-    if not unknown or not missing:
+    renames = [
+        f"{u} -> {m}" for m in missing for u in unknown
+        if len(m) >= 4 and len(u) >= 4 and (m in u or u in m)
+    ]
+    if not renames:
         return None
     return (
         f"these parameter names don't match the workflow's inputs. Expected: {', '.join(expected)}. "
         f"Missing: {', '.join(missing)}. Not recognised: {', '.join(unknown)}. "
+        f"Likely renames: {', '.join(renames)}. "
         "Call execute_workflow again with the same values under the expected names."
     )
 

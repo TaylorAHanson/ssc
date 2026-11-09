@@ -13,6 +13,18 @@ Format rules (the app parses this file, so keep to them):
   before), and what the reader will notice or should do now.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
 
+## 2.13.2 — 2026-11-09
+
+### Fixed
+
+- **Names containing a backslash or quote can no longer change the queries the app runs.** Some lookups placed catalog, schema and table names inside a query, and a name ending in a backslash followed by a quote could close the name early and run extra SQL. Those characters are now escaped correctly, so such names are treated as plain text. You won't notice a difference with ordinary names.
+- **The Discover domain sync can no longer get stuck.** If Databricks returned the same page marker twice while the app was loading domains, the sync kept asking for that page forever and never finished. It now stops when the marker repeats or is empty, so domains refresh as scheduled.
+- **Requests the assistant files with misnamed details are caught before they're submitted.** The assistant could file a request with a detail under the wrong name, for example `workspace_name` where the workflow expects `workspace`. The request was created, then failed at its first step and never reached an approver. Now the assistant is told which names the workflow expects and resubmits correctly, and no broken request is created.
+- **The assistant no longer says the same thing twice in one reply.** Sometimes the assistant finished an answer and then repeated it in slightly different words in the same message, so the reply read as two near-identical paragraphs. It now drops the reworded copy and shows the answer once. Replies that legitimately come back to an earlier point aren't affected.
+- **Approving while previewing another role works.** In development, an admin previewing a role such as Super Admin could open an approval but not approve it: approving was sent with their own role, so it failed with "You are not authorized to approve this request". Approving, deleting a request, removing a delegation and Enforcement Sentinel actions now use the previewed role, like the rest of the app.
+- **A failed approval or rejection now says why.** When the server refused an approval, for example because you tried to approve your own request, the dialog showed "Failed to approve request:" with nothing after it. It now shows the server's reason, such as "You can't approve your own request. Another approver must."
+- **Report summaries keep the underscores in names.** The one-line summary on an approval card's report removed every underscore, so `main.supply_chain` read as `main.supplychain`. Underscores inside names now stay; only formatting marks are removed.
+
 ## 2.13.1 — 2026-11-06
 
 ### Fixed
