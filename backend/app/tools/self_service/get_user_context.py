@@ -44,6 +44,7 @@ class GetUserContextInput(BaseModel):
     feature_flag="user_context",
     friendly_label="Checking who you are",
     friendly_completion_label="Reviewed your profile",
+    reuse_in_conversation=True,
     description=(
         "Retrieve the current user's profile: name, roles, recent request submissions, "
         "pending approvals, and identity group memberships. Scoped strictly to the caller."

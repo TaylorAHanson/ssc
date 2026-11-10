@@ -55,6 +55,31 @@ def _suite(**case):
     return {"suite": "s", "vars": {"v": "Customer"}, "cases": [base]}
 
 
+def test_a_turns_tool_results_are_replayed_into_the_next_turn_as_the_chat_does():
+    from app.agents.runner import _REUSED_PREFIX
+
+    def call(call_id, name):
+        return {"id": call_id, "type": "function", "function": {"name": name, "arguments": "{}"}}
+
+    messages = [
+        {"role": "user", "content": "earlier"},
+        {"role": "assistant", "content": "", "tool_calls": [call("old", "find_owner")]},
+        {"role": "tool", "tool_call_id": "old", "name": "find_owner", "content": "{}"},
+        {"role": "user", "content": "Which workspaces?"},
+        {"role": "assistant", "content": "", "tool_calls": [call("a", "get_target_workspaces"), call("b", "run_sql")]},
+        {"role": "tool", "tool_call_id": "a", "name": "get_target_workspaces", "content": '{"workspaces": []}'},
+        {"role": "tool", "tool_call_id": "b", "name": "run_sql", "content": "x" * 5000},
+        {"role": "assistant", "content": "", "tool_calls": [call("c", "get_target_workspaces")]},
+        {"role": "tool", "tool_call_id": "c", "name": "get_target_workspaces", "content": _REUSED_PREFIX + "{}"},
+        {"role": "assistant", "content": "One workspace."},
+    ]
+    replayed = runner.replayed_tool_messages(messages)
+    assert [(m["role"], m.get("tool_call_id") or m["tool_calls"][0]["id"]) for m in replayed] == [
+        ("assistant", "a"), ("tool", "a"), ("assistant", "b"), ("tool", "b")]
+    assert replayed[1]["content"] == '{"workspaces": []}' and replayed[1]["name"] == "get_target_workspaces"
+    assert replayed[3]["content"].endswith(" …[truncated]") and len(replayed[3]["content"]) < 4100
+
+
 def test_requires_tools_and_tool_args_are_parsed():
     plain = parse_suite(_suite()).cases[0]
     assert plain.requires_tools == [] and plain.expect_tool_args == []

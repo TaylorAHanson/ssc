@@ -6,7 +6,6 @@ import { Loader2, Shield, Edit2, Trash2, Plus, Info } from 'lucide-react';
 import { ROLE_PRIORITY } from '../../types';
 import type { CapabilityGrid, RoleMapping } from '../../types';
 import { userService } from '../../services/userService';
-import { RoleCapabilityGrid } from './RoleCapabilityGrid';
 import { errorMessage } from '../../lib/errors';
 
 export const Users = () => {
@@ -175,7 +174,7 @@ export const Users = () => {
 
             {gridError && (
                 <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg">
-                    Couldn't load what each role can do: {gridError}
+                    Couldn't load the roles: {gridError}
                 </div>
             )}
 
@@ -213,8 +212,6 @@ export const Users = () => {
                     </CardContent>
                 </Card>
             )}
-
-            {grid && <RoleCapabilityGrid grid={grid} />}
 
             {/* Edit Mapping Modal */}
             {editingMapping && (

@@ -19,19 +19,23 @@ Identity / governance:
 The server is asynchronous for long queries: ``execute_sql_read_only`` starts the
 statement and returns a ``statement_id`` if it doesn't finish immediately; we then
 poll ``poll_sql_result`` until it reaches a terminal state. Output is shaped as
-``columns`` + ``rows`` so the chat auto-renders a chart with interactive re-graph
-controls, and ``render_chart`` can later re-graph the same rows.
+``columns`` + ``rows``; the chat charts them (with interactive re-graph controls)
+only when the agent sets ``visualize``, and ``render_chart`` can later re-graph
+the same rows.
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from app.db.session import get_db
 from app.providers.databricks_mcp import GenieAuthUnavailableError, call_dbsql_tool
+from app.services import sql_provenance
 from app.tools.mcp import tool
 
 logger = logging.getLogger(__name__)
@@ -51,7 +55,8 @@ _TERMINAL_BAD = {"FAILED", "CANCELED", "CANCELLED", "CLOSED"}
 
 _DESCRIPTION = (
     "Execute a read-only SQL query on Databricks SQL Serverless under the caller's Unity Catalog permissions. "
-    "Use when you know the table schema and want precise, fast, chartable data. Returns rows directly for display or charting."
+    "Use when you know the table schema and want precise, fast data. Returns rows directly; set visualize "
+    "only when a chart of this final result would help the user."
 )
 
 
@@ -67,6 +72,14 @@ class RunSqlInput(BaseModel):
             "rejects any statement that modifies data or objects."
         ),
     )
+    visualize: bool = Field(
+        False,
+        description=(
+            "True only when this result is the final answer to a question about a trend, "
+            "comparison or distribution and a chart would help the user read it. Leave false "
+            "for intermediate lookups, access probes, single values and row listings."
+        ),
+    )
 
 
 @tool(
@@ -78,11 +91,12 @@ class RunSqlInput(BaseModel):
     friendly_label="Running SQL...",
     friendly_completion_label="Query complete",
 )
-async def run_sql(sql: str, **kwargs: Any) -> Dict[str, Any]:
+async def run_sql(sql: str, visualize: bool = False, **kwargs: Any) -> Dict[str, Any]:
     """Execute a read-only query via the managed DBSQL MCP server and return rows.
 
-    Returns ``{ok, columns, rows, row_count, sample, truncated}`` on success (the
-    ``columns``/``rows`` shape feeds the chart UI), or ``{"error": ...}`` on an
+    Returns ``{ok, columns, rows, row_count, sample, truncated, visualize, sql,
+    statement_id, executed_at, source_tables}`` on success (the chat charts the
+    rows only when ``visualize`` is set), or ``{"error": ...}`` on an
     auth/validation/execution failure (surfaced as a failed pill — no false
     success).
     """
@@ -162,9 +176,33 @@ async def run_sql(sql: str, **kwargs: Any) -> Dict[str, Any]:
         "row_count": len(rows),
         "columns": columns,
         "truncated": truncated,
+        "visualize": bool(visualize),
+        # Provenance: the exact statement, its id in the warehouse's query
+        # history, and the tables it read with what the catalog knows of each.
+        # Ahead of the rows so a history replay cut to a few KB still keeps it.
+        "sql": sql,
+        "statement_id": statement_id or payload.get("statement_id"),
+        "executed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "source_tables": _sources(sql),
         "sample": sample,
         "rows": rows,
     }
+
+
+def _sources(sql: str) -> List[Dict[str, Any]]:
+    """The tables ``sql`` read, enriched from the catalog cache; never fails the query."""
+    try:
+        names = sql_provenance.source_tables(sql)
+        if not names:
+            return []
+        db = next(get_db())
+        try:
+            return sql_provenance.describe_sources(db, names)
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning("run_sql: could not describe source tables: %s", e)
+        return []
 
 
 # ---------------------------------------------------------------------------

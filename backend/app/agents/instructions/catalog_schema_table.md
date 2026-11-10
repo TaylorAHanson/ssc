@@ -8,7 +8,7 @@
 
 ### Information to Gather
 1.  **Target Workspace**: Which workspace should this catalog/schema be created in?
-    *   *Action*: You MUST use `get_target_workspaces` to find the exact `host` URL for the requested workspace.
+    *   *Action*: Take the exact `host` URL for the requested workspace from the target workspace list you were given (call `get_target_workspaces` only if it isn't there).
 2.  **Type**: Are you creating a `Catalog` or a `Schema`?
 3.  **Parent**:
     *   If **Schema**: Which Catalog will it belong to?

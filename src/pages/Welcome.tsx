@@ -82,7 +82,7 @@ function buildGroups(opts: {
       items: [
         {
           id: 'data_discovery',
-          title: 'View & Search Catalog',
+          title: 'Discover',
           description:
             'Browse the data catalog, search assets, and explore lineage.',
           icon: <Search className={ICON_CLASS} />,

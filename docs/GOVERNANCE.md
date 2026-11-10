@@ -38,7 +38,7 @@ Two principles worth internalizing:
 
 ## 2. Roles: who can do what
 
-Roles are assigned per user (Super Admins manage this under **Admin → Settings → Roles & Access**, which also shows a read-only grid of what each role can do).
+Roles are assigned per user (Super Admins manage this under **Admin → Settings → Role Mappings**; **Role Permissions** shows a read-only grid of what each role can do).
 
 | Role | What they can do |
 | :--- | :--- |

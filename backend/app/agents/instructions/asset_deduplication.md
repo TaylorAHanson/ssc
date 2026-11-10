@@ -12,7 +12,7 @@ Before executing the workflow, ensure you have the following information from th
 
 | # | Parameter | Required | Default | Notes |
 |---|-----------|----------|---------|-------|
-| 1 | **Target Workspace** | ✅ Yes | — | The workspace where the scan should run. (MUST use `get_target_workspaces` to find the exact `host` URL) |
+| 1 | **Target Workspace** | ✅ Yes | — | The workspace where the scan should run. (take the exact `host` URL from the target workspace list you were given; call `get_target_workspaces` only if it isn't there) |
 | 2 | **Target Catalog** | ✅ Yes | — | The catalog to scan for potential duplicates. (MUST verify existence using `get_catalog_list` passing the `target_host`) |
 | 3 | **Reference Catalog** | ✅ Yes | `enterprise_certified` | The "Golden" catalog to compare against. (MUST verify existence using `get_catalog_list` passing the `target_host`) |
 | 3 | **Results Table** | ❌ Optional | `main.governance.uc_similarity_matches` | The fully qualified table (catalog.schema.table) to write results to. |

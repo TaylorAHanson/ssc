@@ -84,6 +84,19 @@ export function genieHomeUrl(
     return orgId ? `${url}?o=${encodeURIComponent(String(orgId))}` : url;
 }
 
+/** Databricks SQL editor, to paste and re-run a query. */
+export function sqlEditorUrl(workspaceUrl: string): string | null {
+    const base = normalizeWorkspaceUrl(workspaceUrl);
+    return base ? `${base}/sql/editor` : null;
+}
+
+/** Query history, opened on one statement when its id is known. */
+export function queryHistoryUrl(workspaceUrl: string, statementId?: string | null): string | null {
+    const base = normalizeWorkspaceUrl(workspaceUrl);
+    if (!base) return null;
+    return statementId ? `${base}/sql/history?queryId=${encodeURIComponent(statementId)}` : `${base}/sql/history`;
+}
+
 /** Workspace home URL (top of the lakehouse). */
 export function workspaceHomeUrl(workspaceUrl: string): string | null {
     const base = normalizeWorkspaceUrl(workspaceUrl);

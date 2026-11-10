@@ -55,6 +55,7 @@ from app.models.rbac import (
     ChangeSetSummary,
     FindAccessResult,
     Finding,
+    GroupToJoin,
     HistoryPage,
     ItemOutcome,
     RowChange,
@@ -431,28 +432,79 @@ def _duplicate_findings(db: Session, ops: Sequence[_Op]) -> List[Finding]:
     return out
 
 
-def _overlap_finding(request_ids: Sequence[str], *, sheet: str, rule_id: str,
-                     change_index: Optional[int]) -> Finding:
-    noun = "request" if len(request_ids) == 1 else "requests"
+_OBJECTS_NAMED = 3
+
+
+def _overlap_finding(touches: Sequence[inflight.Touch], *, sheet: str, rule_id: str,
+                     change_index: Optional[int], row: str = "", ours_requested: bool = True) -> Finding:
+    """Another open request edits this rule too.
+
+    It's a warning only when the rule is on an object both requests ask for; when either
+    needs it just as a prerequisite (access to the containing catalog or schema), the edits
+    stack rather than conflict, so it's a note naming what the other request is for.
+    """
+    noun = "request" if len(touches) == 1 else "requests"
+    named = ", ".join(
+        t.request_id + (f" (for {', '.join(t.objects[:_OBJECTS_NAMED])})" if t.objects else "") for t in touches
+    )
+    where = f"the rule on {row}" if row else "this row"
+    if ours_requested and any(t.requested_row for t in touches):
+        severity = "warn"
+        message = (f"Open access {noun} {named} will also change {where}. Review them together so one "
+                   "doesn't undo the other.")
+    else:
+        severity = "info"
+        needs = "This change needs" if not ours_requested else f"The other {noun} need"
+        message = (f"Open access {noun} {named} also edit{'s' if len(touches) == 1 else ''} {where}. "
+                   f"{needs} it only as a prerequisite, so the two don't conflict.")
     return Finding(
-        severity="warn",
+        severity=severity,
         code="inflight_overlap",
-        message=f"Open access {noun} {', '.join(request_ids)} will also change this row.",
+        message=message,
         sheet=sheet,
         rule_id=rule_id,
         change_index=change_index,
     )
 
 
+def _row_label(row: Optional[Any]) -> str:
+    if row is None:
+        return ""
+    cells_of = row if isinstance(row, dict) else {
+        f: getattr(row, f, "") for f in ("securable_type", "catalog", "schema_name", "object_name", "workspace_name")}
+    return inflight.securable_label(cells_of)
+
+
 def _inflight_findings(db: Session, ops: Sequence[_Op]) -> List[Finding]:
     if not any(op.rule_id for op in ops):
         return []
-    touched = inflight.touched_rule_ids(db)
+    touched = inflight.touches(db)
     return [
-        _overlap_finding(touched[op.rule_id], sheet=op.sheet, rule_id=op.rule_id, change_index=op.index)
+        _overlap_finding(touched[op.rule_id], sheet=op.sheet, rule_id=op.rule_id, change_index=op.index,
+                         row=_row_label(op.after or op.before))
         for op in ops
         if op.rule_id and touched.get(op.rule_id)
     ]
+
+
+def without_own_overlap(db: Session, findings: Sequence[Finding], request_id: str) -> List[Finding]:
+    """Overlap findings rebuilt without ``request_id``: a request's own prepared change isn't an overlap."""
+    touched = inflight.touches(db, exclude_request_id=request_id)
+    out: List[Finding] = []
+    for finding in findings:
+        if finding.code != "inflight_overlap" or not finding.rule_id:
+            out.append(finding)
+            continue
+        others = touched.get(finding.rule_id)
+        if not others:
+            continue
+        out.append(_overlap_finding(
+            others, sheet=finding.sheet or "", rule_id=finding.rule_id, change_index=finding.change_index,
+            row=_row_label(db.get(RbacRuleModel, finding.rule_id)),
+            # A warning means this change asked for the row itself; dropping a request can't change that.
+            ours_requested=finding.severity == "warn",
+        ))
+    return out
 
 
 def _two_person(ops: Sequence[_Op]) -> bool:
@@ -1036,7 +1088,7 @@ def _plan_plane(
     members: Sequence[_Norm],
     *,
     justification: Optional[str],
-    touched: Dict[str, List[str]],
+    touched: Dict[str, List[inflight.Touch]],
 ) -> AccessProposal:
     rows, _ = _active_rows(db, plane)
     planner = _Planner(plane, rows)
@@ -1070,10 +1122,12 @@ def _plan_plane(
                                       reason=member.findings[0].message)
         findings.extend(f.model_copy(update={"change_index": index}) for f in member.findings)
 
+    asked = {inflight.securable_label(i.model_dump()).lower() for i in items if i not in added}
     for diff in diffs:
         if diff.rule_id and touched.get(diff.rule_id):
+            row = _row_label(diff.after or diff.before)
             findings.append(_overlap_finding(touched[diff.rule_id], sheet=diff.sheet, rule_id=diff.rule_id,
-                                             change_index=None))
+                                             change_index=None, row=row, ours_requested=row.lower() in asked))
 
     group = _approver_group(plane)
     return AccessProposal(
@@ -1109,7 +1163,7 @@ def prepare_access_change(db: Session, change: AccessChangeIn, *, requester: Opt
             planes.append(norm.plane)
     if not planes:
         planes.append(PLANE_UC)
-    touched = inflight.touched_rule_ids(db)
+    touched = inflight.touches(db)
     proposals = []
     for k, plane in enumerate(planes):
         members = [n for n in norms if n.plane == plane or (n.plane is None and k == 0)]
@@ -1278,6 +1332,10 @@ def find_access(
         "workspace_name": (workspace_name or "").strip(),
     }
     fields = {k: v for k, v in fields.items() if v}
+    if "workspace_name" not in fields and (stype is None or layout.SECURABLE_TYPES.get(stype) == PLANE_UC):
+        cat, sch, obj = split_securable_name(
+            fields.get("catalog"), fields.get("schema_name"), fields.get("object_name"))
+        fields = {k: v for k, v in (("catalog", cat), ("schema_name", sch), ("object_name", obj)) if v}
     principal = (principal_name or "").strip()
     wanted_principals = {p.strip().lower() for p in (principals_in or []) if p and p.strip()}
     if principals_in is not None and not wanted_principals:
@@ -1360,12 +1418,127 @@ def find_access(
                     privileges=privileges,
                     via=via,
                 ))
+    governed_by: Optional[str] = None
+    groups: List[GroupToJoin] = []
+    if uc_query and cat and not principal and not wanted_principals:
+        governed_by, groups = _groups_to_join(base, direct, parents, stype=stype, cat=cat, sch=sch, obj=obj)
+
     cap = max(int(limit or 0), 1)
     suggestions: List[SecurableSuggestion] = []
     if not matches and fields:
         names = [part.strip(" `") for value in fields.values() for part in value.split(".")]
         suggestions = _suggest_securables(db, names, prefer_env=env_key)
-    return FindAccessResult(matches=matches[:cap], truncated=len(matches) > cap, suggestions=suggestions)
+    return FindAccessResult(
+        matches=matches[:cap], truncated=len(matches) > cap, suggestions=suggestions,
+        governed_by=governed_by, groups_to_join=groups,
+    )
+
+
+_NAME_SLOTS = ("catalog", "schema_name", "object_name")
+
+
+def split_securable_name(
+    catalog: Optional[str], schema_name: Optional[str], object_name: Optional[str],
+) -> Tuple[str, str, str]:
+    """Spread a dotted Unity Catalog name given in one field across catalog, schema and object.
+
+    ``object_name='c.s.t'`` or ``catalog='c.s.t'`` becomes ``('c', 's', 't')``; ``object_name='s.t'``
+    fills the schema. A part that disagrees with a field already given leaves that field as it was.
+    Names with a slash (workspace folders) are never split.
+    """
+    out = {
+        "catalog": (catalog or "").strip(),
+        "schema_name": (schema_name or "").strip(),
+        "object_name": (object_name or "").strip(),
+    }
+    for key in ("object_name", "schema_name", "catalog"):
+        value = out[key]
+        if "." not in value or "/" in value:
+            continue
+        parts = [p.strip(" `") for p in value.split(".")]
+        slots = _NAME_SLOTS if key == "catalog" else _NAME_SLOTS[: _NAME_SLOTS.index(key) + 1]
+        if not all(parts) or not 2 <= len(parts) <= len(slots):
+            continue
+        targets = slots[: len(parts)] if key == "catalog" else slots[-len(parts):]
+        if any(t != key and out[t] and out[t].lower() != p.lower() for t, p in zip(targets, parts)):
+            continue
+        out.update(zip(targets, parts))
+    return out["catalog"], out["schema_name"], out["object_name"]
+
+
+_GROUPS_TO_JOIN_CAP = 8
+
+
+def _is_group_to_join(model: RbacRuleModel, name: str, system: Set[str]) -> bool:
+    kind = (model.principal_type or "").strip().lower()
+    return bool(name.strip()) and name.strip().lower() not in system and "service" not in kind and "user" not in kind
+
+
+def _groups_to_join(
+    base: Any,
+    direct: List[RbacRuleModel],
+    parents: List[RbacRuleModel],
+    *,
+    stype: Optional[str],
+    cat: str,
+    sch: Optional[str],
+    obj: Optional[str],
+) -> Tuple[Optional[str], List[GroupToJoin]]:
+    """The narrowest level with rules on a UC securable, and the groups that grant access, narrowest first.
+
+    When neither the securable nor its schema has rules, groups on other objects in the same
+    schema are listed as ``nearby``: they don't grant this object, but often show who to ask.
+    """
+    system = {g.strip().lower() for g in (settings.RBAC_SYSTEM_GROUPS or []) if g and g.strip()}
+    asked = ".".join(p for p in (cat, sch, obj) if p)
+    # A catalog or schema lookup also matches the rows for objects inside it; those aren't on it.
+    direct = [
+        m for m in direct
+        if bool((m.object_name or "").strip()) == bool(obj) and bool((m.schema_name or "").strip()) == bool(sch)
+    ]
+    schema_rows = [m for m in parents if layout.normalize_securable_type(m.securable_type) == "schema"]
+    catalog_rows = [m for m in parents if layout.normalize_securable_type(m.securable_type) == "catalog"]
+
+    governed_by: Optional[str] = None
+    if direct:
+        governed_by = stype or layout.normalize_securable_type(direct[0].securable_type) or None
+    elif schema_rows:
+        governed_by = "schema"
+    elif catalog_rows:
+        governed_by = "catalog"
+
+    leveled: List[Tuple[str, str, RbacRuleModel]] = [("direct", asked, m) for m in direct]
+    leveled += [("schema", f"{m.catalog}.{m.schema_name}", m) for m in schema_rows]
+    leveled += [("catalog", m.catalog or cat, m) for m in catalog_rows]
+    if sch and obj and not direct and not schema_rows:
+        siblings = (
+            base.filter(
+                RbacRuleModel.plane == PLANE_UC,
+                func.lower(RbacRuleModel.catalog) == cat.lower(),
+                func.lower(RbacRuleModel.schema_name) == sch.lower(),
+                RbacRuleModel.object_name.isnot(None),
+                RbacRuleModel.object_name != "",
+                func.lower(RbacRuleModel.object_name) != obj.lower(),
+            )
+            .order_by(RbacRuleModel.sheet, RbacRuleModel.position, RbacRuleModel.id)
+            .limit(50)
+            .all()
+        )
+        leveled += [("nearby", f"{m.catalog}.{m.schema_name}.{m.object_name}", m) for m in siblings]
+
+    groups: List[GroupToJoin] = []
+    seen: Set[str] = set()
+    for level, securable, m in leveled:
+        for name in cells.split_cell(m.principal_name):
+            key = name.strip().lower()
+            if key in seen or not _is_group_to_join(m, name, system):
+                continue
+            seen.add(key)
+            groups.append(GroupToJoin(
+                principal_name=name.strip(), level=level, securable=securable,
+                privileges=cells.split_cell(m.privilege),
+            ))
+    return governed_by, groups[:_GROUPS_TO_JOIN_CAP]
 
 
 _NAME_COLUMNS = ("catalog", "schema_name", "object_name", "workspace_name")

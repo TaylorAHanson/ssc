@@ -6,8 +6,9 @@ import {
   BookOpen, Calendar, GitBranch, AlertCircle, ChevronDown, ChevronUp,
   Link as LinkIcon, ArrowDownToLine, ArrowUpFromLine, Lock, Columns3,
   Key, ExternalLink, Network, Activity, Sparkles,
-  Users, Server, Eye
+  Users, Server, Eye, MessageSquare, Search
 } from 'lucide-react';
+import { parseCatalogQuery, rankByQuery, scoreFields, type SearchFields } from '../lib/catalogSearch';
 import { api, OTHER_DOMAIN } from '../services/api';
 import type { DataAsset, DataContract, LegacyMapping, TableDetailsResponse } from '../services/api';
 import {
@@ -32,6 +33,7 @@ import {
 } from '../lib/databricksLinks';
 import { LineageGraph, type LineageSeedTable } from '../components/discover/LineageGraph';
 import { ChatView, type ChatViewHandle } from '../components/chat/ChatView';
+import { FULL_CHAT_STORAGE_KEY, moveChatMessages } from '../stores/chatSessionStore';
 import {
   useDiscoveryCatalog,
   useAccessibleAssets,
@@ -159,8 +161,10 @@ export function DataDiscovery() {
   const closeAsset = () => {
     if (!new URLSearchParams(window.location.search).get('asset')) return;
     const fromPanel = (location.state as { discoverPanel?: boolean } | null)?.discoverPanel;
-    if (fromPanel && !pendingNav.current) navigate(-1);
-    else navigateTo({ asset: null }, { replace: true });
+    if (fromPanel && !pendingNav.current) {
+      carriedQuery.current = searchTerm.trim();
+      navigate(-1);
+    } else navigateTo({ asset: null }, { replace: true });
   };
 
   // Likewise, a subdomain opened from its domain's overview is flagged so that
@@ -168,6 +172,7 @@ export function DataDiscovery() {
   const selectSubdomain = (subdomain: string | null) => {
     const fromOverview = (location.state as { discoverDrillIn?: boolean } | null)?.discoverDrillIn;
     if (!subdomain && fromOverview && !pendingNav.current) {
+      carriedQuery.current = searchTerm.trim();
       navigate(-1);
       return;
     }
@@ -238,13 +243,49 @@ export function DataDiscovery() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hierarchyLoading, catalogLoading, metricViewsLoading, searchParams, domainData, subdomainData, selectedAsset]);
 
-  // The search box now does two jobs at once: it always live-filters the
-  // catalog as the user types, AND it can hand the query to the agent
-  // (inline, without leaving the page) on submit.
-  // We use useDeferredValue so typing in the search box is instant and 100% lag-free.
-  const [searchTerm, setSearchTerm] = useState('');
+  // The search box live-filters the catalog as the user types; its
+  // "Ask the assistant" button hands the text to the inline agent instead.
+  // useDeferredValue keeps typing instant while the ranking catches up.
+  // The term lives in `?q=` so it survives reloads, shared links, and moving
+  // between a domain and its subdomains.
+  const urlQuery = searchParams.get('q') ?? '';
+  const [searchTerm, setSearchTerm] = useState(urlQuery);
   const deferredSearchTerm = useDeferredValue(searchTerm);
   const effectiveSearchTerm = deferredSearchTerm;
+  const lastWrittenQuery = useRef(urlQuery.trim());
+  // Set before stepping back through history (closing a panel, leaving a
+  // subdomain) so the older entry's `q` doesn't undo what was typed since.
+  const carriedQuery = useRef<string | null>(null);
+  useEffect(() => {
+    const q = deferredSearchTerm.trim();
+    if (q === lastWrittenQuery.current) return;
+    lastWrittenQuery.current = q;
+    const current = new URLSearchParams(window.location.search);
+    if (q) current.set('q', q);
+    else current.delete('q');
+    navigate({ pathname: DISCOVER_PATH, search: current.toString() }, { replace: true, state: location.state });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deferredSearchTerm]);
+  useEffect(() => {
+    const carried = carriedQuery.current;
+    if (carried !== null) {
+      carriedQuery.current = null;
+      if (carried !== urlQuery.trim()) {
+        lastWrittenQuery.current = carried;
+        const current = new URLSearchParams(window.location.search);
+        if (carried) current.set('q', carried);
+        else current.delete('q');
+        navigate({ pathname: DISCOVER_PATH, search: current.toString() }, { replace: true, state: location.state });
+      }
+      return;
+    }
+    if (urlQuery.trim() === lastWrittenQuery.current) return;
+    lastWrittenQuery.current = urlQuery.trim();
+    setSearchTerm(urlQuery);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.key]);
+  const searchQuery = useMemo(() => parseCatalogQuery(effectiveSearchTerm), [effectiveSearchTerm]);
+  const searching = Boolean(searchQuery.raw);
 
   // Inline agent panel. `agentQuery` holds the question that was sent; the
   // panel mounts a <ChatView> and we forward the query via its ref.
@@ -347,6 +388,8 @@ export function DataDiscovery() {
           setTableDetailsError(`This table isn't visible in the connected workspace. The Discover catalog may be out of date or the table may have moved.`);
         } else if (details.error_kind === 'permission_denied') {
           setTableDetailsError(`You don't have access to ${fqn} yet, so its columns can't be shown. Request access, or ask the data owner for USE CATALOG / USE SCHEMA / SELECT.`);
+        } else if (details.error_kind === 'scope_missing') {
+          setTableDetailsError(`This app isn't allowed to read table details from Databricks on your behalf, so its columns can't be shown here. That says nothing about your access to the table; open it in Catalog Explorer, or ask an admin to check the app's sign-in permissions.`);
         } else if (details.error) {
           setTableDetailsError(details.error);
         }
@@ -380,11 +423,27 @@ export function DataDiscovery() {
   }, [legacyMappings]);
   const legacyNamesMatching = useCallback(
     (mvId: string) => {
-      const term = effectiveSearchTerm.trim().toLowerCase();
-      if (!term) return [];
-      return (legacyByMv.get(mvId) ?? []).filter((m) => m.dashboard.toLowerCase().includes(term)).map((m) => m.dashboard);
+      if (!searching) return [];
+      return (legacyByMv.get(mvId) ?? [])
+        .filter((m) => scoreFields(searchQuery, { name: m.dashboard }) > 0)
+        .map((m) => m.dashboard);
     },
-    [legacyByMv, effectiveSearchTerm],
+    [legacyByMv, searching, searchQuery],
+  );
+  // Name first, then tags/domains/KPIs, description, owner, location (lib/catalogSearch.ts).
+  const assetSearchFields = useCallback(
+    (a: DataAsset): SearchFields => ({
+      name: [a.table_name, ...(legacyByMv.get(a.id) ?? []).map((m) => m.dashboard)],
+      tags: [...(a.tags ?? []), ...domainPaths(a), ...(a.subdomains ?? []), ...(a.kpis ?? []).map((k) => k.name)],
+      description: a.description,
+      owner: a.owner,
+      location: [a.catalog, a.schema_name],
+    }),
+    [legacyByMv],
+  );
+  const rankAssets = useCallback(
+    (items: DataAsset[]) => rankByQuery(items, searchQuery, assetSearchFields, (a) => a.certified),
+    [searchQuery, assetSearchFields],
   );
   const pickerKindCounts = useMemo(
     () =>
@@ -405,34 +464,24 @@ export function DataDiscovery() {
     [legacyMappings, selectedDomain, selectedSubdomainKey],
   );
 
-  // Landing-page search is catalog-wide: it ignores any domain picked in step 1.
-  // Results are ranked: name match > description/KPI match > domain/subdomain match.
-  const landingSearch = useMemo(() => {
-    const term = effectiveSearchTerm.trim().toLowerCase();
-    if (!term) return null;
-    const passesFilters = (a: DataAsset) =>
+  const passesToggles = useCallback(
+    (a: DataAsset) =>
       (!showCertifiedOnly || a.certified) &&
-      (!(showAccessibleOnly && accessibleAvailable) || accessibleIds.has(a.id));
-    const score = (a: DataAsset) => {
-      const has = (text?: string | null) => Boolean(text && text.toLowerCase().includes(term));
-      if (has(a.table_name) || has(a.table_name?.replace(/_/g, ' '))) return 3;
-      if (legacyNamesMatching(a.id).length > 0) return 3;
-      if (has(a.description) || has(a.owner) || (a.kpis || []).some((k) => has(k.name))) return 2;
-      if (has(domainPaths(a).join(' ')) || (a.subdomains ?? []).some(has)) return 1;
-      return 0;
-    };
-    const rank = (items: DataAsset[]) =>
-      items
-        .filter(passesFilters)
-        .map((a) => ({ a, s: score(a) }))
-        .filter((x) => x.s > 0)
-        .sort((x, y) => y.s - x.s || Number((y.a.kpis?.length ?? 0) > 0) - Number((x.a.kpis?.length ?? 0) > 0))
-        .map((x) => x.a);
+      (!(showAccessibleOnly && accessibleAvailable) || accessibleIds.has(a.id)),
+    [showCertifiedOnly, showAccessibleOnly, accessibleAvailable, accessibleIds],
+  );
+
+  // Catalog-wide search: the landing page's results, and the "widen" hint in
+  // a domain view. Any query word can match; best matches first.
+  const catalogWideSearch = useMemo(() => {
+    if (!searching) return null;
     return {
-      metricViews: rank(metricViewsData as DataAsset[]),
-      assets: rank(datasets.filter((ds) => ds.type !== 'METRIC_VIEW')),
+      metricViews: rankAssets((metricViewsData as DataAsset[]).filter(passesToggles)),
+      assets: rankAssets(datasets.filter((ds) => ds.type !== 'METRIC_VIEW' && passesToggles(ds))),
     };
-  }, [effectiveSearchTerm, metricViewsData, datasets, showCertifiedOnly, showAccessibleOnly, accessibleAvailable, accessibleIds, legacyNamesMatching]);
+  }, [searching, rankAssets, metricViewsData, datasets, passesToggles]);
+  // The landing page ignores any domain picked in step 1.
+  const landingSearch = discoveryStage === 'start' ? catalogWideSearch : null;
 
   // Drill-ins only change query params, so the route never remounts and the
   // layout keeps its scroll offset: give each view its own position instead.
@@ -444,46 +493,25 @@ export function DataDiscovery() {
       : `start:${pickerDomain ?? ''}`;
   useViewScroll(scrollView, pageRef);
 
-  const filteredMetricViews = useMemo(() => {
-    return metricViewsData.filter((mv) => {
-      if (selectedDomain && !inDomain(mv, selectedDomain)) {
-        return false;
-      }
-      if (selectedSubdomainKey && !inSubdomain(mv, selectedSubdomainKey)) {
-        return false;
-      }
-      if (showCertifiedOnly && !mv.certified) {
-        return false;
-      }
-      if (showAccessibleOnly && accessibleAvailable && !accessibleIds.has(mv.id)) {
-        return false;
-      }
-      if (effectiveSearchTerm.trim()) {
-        const term = effectiveSearchTerm.toLowerCase();
-        const kpiNames = (mv.kpis || []).map((k) => `${k.name || ''} ${k.value || ''}`).join(' ');
-        const hay = `${mv.table_name} ${mv.description || ''} ${domainPaths(mv).join(' ')} ${kpiNames}`.toLowerCase();
-        if (!hay.includes(term) && legacyNamesMatching(mv.id).length === 0) return false;
-      }
-      return true;
-    });
-  }, [metricViewsData, selectedDomain, selectedSubdomainKey, showCertifiedOnly, showAccessibleOnly, accessibleAvailable, accessibleIds, effectiveSearchTerm, legacyNamesMatching]);
+  const inSelectedScope = useCallback(
+    (a: { domains?: string[]; subdomains?: string[] }) =>
+      (!selectedDomain || inDomain(a, selectedDomain)) && (!selectedSubdomainKey || inSubdomain(a, selectedSubdomainKey)),
+    [selectedDomain, selectedSubdomainKey],
+  );
+
+  // Metric views in this domain/subdomain before the search; their lineage
+  // feeds the dashboards and apps lists below.
+  const scopedMetricViews = useMemo(
+    () => (metricViewsData as DataAsset[]).filter((mv) => inSelectedScope(mv) && passesToggles(mv)),
+    [metricViewsData, inSelectedScope, passesToggles],
+  );
+  const filteredMetricViews = useMemo(() => rankAssets(scopedMetricViews), [rankAssets, scopedMetricViews]);
 
   // Governed Lakehouse tables and views in this domain/subdomain (excluding metric views)
-  const subdomainTables = useMemo(() => {
-    return datasets.filter((ds) => {
-      if (!isCatalogTable(ds)) return false;
-      if (selectedDomain && !inDomain(ds, selectedDomain)) return false;
-      if (selectedSubdomainKey && !inSubdomain(ds, selectedSubdomainKey)) return false;
-      if (showCertifiedOnly && !ds.certified) return false;
-      if (showAccessibleOnly && accessibleAvailable && !accessibleIds.has(ds.id)) return false;
-      if (effectiveSearchTerm.trim()) {
-        const term = effectiveSearchTerm.toLowerCase();
-        const hay = `${ds.table_name} ${ds.schema_name} ${ds.catalog} ${ds.description || ''}`.toLowerCase();
-        if (!hay.includes(term)) return false;
-      }
-      return true;
-    });
-  }, [datasets, selectedDomain, selectedSubdomainKey, showCertifiedOnly, showAccessibleOnly, accessibleAvailable, accessibleIds, effectiveSearchTerm]);
+  const subdomainTables = useMemo(
+    () => rankAssets(datasets.filter((ds) => isCatalogTable(ds) && inSelectedScope(ds) && passesToggles(ds))),
+    [datasets, rankAssets, inSelectedScope, passesToggles],
+  );
 
   const { dashboardsList, appsList, consumingSolutions } = useMemo(() => {
     const dList: Array<{
@@ -509,11 +537,13 @@ export function DataDiscovery() {
 
     // Harvest from datasets: workspace dashboards and apps in the selected
     // domain by their own tags; the lineage of its metric views adds more below.
-    const inScope = (ds: DataAsset) =>
-      (!selectedDomain || inDomain(ds, selectedDomain)) && (!selectedSubdomainKey || inSubdomain(ds, selectedSubdomainKey));
+    // `builtOn` records which metric views each one uses, so searching for a
+    // metric view also finds what's built on it.
+    const builtOn = new Map<string, string[]>();
+    const noteBuiltOn = (id: string, mv: DataAsset) => builtOn.set(id, [...(builtOn.get(id) ?? []), mv.table_name]);
     for (const ds of datasets) {
       if (ds.type === 'dashboard') {
-        if (inScope(ds)) {
+        if (inSelectedScope(ds)) {
           dList.push({
             id: ds.id,
             name: ds.table_name,
@@ -524,7 +554,7 @@ export function DataDiscovery() {
           });
         }
       } else if (ds.type === 'app') {
-        if (inScope(ds)) {
+        if (inSelectedScope(ds)) {
           aList.push({
             id: ds.id,
             name: ds.table_name,
@@ -544,7 +574,7 @@ export function DataDiscovery() {
     const seenD = new Set(dList.map((d) => d.id));
     const seenA = new Set(aList.map((a) => a.name));
 
-    for (const mv of filteredMetricViews) {
+    for (const mv of scopedMetricViews) {
       if (Array.isArray(mv.downstream_dashboards)) {
         for (const d of mv.downstream_dashboards as Array<{
           id?: string;
@@ -559,6 +589,7 @@ export function DataDiscovery() {
           if (!d || !d.name) continue;
           const isApp = d.type === 'app';
           const dashKey = d.id || d.name;
+          noteBuiltOn(isApp ? d.id || d.name : dashKey, mv);
           if (isApp && !seenA.has(d.name)) {
             seenA.add(d.name);
             aList.push({
@@ -587,12 +618,51 @@ export function DataDiscovery() {
       }
     }
 
+    const fieldsOf = (item: { id: string; name: string; description: string }): SearchFields => ({
+      name: item.name,
+      tags: builtOn.get(item.id),
+      description: item.description,
+    });
+    const dashboards = rankByQuery(dList, searchQuery, fieldsOf);
+    const apps = rankByQuery(aList, searchQuery, fieldsOf);
     return {
-      dashboardsList: dList,
-      appsList: aList,
-      consumingSolutions: [...dList, ...aList],
+      dashboardsList: dashboards,
+      appsList: apps,
+      consumingSolutions: [...dashboards, ...apps],
     };
-  }, [datasets, filteredMetricViews, selectedDomain, selectedSubdomainKey, databricksWorkspaceUrl]);
+  }, [datasets, scopedMetricViews, inSelectedScope, searchQuery, databricksWorkspaceUrl]);
+
+  // A domain or subdomain search that finds little here may find more across
+  // the whole catalog; offer to widen rather than leave an empty page.
+  const widenSearch = useMemo(() => {
+    if (!searching || discoveryStage !== 'full' || !catalogWideSearch) return null;
+    const here = filteredMetricViews.length + subdomainTables.length;
+    const everywhere = catalogWideSearch.metricViews.length
+      + catalogWideSearch.assets.filter((a) => isCatalogTable(a)).length;
+    if (here >= 3 || everywhere <= here) return null;
+    return { here, elsewhere: everywhere - here };
+  }, [searching, discoveryStage, catalogWideSearch, filteredMetricViews, subdomainTables]);
+
+  // What the in-page assistant is told the user has open, read at each send.
+  const pageContext = () => {
+    const open = selectedMetricView ?? selectedDataset;
+    const openName = open
+      ? [open.catalog, open.schema_name, open.table_name].filter(Boolean).join('.') || open.id
+      : '';
+    const ctx: Record<string, string> = { page: 'Discover' };
+    if (selectedDomain) ctx.domain = selectedDomain;
+    if (selectedSubdomain) ctx.subdomain = selectedSubdomain;
+    if (searchTerm.trim()) ctx.search = searchTerm.trim();
+    if (openName) ctx.asset = openName;
+    if (open?.type) ctx.asset_type = String(open.type);
+    return { page_context: ctx };
+  };
+
+  const openInFullChat = () => {
+    setAgentQuery(null);
+    moveChatMessages(INLINE_AGENT_STORAGE_KEY, FULL_CHAT_STORAGE_KEY);
+    navigate('/');
+  };
 
   const submitAgentQuery = (q: string) => {
     const trimmed = q.trim();
@@ -696,23 +766,35 @@ export function DataDiscovery() {
         <div className="bg-white rounded-2xl border border-primary/20 shadow-sm overflow-hidden animate-in fade-in slide-in-from-top-2 duration-300">
           <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-primary/5">
             <div className="flex items-center gap-2 text-sm font-semibold text-gray-800">
-              <Sparkles className="w-4 h-4 text-primary" /> Agent Assistant
+              <Sparkles className="w-4 h-4 text-primary" /> Assistant
+              <span className="font-normal text-gray-500">· knows what you have open on this page</span>
             </div>
-            <button
-              type="button"
-              onClick={() => setAgentQuery(null)}
-              className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors cursor-pointer"
-              title="Close agent"
-            >
-              <X className="w-4 h-4" />
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={openInFullChat}
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-colors cursor-pointer"
+                title="Continue this conversation in the full chat"
+              >
+                <MessageSquare className="w-3.5 h-3.5" /> Open in full chat
+              </button>
+              <button
+                type="button"
+                onClick={() => setAgentQuery(null)}
+                className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors cursor-pointer"
+                title="Close the assistant"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
           </div>
           <div className="h-[440px] p-4">
             <ChatView
               ref={chatRef}
               storageKey={INLINE_AGENT_STORAGE_KEY}
-              placeholder="Ask a follow-up question..."
+              placeholder="Ask about what's on this page..."
               onRoute={(route) => navigate(route.path)}
+              extraContext={pageContext}
             />
           </div>
         </div>
@@ -751,6 +833,25 @@ export function DataDiscovery() {
             onOpenAsset={openAsset}
           />
         ) : (
+          <>
+          {widenSearch && (
+            <div role="status" className="flex flex-wrap items-center gap-2 text-sm text-slate-700 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5">
+              <Search className="w-4 h-4 text-slate-500 shrink-0" />
+              <span className="flex-1 min-w-[12rem]">
+                {widenSearch.here === 0
+                  ? `Nothing in ${selectedSubdomain || selectedDomain} matches “${effectiveSearchTerm.trim()}”`
+                  : `Only ${widenSearch.here} in ${selectedSubdomain || selectedDomain} match “${effectiveSearchTerm.trim()}”`}
+                {`, but ${widenSearch.elsewhere} more ${widenSearch.elsewhere === 1 ? 'does' : 'do'} elsewhere in the catalog.`}
+              </span>
+              <button
+                type="button"
+                onClick={handleBackToStart}
+                className="px-3 py-1.5 rounded-lg text-xs font-semibold text-primary bg-white border border-primary/30 hover:bg-primary/5 transition-colors cursor-pointer"
+              >
+                Search the whole catalog
+              </button>
+            </div>
+          )}
           <DomainFullView
             domain={selectedDomain ?? ''}
             domainsHierarchy={domainsHierarchy}
@@ -787,6 +888,7 @@ export function DataDiscovery() {
               if ((metricViewsData as DataAsset[]).some((v) => v.id === id)) openAsset(id);
             }}
           />
+          </>
         )}
 
       </div>

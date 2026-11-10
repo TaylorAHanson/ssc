@@ -21,16 +21,52 @@ exactly as if you'd typed it, so the assistant still asks you to confirm
 before it submits anything. The buttons disappear as soon as you send
 something.
 
+For a broad request, such as "What data should I look at?", the assistant
+asks one short question about your role or what you're working on, with a few
+suggested answers and the one it recommends based on what it knows about you,
+such as your groups and recent requests. If that already makes the answer
+clear, it skips the question and tells you what it assumed. It asks at most
+once per conversation.
+
 While the assistant works, you see each step it takes, such as a catalog
 search or a data query, as a small label in the conversation. Expand a step's
 **Raw output** to see exactly what came back. When the assistant has explained
 its thinking, **Show reasoning** at the end of the conversation reveals it.
 
+To stop a reply, select the square **Stop** button that replaces the send
+button while the assistant works. If a reply is taking a while or many steps,
+a **Still working on this** note offers the same **Stop** link. The steps
+already shown stay in the conversation, so you can rephrase and ask again.
+
+The assistant remembers what it looked up earlier in the conversation, such
+as a table's owner or the workspaces it can reach, and answers follow-ups from
+that instead of looking it up again.
+
 ## Answers about your data
 
 When you ask about the numbers in your data, the assistant queries it for you
-with Databricks Genie and shows the answer in the chat, often with a table or
-a chart. **Genie is working…** means the query is still running.
+and shows the answer in the chat. When it knows the table, it runs a SQL query
+directly, which takes seconds; otherwise it asks Databricks Genie.
+**Genie is working…** means a Genie query is still running.
+
+A chart appears only when it helps: for a trend, a comparison or a breakdown,
+or when you ask for one. A single number, a yes-or-no answer such as whether
+you have access, or a list of rows is given in words or as a table, and at
+most one chart appears per answer.
+
+Under a query's results, **How this was answered** shows where the answer
+came from:
+
+- the tables the query read, each with whether it's certified (and why not),
+  its data quality results, its owner, and the system its data comes from when
+  your organization records it;
+- the SQL itself, run with your permissions, with **Copy SQL**, **Open the SQL
+  editor** and **Query history** to check or re-run it in Databricks.
+
+Ask "What table is that number from?" and the assistant answers from the query
+it already ran, by full table name, without running it again. When an answer
+comes from a table that isn't certified or has failed quality checks, it says
+so, and it prefers certified tables when more than one could answer.
 
 - Click **Customize** on a chart to change its type, its axes, the field that
   sets the colors, and how values are combined.
@@ -79,6 +115,17 @@ asks which group you mean instead of choosing one. If a group already has the
 access, it tells you to join that group rather than starting a request that
 wouldn't change anything.
 
+Ask "Which group do I need to read this table?" and the assistant names the
+groups that hold access in the access rules, and where that access comes
+from. Many tables and views get their access from their schema or catalog
+rather than their own rule, so it looks there too and says so, for example
+"access to this view comes from its schema, through the planning-readers
+group". If nothing is recorded at any of those levels, it may mention groups
+with access to nearby tables in the same schema, clearly labelled as a hint.
+A group named in a table's access-group tag is included too. It never suggests
+the built-in groups everyone is already in, such as "users". It tells you
+which of the groups you're already a member of.
+
 ### Report a problem with data
 
 If a table looks stale, wrong or broken, tell the assistant. It looks up the
@@ -101,8 +148,9 @@ one of these, it sends you to the right place in your Databricks workspace,
 such as the SQL editor, Dashboards or Genie Code. It does this straight away:
 it doesn't look the table up or run your query first, so if it suggests a fix
 to a query it tells you it is a likely fix it hasn't run. It brings the full
-table name you gave, and for a change to a table or its data it points you to
-the owner and can help you draft the request. For a dashboard it gives you the
+table name you gave, and for a change to a table or its data it tells you the
+change is made by someone with write access to the table, following your
+organization's process where one is documented. For a dashboard it gives you the
 next step in Dashboards first, without searching for data, and then offers to
 help you find a dataset to build it on.
 
@@ -118,8 +166,7 @@ model.
 Changing a table's tags or description is still done here, in the Metadata
 Manager, which is limited to data owners and governance. If you don't have
 access to it and spot a wrong description or tag, the assistant tells you who
-can change it, names the table's owner and offers to draft the request to
-them, or to report the problem where feedback is switched on.
+can change it and offers to report the problem where feedback is switched on.
 
 ## Make a request
 
@@ -147,6 +194,11 @@ access becomes linked requests, one for each, because different people approve
 them.
 
 The assistant then shows you its plan. Nothing changes until you confirm.
+If another open request changes the same rule, the plan says which request and
+which object it's for. It's a warning when both requests ask for that rule,
+so you can check one won't undo the other. It's a note, with nothing to
+resolve, when one of them only needs the rule as a prerequisite, such as access
+to a schema that's needed to read a table in it.
 
 Once you confirm, the request is created and tracked under **Requests** → **My requests**.
 Requests that need sign-off go to the right approvers first. See

@@ -17,7 +17,7 @@ When filing the request, gather the following:
 
 | # | Parameter | Required | Notes |
 |---|-----------|----------|-------|
-| 1 | **Target Workspace** | ✅ Yes | The workspace where the resource lives. You MUST use `get_target_workspaces` to find the exact `host` URL. |
+| 1 | **Target Workspace** | ✅ Yes | The workspace where the resource lives. Take the exact `host` URL from the target workspace list you were given (call `get_target_workspaces` only if it isn't there). |
 | 2 | **Resource Type** | ✅ Yes | Enum: `app`, `notebook`, `job`, `cluster`, `dashboard`, `genie_space`. |
 | 3 | **Resource ID** | ✅ Yes | The normalized name or ID of the resource (e.g., `fin-forecast-app`). Remind them this must match the actual name EXACTLY. |
 | 4 | **Justification** | ✅ Yes | A detailed business justification for why they need this exception. |

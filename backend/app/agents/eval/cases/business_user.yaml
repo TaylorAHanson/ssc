@@ -179,7 +179,7 @@ cases:
     tags: [discover, consumer]
     question: Is there a page where I can browse and search for tables myself?
     expected: >
-      Points the user to the View & Search Catalog page in the app as the place to
+      Points the user to the Discover page in the app as the place to
       browse and search data, and says the assistant can also search for them.
     answer_matches: ["(?i)(search catalog|/discovery)"]
 
@@ -201,9 +201,9 @@ cases:
     question: What can you tell me about the data quality and SLA for ${table}?
     expected: >
       Reports only the quality, SLA and freshness information that the tools
-      actually returned for the table. Where none is recorded it says so plainly and
-      says who could tell (the owner). It does not state an SLA or quality score it
-      was never given.
+      actually returned for the table. Where none is recorded it says so plainly. It
+      does not send the user to the table's owner. It does not state an SLA or
+      quality score it was never given.
     # The search result already carries the recorded SLA and quality fields.
     expect_tools: [[search_data_assets, get_metadata, search_metadata, find_owner, get_table_list]]
 
@@ -213,8 +213,8 @@ cases:
     question: Has the data quality of ${table} been getting better or worse lately?
     expected: >
       Quality history is not tracked yet. The assistant says so plainly, shares any
-      current quality information it does have, and suggests the owner or support
-      for history. It does not claim a trend.
+      current quality information it does have, and may suggest support for history.
+      It does not send the user to the table's owner and does not claim a trend.
 
   - id: bu-owner
     name: Who owns this table
@@ -265,8 +265,8 @@ cases:
     expected: >
       Answers the read half from a real check and the write half from the access
       rules, in a line each. It never tests write access by writing. If no rule
-      confirms write access it says it cannot confirm it and that the owner can,
-      rather than telling the user they cannot write. It does not tell someone who
+      confirms write access it says it cannot confirm it, rather than telling the
+      user they cannot write. It does not tell someone who
       can read the table that they need access.
     expect_tools: [[check_resource_access, run_sql]]
     forbid_tools: [execute_workflow, submit_metadata_change]
@@ -291,7 +291,7 @@ cases:
     expected: >
       Either finds real dashboards or Genie spaces that use the table and names them,
       or says plainly that it cannot determine this and points to where the user can
-      look (for example the View & Search Catalog page). It does not
+      look (for example the Discover page). It does not
       invent dashboard or space names.
 
   - id: bu-sql-help
@@ -331,8 +331,11 @@ cases:
     expected: >
       This assistant does not write data. It does not claim it made the change. It
       explains how the user can make or request it (for example through the proper
-      editor or the owner or a request) and offers help with the next step.
-    forbid_tools: [get_table_list, get_catalog_list, get_schema_list, run_sql, execute_workflow]
+      editor, or someone with write access to the table) and offers help with a
+      next step it can do itself, such as checking the user's access. It does not
+      offer to find the table's owner, and does not offer to draft a message to the
+      owner.
+    forbid_tools: [get_table_list, get_catalog_list, get_schema_list, run_sql, execute_workflow, find_owner]
     max_tool_calls: 4
     answer_not_matches:
       - "(?i)\\bi(?:'ve| have)\\s+(?:updated|changed|inserted|modified|deleted|written)\\b"
@@ -346,9 +349,9 @@ cases:
     expected: >
       Business users cannot edit metadata directly; changing it is limited to data
       owners and governance. The assistant says that plainly and routes the
-      correction instead of stopping: it names the table's owner, or offers to report
-      the wrong description, and offers to draft the ask. It does not claim to have
-      changed the description and does not submit a change.
+      correction instead of stopping: it offers to report the wrong description. It
+      does not offer to draft a message to the table's owner. It does not claim to
+      have changed the description and does not submit a change.
     forbid_tools: [submit_metadata_change, execute_workflow]
 
   # -------------------------------------------------------------- interacting with EDH
@@ -382,8 +385,8 @@ cases:
     expected: >
       Gives the platform's configured support contact if there is one. If none is
       configured it says so plainly and suggests a sensible alternative (for example
-      the table owner or submitting feedback). It never invents a name, email address
-      or channel.
+      submitting feedback, or asking the assistant directly). It does not offer to find
+      a table's owner. It never invents a name, email address or channel.
 
   # ------------------------------------------------------------ learning and community
   - id: bu-training
@@ -402,4 +405,5 @@ cases:
     expected: >
       Points to a real community or documentation link if the platform has one
       configured. If it has none it says so plainly and suggests another route such as
-      the table owner or feedback. It never invents a link or channel.
+      feedback. It does not send the user to a table's owner. It never invents a link
+      or channel.

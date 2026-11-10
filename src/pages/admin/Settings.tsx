@@ -31,6 +31,7 @@ import { useBrandingStore } from '../../stores/brandingStore';
 import { useRequestStore } from '../../stores/requestStore';
 import { cn } from '../../lib/utils';
 import { Users } from './Users';
+import { RolePermissions } from './RoleCapabilityGrid';
 import { LegacyDashboards } from './LegacyDashboards';
 import { TrainingUpload } from '../../components/admin/TrainingUpload';
 import { StringListField, CommunityLinksEditor, EmbeddedAppsEditor } from './catalogEditors';
@@ -40,7 +41,8 @@ import { errorMessage } from '../../lib/errors';
 // Pages rendered by the client rather than from the generic field list. The
 // backend's `sections` names them; these must match settings_store.py.
 const FEATURES_GROUP = 'Features & Navigation';
-const ROLES_GROUP = 'Roles & Access';
+const ROLE_MAPPINGS_GROUP = 'Role Mappings';
+const ROLE_PERMISSIONS_GROUP = 'Role Permissions';
 // Client pages shown inside the standard page card (title, description, Off note).
 const CARD_PAGES: Record<string, () => ReactNode> = {
   [LEGACY_DASHBOARDS_GROUP]: () => <LegacyDashboards />,
@@ -164,7 +166,7 @@ export const Settings = () => {
   // A page is "off" when every one of its settings is waiting on a capability,
   // or, for a page with no settings, when its group requirement is unmet.
   const pageOffCapabilities = (group: string): Capability[] | null => {
-    if (group === FEATURES_GROUP || group === ROLES_GROUP) return null;
+    if (group === FEATURES_GROUP || group === ROLE_MAPPINGS_GROUP || group === ROLE_PERMISSIONS_GROUP) return null;
     const fields = fieldsForGroup(group);
     if (fields.length === 0) {
       const unmet = (state?.group_requires?.[group] || []).filter((k) => !requirementMet(k));
@@ -403,8 +405,10 @@ export const Settings = () => {
           </div>
         )}
 
-        {activeGroup === ROLES_GROUP ? (
+        {activeGroup === ROLE_MAPPINGS_GROUP ? (
           <Users />
+        ) : activeGroup === ROLE_PERMISSIONS_GROUP ? (
+          <RolePermissions onOpenMappings={() => selectGroup(ROLE_MAPPINGS_GROUP)} />
         ) : CARD_PAGES[activeGroup] ? (
           fieldsForGroup(activeGroup).length > 0
             ? renderGroupPage(activeGroup, CARD_PAGES[activeGroup]())

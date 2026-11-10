@@ -1,7 +1,7 @@
 // Access Rules types. Mirrors backend/app/models/rbac.py.
 
 export type RbacPlane = 'uc' | 'uc_metastore' | 'workspace';
-export type RbacSeverity = 'deny' | 'warn';
+export type RbacSeverity = 'deny' | 'warn' | 'info';
 
 export const RBAC_CANONICAL_FIELDS = [
   'environment_value',

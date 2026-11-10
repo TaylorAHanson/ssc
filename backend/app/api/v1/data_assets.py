@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Dict, List, Optional
 import asyncio
 import hashlib
 import logging
@@ -713,6 +713,12 @@ def _classify_uc_error(message: str) -> str:
     # was created; it fails until its owner recreates it.
     if "cannot_up_cast_datatype" in m or "incompatible_view_schema_change" in m:
         return "schema_changed"
+    # The app's sign-in token isn't allowed to call this API at all (Databricks
+    # Apps user authorization only grants listed scopes). Checked before the
+    # permission match: "token does not have required scopes" isn't the user
+    # lacking a grant.
+    if "required scope" in m or "insufficient_scope" in m or "invalid scope" in m:
+        return "scope_missing"
     if "does not exist" in m:
         return "not_found"
     if ("permission" in m or "not authorized" in m or "access denied" in m or "forbidden" in m
@@ -977,16 +983,116 @@ def get_databricks_table_lineage(table_name: str, req: Request, db: Session = De
         raise
     except Exception as e:
         msg = str(e)
-        logger.warning(f"Failed to fetch lineage for {table_name}: {msg}")
+        kind = _classify_uc_error(msg)
+        logger.warning(f"Failed to fetch lineage for {table_name} ({kind}): {msg}")
+        if kind == "scope_missing":
+            # The lineage API is outside the app's sign-in scopes; the lineage
+            # system table is plain SQL, which the user's token may run.
+            from_system = _lineage_from_system_table(req, table_name, vis)
+            if from_system is not None:
+                return {"table_name": table_name, **from_system, "error": None, "error_kind": None,
+                        "source": "system_table", "as_of": None}
         # Return 200 with the error fields so the frontend can render a clear
         # message (the SPA fallback 404 handler would otherwise mask details).
+        # What the catalog sync recorded is better than an empty graph.
+        cached = _cached_lineage(db, table_name, vis)
         return {
             "table_name": table_name,
-            "upstreams": [],
-            "downstreams": [],
+            "upstreams": cached["upstreams"],
+            "downstreams": cached["downstreams"],
             "error": msg,
-            "error_kind": _classify_uc_error(msg),
+            "error_kind": kind,
+            "source": "catalog_cache" if cached["upstreams"] or cached["downstreams"] else None,
+            "as_of": cached["as_of"],
         }
+
+
+def _lineage_neighbor(fqn: str, table_type: Optional[str] = None) -> dict:
+    parts = fqn.split(".")
+    return {
+        "name": fqn,
+        "catalog_name": parts[0] if len(parts) == 3 else None,
+        "schema_name": parts[1] if len(parts) == 3 else None,
+        "table_name": parts[2] if len(parts) == 3 else None,
+        "table_type": table_type,
+    }
+
+
+def _lineage_from_system_table(req: Request, table_name: str, vis) -> Optional[dict]:
+    """One hop of lineage from ``system.access.table_lineage``, queried as the user.
+
+    None when the user can't read the system table (it isn't granted to
+    everyone) or no warehouse is configured.
+    """
+    from databricks.sdk.service.sql import StatementParameterListItem, StatementState
+    from app.core.config import settings
+
+    warehouse_id = settings.DATABRICKS_WAREHOUSE_ID
+    if not warehouse_id:
+        return None
+    statement = (
+        "SELECT DISTINCT source_table_full_name, source_type, target_table_full_name, target_type "
+        "FROM system.access.table_lineage "
+        "WHERE (source_table_full_name = :fqn OR target_table_full_name = :fqn) "
+        "AND source_table_full_name IS NOT NULL AND target_table_full_name IS NOT NULL "
+        "AND source_table_full_name <> target_table_full_name "
+        "AND event_date >= date_sub(current_date(), 365) "
+        "LIMIT 500"
+    )
+    try:
+        resp = _user_uc_client(req).statement_execution.execute_statement(
+            statement=statement,
+            warehouse_id=warehouse_id,
+            parameters=[StatementParameterListItem(name="fqn", value=table_name)],
+            wait_timeout="30s",
+        )
+    except Exception as e:
+        logger.info(f"Lineage system table unavailable for {table_name}: {e}")
+        return None
+    if not resp.status or resp.status.state != StatementState.SUCCEEDED:
+        logger.info(f"Lineage system table query for {table_name} ended {resp.status and resp.status.state}")
+        return None
+    wanted = table_name.lower()
+    upstreams: Dict[str, dict] = {}
+    downstreams: Dict[str, dict] = {}
+    for src, src_type, tgt, tgt_type in (resp.result.data_array if resp.result else None) or []:
+        if not src or not tgt:
+            continue
+        if tgt.lower() == wanted and not vis.is_hidden_id(src):
+            upstreams.setdefault(src.lower(), _lineage_neighbor(src, src_type))
+        elif src.lower() == wanted and not vis.is_hidden_id(tgt):
+            downstreams.setdefault(tgt.lower(), _lineage_neighbor(tgt, tgt_type))
+    return {"upstreams": list(upstreams.values()), "downstreams": list(downstreams.values())}
+
+
+def _cached_lineage(db: Session, table_name: str, vis) -> dict:
+    """Lineage the catalog sync recorded: the sources of each metric view's definition."""
+    wanted = table_name.lower()
+    upstreams: Dict[str, dict] = {}
+    downstreams: Dict[str, dict] = {}
+    synced = []
+    try:
+        assets = db.query(DataAssetModel).filter(DataAssetModel.upstream_tables.isnot(None)).all()
+    except Exception as e:
+        logger.warning(f"Cached lineage unavailable for {table_name}: {e}")
+        assets = []
+    for asset in assets:
+        sources = [u.get("fqn") for u in asset.upstream_tables if isinstance(u, dict) and u.get("fqn")] \
+            if isinstance(asset.upstream_tables, list) else []
+        if (asset.id or "").lower() == wanted:
+            for fqn in sources:
+                if not vis.is_hidden_id(fqn):
+                    upstreams.setdefault(fqn.lower(), _lineage_neighbor(fqn))
+            synced.append(asset.last_synced_at)
+        elif any(fqn.lower() == wanted for fqn in sources) and asset.id and not vis.is_hidden_id(asset.id):
+            downstreams.setdefault(asset.id.lower(), _lineage_neighbor(asset.id, "METRIC_VIEW"))
+            synced.append(asset.last_synced_at)
+    as_of = max((s for s in synced if s), default=None)
+    return {
+        "upstreams": list(upstreams.values()),
+        "downstreams": list(downstreams.values()),
+        "as_of": as_of.isoformat() if as_of else None,
+    }
 
 
 @router.get("/databricks/genie_spaces")

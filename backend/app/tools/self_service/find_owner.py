@@ -15,7 +15,11 @@ class FindOwnerInput(BaseModel):
 @tool(
     name="find_owner",
     description="Look up the owner and metadata tags (e.g. approver_group, access_group) of a Databricks object: catalog, schema, table, view, metric_view, job, dashboard, notebook, or genie_space. Catalog/schema/table lookups use Unity Catalog metadata (BROWSE) and are not a check of the signed-in user's USE CATALOG grant.",
-    args_schema=FindOwnerInput
+    args_schema=FindOwnerInput,
+    friendly_label="Looking up the owner",
+    friendly_completion_label="Found the owner",
+    is_lookup=True,
+    reuse_in_conversation=True,
 )
 async def find_owner(object_type: str, object_name: str) -> Dict[str, Any]:
     """

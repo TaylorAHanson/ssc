@@ -4,7 +4,7 @@
 
 ## Information to Gather
 1.  **Target Workspace**: Which workspace should this service principal be created in?
-    *   *Action*: You MUST use `get_target_workspaces` to find the exact `host` URL for the requested workspace.
+    *   *Action*: Take the exact `host` URL for the requested workspace from the target workspace list you were given (call `get_target_workspaces` only if it isn't there).
 2.  **Service Name**: The name for the service principal.
     *   *Naming Convention*: `sp-{team}-{application}-{env}`.
     *   *Existence Check (REQUIRED)*: Before calling `execute_workflow`, you MUST use `does_service_principal_exist` (passing the `target_host`) to verify the service principal doesn't already exist.

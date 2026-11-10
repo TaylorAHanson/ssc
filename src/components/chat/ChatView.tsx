@@ -19,7 +19,7 @@
  * Used by both the "Ask Your Data" tab and the Self Service / Home
  * surface — same component, different mode + welcome content.
  */
-import { ChevronDown, Download, ExternalLink, Send, Sparkles } from 'lucide-react';
+import { ChevronDown, Download, ExternalLink, Send, Sparkles, Square } from 'lucide-react';
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 
 import { Button } from '../ui/button';
@@ -34,7 +34,7 @@ import { usePendingPoll } from '../../hooks/usePendingPoll';
 import { getSessionId } from '../../lib/chatPersistence';
 import { useBrandingStore } from '../../stores/brandingStore';
 import { useChatSession } from '../../stores/chatSessionStore';
-import type { ChatRouteInfo, DisplayMessage } from './chatTypes';
+import type { ChatChart, ChatRouteInfo, DisplayMessage } from './chatTypes';
 import { downloadTranscript } from './transcript';
 import { NextStepSuggestions, PromptChip } from './PromptChip';
 import { sanitizeSuggestions, splitSuggestions } from './suggestions';
@@ -43,9 +43,10 @@ import { GenieDetailsPanel } from './GenieDetailsPanel';
 import { ToolRawOutputPanel } from './ToolRawOutputPanel';
 import { ChartPanel } from './ChartPanel';
 import { VegaLiteChart } from './VegaLiteChart';
-import { datasetFromGenieResult, findLastDataset, parseToolChart } from './toolChart';
+import { chartCandidate, datasetFromGenieResult, findLastDataset } from './toolChart';
+import { SqlResultPanel } from './SqlResultPanel';
+import { asSqlResult } from './sqlResult';
 import { renderMarkdownSafe } from '../../lib/markdown';
-import type { ChartEncoding, Dataset } from '../../lib/charting';
 import { errorMessage } from '../../lib/errors';
 
 export interface ChatModeOption {
@@ -150,6 +151,18 @@ export interface ChatViewHandle {
 }
 
 const ELLIPSIS_LIMIT_MS = 60_000; // bump elapsed display past this
+const STOP_NUDGE_MS = 20_000;
+const STOP_NUDGE_TOOL_CALLS = 6;
+
+/** Tools whose cut-off history result is worth re-running with tighter filters. */
+const LISTING_TOOLS = new Set([
+    'get_catalog_list',
+    'get_schema_list',
+    'get_table_list',
+    'get_volume_list',
+    'search_data_assets',
+    'run_sql',
+]);
 
 export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatView(
     {
@@ -239,11 +252,13 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
         () => messages.some((m) => m.kind === 'tool' && m.status === 'running'),
         [messages],
     );
+    // Also ticks for the whole of a running turn, which drives the Stop nudge.
+    const clockRunning = hasRunningPill || isStreaming || !!pendingPoll;
     useEffect(() => {
-        if (!hasRunningPill) return;
+        if (!clockRunning) return;
         const id = window.setInterval(() => setNowMs(Date.now()), 1000);
         return () => window.clearInterval(id);
-    }, [hasRunningPill]);
+    }, [clockRunning]);
 
     // Close the mode dropdown when the user clicks anywhere outside
     // it. Mirrors the same pattern Home.tsx uses so the affordance
@@ -334,6 +349,17 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                 setIsStreaming(false);
                 setStatusLabel(null);
             } else {
+                if (final.status === 'cancelled') {
+                    setMessages((prev) => [
+                        ...prev,
+                        {
+                            kind: 'agent',
+                            id: `${Date.now()}-pollstop`,
+                            timestamp: new Date().toISOString(),
+                            content: '<em>Stopped.</em>',
+                        },
+                    ]);
+                }
                 setIsStreaming(false);
                 setStatusLabel(null);
             }
@@ -388,10 +414,12 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
             }
         }
         if (serialized.length > HISTORY_TOOL_RESULT_MAX_CHARS) {
-            return (
-                serialized.slice(0, HISTORY_TOOL_RESULT_MAX_CHARS) +
-                ' …[truncated; re-run the tool with tighter filters if you need the rest]'
-            );
+            // Only a listing has more rows worth fetching; anything else would
+            // just be the same answer again.
+            const note = LISTING_TOOLS.has(m.toolName)
+                ? ' …[truncated; re-run the tool with tighter filters if you need the rest]'
+                : ' …[truncated]';
+            return serialized.slice(0, HISTORY_TOOL_RESULT_MAX_CHARS) + note;
         }
         return serialized;
     };
@@ -536,6 +564,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
         // (e.g. "Done.") should still render; we only want to swallow a
         // duplicate emitted *within* a single turn.
         internals.lastAgentSig = '';
+        internals.turnChart = null;
         // Stale form-route CTAs from a prior turn shouldn't survive a
         // new question — the agent may pick a different form, or no
         // form at all. The continuation path skips this clear so the
@@ -597,15 +626,16 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                     ),
                 );
             if (controller.signal.aborted) {
-                // User-initiated abort; surface a quiet agent line.
-                failRunningTools('Cancelled');
+                // User-initiated abort (Stop, New Chat, or a newer turn);
+                // surface a quiet agent line and keep the transcript.
+                failRunningTools('Stopped');
                 setMessages((prev) => [
                     ...prev,
                     {
                         kind: 'agent',
                         id: `${Date.now()}-cancel`,
                         timestamp: new Date().toISOString(),
-                        content: '<em>Cancelled.</em>',
+                        content: '<em>Stopped.</em>',
                     },
                 ]);
             } else {
@@ -684,14 +714,15 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                     event.ok,
                     internals.toolArgs[event.id],
                 );
-                // Detect chart-renderable output (the render_chart tool, or any
-                // tool returning tabular data / a spec). When the tool asks to
-                // re-graph the last answer, bind the conversation's most recent
-                // dataset so the chart is self-contained.
-                const parsedChart = event.ok ? parseToolChart(event.result, event.name) : undefined;
-                const resolveChart = (
-                    prev: DisplayMessage[],
-                ): { dataset?: Dataset; spec?: Record<string, unknown>; encoding?: Partial<ChartEncoding> } | undefined => {
+                // A turn shows at most one chart, under its final answer: each
+                // chart-worthy result replaces the previous candidate, and `done`
+                // attaches the survivor. Intermediate lookups never flash a chart.
+                // When the tool asks to re-graph the last answer, bind the
+                // conversation's most recent dataset so the chart is self-contained.
+                const parsedChart = event.ok
+                    ? chartCandidate(event.result, event.name, internals.toolArgs[event.id])
+                    : undefined;
+                const resolveChart = (prev: DisplayMessage[]): ChatChart | undefined => {
                     if (!parsedChart) return undefined;
                     let dataset = parsedChart.dataset;
                     if (!dataset && parsedChart.bindLast) {
@@ -702,6 +733,10 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                     }
                     if (!dataset && !parsedChart.spec) return undefined;
                     return { dataset, spec: parsedChart.spec, encoding: parsedChart.encoding };
+                };
+                const holdChart = (prev: DisplayMessage[]) => {
+                    const chart = resolveChart(prev);
+                    if (chart) internals.turnChart = chart;
                 };
                 // Hold the "running" pill on screen for a short
                 // minimum so synchronous tools (e.g. execute_workflow,
@@ -714,8 +749,9 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                 // pending-poll pill behaves.
                 const MIN_RUNNING_MS = 600;
                 const settle = () =>
-                    setMessages((prev) =>
-                        prev.map((m) => {
+                    setMessages((prev) => {
+                        holdChart(prev);
+                        return prev.map((m) => {
                             if (m.kind !== 'tool' || m.toolCallId !== event.id) return m;
                             return {
                                 ...m,
@@ -725,10 +761,9 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                                 label: event.summary || m.label,
                                 toolResult: event.result,
                                 resultHidden: event.result_hidden || undefined,
-                                chart: resolveChart(prev),
                             };
-                        }),
-                    );
+                        });
+                    });
                 // Use a functional setter purely to read the current
                 // pill state without relying on a possibly stale
                 // ``messages`` closure inside this async SSE handler.
@@ -748,6 +783,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                         // Settle synchronously inside this same updater
                         // so the gate's effect on subsequent events is
                         // immediate.
+                        holdChart(prev);
                         return prev.map((m) => {
                             if (m.kind !== 'tool' || m.toolCallId !== event.id) return m;
                             return {
@@ -758,7 +794,6 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                                 label: event.summary || m.label,
                                 toolResult: event.result,
                                 resultHidden: event.result_hidden || undefined,
-                                chart: resolveChart(prev),
                             };
                         });
                     }
@@ -889,6 +924,13 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
             }
             case 'done': {
                 setStatusLabel(null);
+                const chart = internals.turnChart;
+                internals.turnChart = null;
+                if (chart) {
+                    // After the gate, so the final message (also gated) is in place.
+                    const wait = Math.max(0, internals.eventGate - Date.now()) + 50;
+                    setTimeout(() => setMessages((prev) => attachTurnChart(prev, chart)), wait);
+                }
                 break;
             }
             case 'error': {
@@ -1047,6 +1089,32 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
             void submitTurn(trimmed);
         },
     }));
+
+    const handleStop = () => {
+        internals.abortController?.abort();
+        if (pendingPoll) pollState.cancel();
+        setStatusLabel(null);
+    };
+
+    const isBusy = isStreaming || !!pendingPoll;
+    // Nudge toward Stop when a turn runs long or fans out into many steps.
+    const turnStats = useMemo(() => {
+        let lastUser = -1;
+        for (let i = messages.length - 1; i >= 0; i -= 1) {
+            if (messages[i].kind === 'user') {
+                lastUser = i;
+                break;
+            }
+        }
+        const startedAt =
+            lastUser >= 0 ? Date.parse((messages[lastUser] as { timestamp: string }).timestamp) : NaN;
+        const toolCount = messages.slice(lastUser + 1).filter((m) => m.kind === 'tool').length;
+        return { startedAt, toolCount };
+    }, [messages]);
+    const showStopNudge =
+        isBusy &&
+        (turnStats.toolCount >= STOP_NUDGE_TOOL_CALLS ||
+            (Number.isFinite(turnStats.startedAt) && nowMs - turnStats.startedAt >= STOP_NUDGE_MS));
 
     const handleClear = () => {
         // Aborts any in-flight turn, clears the internals, resets the reactive
@@ -1285,6 +1353,20 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                             </div>
                         )}
 
+                        {showStopNudge && (
+                            <div className="flex items-center gap-2 text-xs text-gray-500">
+                                Still working on this.
+                                <button
+                                    type="button"
+                                    onClick={handleStop}
+                                    className="underline underline-offset-2 hover:text-gray-800"
+                                >
+                                    Stop
+                                </button>
+                                if it&rsquo;s not what you need.
+                            </div>
+                        )}
+
                         {routeCtaNode}
                     </div>
 
@@ -1311,13 +1393,25 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                                 }}
                                 className="flex-1 rounded-xl border-2 border-gray-200 focus:border-primary/50 focus:ring-4 focus:ring-primary/10 transition-all duration-200 min-h-[48px] max-h-[200px] py-3"
                             />
-                            <Button
-                                type="submit"
-                                disabled={isStreaming || !!pendingPoll || !draft.trim()}
-                                className="rounded-xl shadow-md hover:shadow-lg transition-all duration-200 h-10"
-                            >
-                                <Send className="w-4 h-4 text-white" />
-                            </Button>
+                            {isBusy ? (
+                                <Button
+                                    type="button"
+                                    onClick={handleStop}
+                                    title="Stop the assistant (keeps the conversation)"
+                                    aria-label="Stop"
+                                    className="rounded-xl shadow-md hover:shadow-lg transition-all duration-200 h-10"
+                                >
+                                    <Square className="w-4 h-4 text-white fill-white" />
+                                </Button>
+                            ) : (
+                                <Button
+                                    type="submit"
+                                    disabled={!draft.trim()}
+                                    className="rounded-xl shadow-md hover:shadow-lg transition-all duration-200 h-10"
+                                >
+                                    <Send className="w-4 h-4 text-white" />
+                                </Button>
+                            )}
                             <Button
                                 type="button"
                                 variant="outline"
@@ -1347,6 +1441,50 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
         </div>
     );
 });
+
+/**
+ * Put the turn's chart on its final agent message (the last agent bubble after
+ * the last user turn), or on the turn's last tool pill when the turn ended
+ * without a message.
+ */
+function attachTurnChart(prev: DisplayMessage[], chart: ChatChart): DisplayMessage[] {
+    let lastUser = -1;
+    for (let i = prev.length - 1; i >= 0; i -= 1) {
+        if (prev[i].kind === 'user') {
+            lastUser = i;
+            break;
+        }
+    }
+    for (const kind of ['agent', 'tool'] as const) {
+        for (let i = prev.length - 1; i > lastUser; i -= 1) {
+            if (prev[i].kind === kind) {
+                const next = prev.slice();
+                next[i] = { ...prev[i], chart } as DisplayMessage;
+                return next;
+            }
+        }
+    }
+    return prev;
+}
+
+function ChartBlock({ chart }: { chart: ChatChart }) {
+    if (chart.dataset) {
+        return (
+            <ChartPanel
+                dataset={chart.dataset}
+                initialEncoding={chart.encoding}
+                initialSpec={chart.spec}
+                defaultControlsOpen
+            />
+        );
+    }
+    if (!chart.spec) return null;
+    return (
+        <div className="bg-white border border-gray-200 rounded-md p-2">
+            <VegaLiteChart spec={chart.spec} />
+        </div>
+    );
+}
 
 function MessageRow({
     msg,
@@ -1389,13 +1527,18 @@ function MessageRow({
         // inside a chat bubble).
         const html = renderMarkdownSafe(msg.content);
         return (
-            <div className="flex justify-start animate-in fade-in slide-in-from-bottom-2 duration-300">
+            <div className="flex flex-col items-start animate-in fade-in slide-in-from-bottom-2 duration-300">
                 <div className="max-w-[80%] rounded-2xl px-4 py-3 shadow-sm bg-gray-50 text-gray-900 border border-gray-200/50">
                     <div
                         className="text-sm leading-relaxed prose prose-sm agent-prose max-w-none [&_a]:text-blue-600 [&_a]:underline [&_a]:underline-offset-2 [&_a:hover]:text-blue-700"
                         dangerouslySetInnerHTML={{ __html: html }}
                     />
                 </div>
+                {msg.chart && (msg.chart.dataset || msg.chart.spec) && (
+                    <div className="w-full mt-2">
+                        <ChartBlock chart={msg.chart} />
+                    </div>
+                )}
             </div>
         );
     }
@@ -1439,9 +1582,11 @@ function MessageRow({
         // body, in-flight pills, etc.).
         const chart = msg.chart;
         const hasChart = !!chart && (!!chart.dataset || !!chart.spec);
+        const sqlResult = msg.status === 'success' ? asSqlResult(msg.toolResult) : null;
         const showRawOutput =
             !isGenie &&
             !hasChart &&
+            !sqlResult &&
             (msg.status === 'success' || msg.status === 'error') &&
             msg.toolResult !== undefined &&
             msg.toolResult !== null;
@@ -1464,22 +1609,10 @@ function MessageRow({
                 )}
                 {hasChart && chart && (
                     <div className="w-full mt-2">
-                        {chart.dataset ? (
-                            <ChartPanel
-                                dataset={chart.dataset}
-                                initialEncoding={chart.encoding}
-                                initialSpec={chart.spec}
-                                defaultControlsOpen
-                            />
-                        ) : (
-                            chart.spec && (
-                                <div className="bg-white border border-gray-200 rounded-md p-2">
-                                    <VegaLiteChart spec={chart.spec} />
-                                </div>
-                            )
-                        )}
+                        <ChartBlock chart={chart} />
                     </div>
                 )}
+                {sqlResult && <SqlResultPanel result={sqlResult} showRows={!hasChart} />}
                 {showRawOutput && (
                     <ToolRawOutputPanel
                         toolName={msg.toolName}

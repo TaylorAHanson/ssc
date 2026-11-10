@@ -1,8 +1,8 @@
 # Discover data
 
-The **Discover** page is the data catalog. Open it from **View & Search
-Catalog** in the sidebar to browse data by business area, search for a
-specific asset, and see where data comes from and who looks after it.
+The **Discover** page is the data catalog. Open it from **Discover** in the
+sidebar to browse data by business area, search for a specific asset, and
+see where data comes from and who looks after it.
 
 ## Search the catalog
 
@@ -10,9 +10,25 @@ Type in **Search metric views, tables, dashboards…** at the top of the page.
 Results appear as you type. Press `/` anywhere on the page to jump to the
 search box.
 
-If nothing matches, or you'd rather describe what you need, press Enter or
-**Ask AI**. An **Agent Assistant** panel opens on the page and answers from
-the catalog. You can ask follow-up questions there.
+You don't need the exact name. Any word you type can match, and the best
+matches come first: an asset with all your words beats one with only some,
+and a word in the name counts for more than one in the description, tags,
+KPIs, owner, catalog or schema. Plurals and endings are ignored, so
+"shipments" also finds "shipment", and words like "the" or "data" are
+skipped. Certified assets come first among equally good matches.
+
+Inside a domain or subdomain, the search box covers only that area, across
+every type including dashboards and apps. If it finds little there but more
+elsewhere, a note above the results offers **Search the whole catalog**. Your
+search stays in place as you move between a domain and its subdomains, and
+it's part of the page's link, so a copied link or a reload keeps it.
+
+Pressing Enter only searches. To describe what you need instead, select
+**Ask the assistant** next to the search box. An **Assistant** panel opens on
+the page. It knows which domain, subdomain and asset you have open and what's
+in the search box, so you can ask about "this table" or "these dashboards".
+Keep asking follow-up questions there, or select **Open in full chat** to
+carry the conversation over to the main chat.
 
 ## Browse by business area
 
@@ -67,6 +83,12 @@ these tabs:
 - **Columns** (or **Schema** for a dataset): the fields it contains.
 - **Lineage**: where the data comes from and what uses it. Click **Sources**
   on a table to see what feeds it, or **Consumers** to see what depends on it.
+  If Databricks doesn't let {{brand_name}} read live lineage on your behalf,
+  the tab reads Databricks' lineage records with your own permissions
+  instead. If that isn't possible either, it shows what the last catalog
+  refresh recorded and says so. A note on the tab tells you which one you're
+  seeing. None of this means you lack access to the table: if
+  **Data preview** shows rows, you can query it.
 - **Data preview** (tables and views): a sample of the rows, read with your
   own permissions, so you only see data you're allowed to query. Search
   across all columns, click a column header to sort, or type in a column's

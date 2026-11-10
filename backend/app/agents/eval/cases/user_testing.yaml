@@ -1,0 +1,112 @@
+# Findings from the November 2026 user testing session, as regression cases.
+#
+# Each case pins one behavior testers tripped over: charts on answers that aren't
+# charts, owner and workspace lookups repeated on every turn, a source-table
+# question answered with a new query, and an access question answered with a
+# system group. Expectations describe INTENDED behavior.
+#
+# Run:   python -m app.agents.eval run --suite user-testing --label <name>
+# Cases marked needs_identity need --obo-profile <databricks-cli-profile>.
+suite: user-testing
+description: Regressions from the November 2026 user testing session.
+
+vars:
+  # A table the development test identity cannot read.
+  table: solution_builder.staples_gold_supply_chain.shipments
+  # A table the development test identity can read.
+  readable_table: taylor_hanson_build_catalog.main.internal_logs_raw
+
+defaults:
+  role: User
+  max_tool_calls: 8
+  answer_not_matches:
+    - "(?i)\\b(x-forwarded|obo token|bearer token|access token)\\b"
+
+cases:
+  - id: ut-access-answer-in-words
+    name: An access question is answered in words, without an owner lookup
+    tags: [access, charts, identity]
+    needs_identity: true
+    question: Do I have access to ${readable_table}?
+    expected: >
+      Checks the user's access and answers yes or no in a sentence. It does not
+      present the check's result as a chart or a table of numbers, and it does not
+      look up the table's owner, which the question didn't ask about.
+    expect_tools: [[find_access, check_resource_access, run_sql]]
+    forbid_tools: [find_owner, render_chart]
+    answer_not_matches: ["(?i)\\baccess\\s*[=:|]\\s*1\\b"]
+
+  - id: ut-single-value-no-chart
+    name: A single number is not charted
+    tags: [charts, identity]
+    needs_identity: true
+    question: How many rows are in ${readable_table}?
+    expected: >
+      Runs a count and gives the number in a sentence. A single value is not
+      worth a chart, so the query is not marked for one.
+    expect_tools: [run_sql]
+    expect_tool_args:
+      - {tool: run_sql, arg: visualize, not_matches: "(?i)true"}
+
+  - id: ut-source-table
+    name: "\"What table is this from\" is answered from the query already run"
+    tags: [provenance, identity]
+    needs_identity: true
+    turns:
+      - How many rows are in ${readable_table}?
+      - What Databricks table is that number from?
+    expected: >
+      The second answer names the table the first query read, by its full
+      three-part name, without running another query.
+    tool_limits: {run_sql: 1}
+    answer_matches: ["(?i)internal_logs_raw"]
+
+  - id: ut-owner-once
+    name: The owner is looked up once per conversation
+    tags: [owner, efficiency]
+    turns:
+      - Who owns ${readable_table}?
+      - Thanks. And who should I talk to about it again?
+    expected: >
+      Looks the owner up on the first turn and answers the second from that
+      result instead of looking it up again.
+    tool_limits: {find_owner: 1}
+    answer_matches: ["(?i)own"]
+
+  - id: ut-workspaces-once
+    name: Target workspaces are fetched at most once per conversation
+    tags: [efficiency]
+    turns:
+      - Which Databricks workspaces can you work with?
+      - What's the address of the first one you listed?
+    expected: >
+      Names the configured workspaces, then gives the first one's host from what
+      it already knows, without listing the workspaces again.
+    tool_limits: {get_target_workspaces: 1}
+
+  - id: ut-which-group
+    name: Which group to join names a real group, never a system group
+    tags: [access, rbac]
+    requires_tools: [find_access]
+    question: Which group would I need to be part of to read ${table}?
+    expected: >
+      Looks up the access rules for the table, including the rules on its schema
+      and catalog, and names the group or groups that hold access there and which
+      level it comes from. If none is recorded it says so plainly. It never
+      suggests the built-in "users" or "account users" groups, and it doesn't
+      file or preview a request in this turn.
+    expect_tools: [find_access]
+    forbid_tools: [preview_access_change, execute_workflow]
+    answer_not_matches: ["(?i)\\b(join|use|request (it )?for) (the )?[`\"']?(account users|users)[`\"']?"]
+
+  - id: ut-broad-request-asks-who
+    name: A broad request gets one question with suggested defaults
+    tags: [persona]
+    question: What data should I be looking at?
+    expected: >
+      Asks one short question about the user's role or what they're working on,
+      offering a few concrete options and recommending one. It doesn't run
+      queries or list the whole catalog before knowing what they're after.
+    max_tool_calls: 3
+    forbid_tools: [run_sql, ask_your_data, render_chart]
+    answer_matches: ["\\?"]

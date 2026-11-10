@@ -777,6 +777,105 @@ def test_find_access_on_a_securable_includes_parent_rows(db):
     assert [(m.rule_id, m.via) for m in schema_only.matches] == [(sch.id, "direct")]
 
 
+def _open_request_for(db, request_id, rule, *, asked, prerequisites=()):
+    """An open request asking for ``asked`` (item dicts) whose prepared change edits ``rule``."""
+    db.add(RequestModel(id=request_id, type="rbac_access_change", status="pending_approval", state_context={
+        "prepared_change": {
+            "items": [*prerequisites, *asked],
+            "added_prerequisites": list(prerequisites),
+            "diffs": [{"rule_id": rule.id, "after": {
+                "securable_type": rule.securable_type, "catalog": rule.catalog, "schema_name": rule.schema_name,
+                "object_name": rule.object_name}}],
+        }}))
+    db.commit()
+
+
+def test_an_overlap_on_a_shared_prerequisite_row_is_a_note_naming_the_other_object(db):
+    seed(db, position=1, kind="catalog", schema="", principals="g_new;g_shippers", privileges="USE_CATALOG")
+    schema_row = seed(db, position=2, principals="g_shippers", privileges="USE_SCHEMA")
+    use_schema = item(principal="g_shippers", privileges=["USE_SCHEMA"]).model_dump(mode="json")
+    shipments = item(principal="g_shippers", securable_type="table", object_name="shipments").model_dump(mode="json")
+    _open_request_for(db, "req-y", schema_row, asked=[shipments], prerequisites=[use_schema])
+
+    [proposal] = prepare(db, item(securable_type="view", object_name="fiscal_month")).proposals
+    [overlap] = [f for f in proposal.findings if f.code == "inflight_overlap"]
+    assert overlap.severity == "info"
+    assert "req-y (for table sales_dev.orders.shipments)" in overlap.message
+    assert "the rule on schema sales_dev.orders" in overlap.message
+    assert "This change needs it only as a prerequisite" in overlap.message
+    assert not proposal.blocked
+
+
+def test_an_overlap_on_the_object_both_requests_ask_for_is_a_warning(db):
+    seed(db, position=1, kind="catalog", schema="", principals="g_new;g_other", privileges="USE_CATALOG")
+    schema_row = seed(db, position=2)
+    asked = item(principal="g_other").model_dump(mode="json")
+    _open_request_for(db, "req-z", schema_row, asked=[asked])
+
+    [proposal] = prepare(db, item()).proposals
+    [overlap] = [f for f in proposal.findings if f.code == "inflight_overlap"]
+    assert overlap.severity == "warn"
+    assert "req-z (for schema sales_dev.orders) will also change the rule on schema sales_dev.orders" in (
+        overlap.message)
+
+    # The request's own prepared change is no overlap.
+    assert ledger.without_own_overlap(db, [overlap], "req-z") == []
+
+
+def test_a_view_governed_from_its_schema_names_the_schema_group_to_join(db):
+    seed(db, position=1, kind="catalog", schema="", principals="g_readers;account users", privileges="USE_CATALOG")
+    seed(db, position=2, principals="g_analysts;users")
+    seed(db, position=3, schema="returns", principals="g_other")
+
+    for name in (
+        dict(securable_type="view", catalog="sales_dev", schema_name="orders", object_name="fiscal_month"),
+        dict(object_name="sales_dev.orders.fiscal_month"),
+        dict(schema_name="sales_dev.orders", object_name="fiscal_month"),
+    ):
+        result = ledger.find_access(db, environment="dev", **name)
+        assert result.governed_by == "schema", name
+        assert [(g.principal_name, g.level, g.securable) for g in result.groups_to_join] == [
+            ("g_analysts", "schema", "sales_dev.orders"),
+            ("g_readers", "catalog", "sales_dev"),
+        ], name
+
+
+def test_groups_to_join_start_with_the_object_and_hint_at_its_neighbours(db):
+    seed(db, position=1, principals="g_analysts")
+    seed(db, position=2, kind="table", obj="shipments", principals="g_shippers", privileges="SELECT")
+    result = ledger.find_access(db, catalog="sales_dev", schema_name="orders", object_name="shipments")
+    assert result.governed_by == "table"
+    assert [(g.principal_name, g.level) for g in result.groups_to_join] == [
+        ("g_shippers", "direct"), ("g_analysts", "schema")]
+
+    # Nothing on the object or its schema: groups on other tables there are a hint.
+    seed(db, position=3, kind="table", catalog="ops", schema="logs", obj="raw", principals="g_ops;sp-etl",
+         ptype="group")
+    seed(db, position=4, kind="table", catalog="ops", schema="logs", obj="clean", principals="sp-loader",
+         ptype="service principal")
+    nearby = ledger.find_access(db, catalog="ops", schema_name="logs", object_name="events")
+    assert nearby.matches == [] and nearby.governed_by is None
+    assert [(g.principal_name, g.level, g.securable) for g in nearby.groups_to_join] == [
+        ("g_ops", "nearby", "ops.logs.raw"), ("sp-etl", "nearby", "ops.logs.raw")]
+
+    # A principal filter is a different question, with no groups to join.
+    assert ledger.find_access(db, catalog="sales_dev", schema_name="orders", object_name="shipments",
+                              principals_in=["g_shippers"]).groups_to_join == []
+
+
+def test_split_securable_name():
+    split = ledger.split_securable_name
+    assert split(None, None, "c.s.t") == ("c", "s", "t")
+    assert split("c", None, "s.t") == ("c", "s", "t")
+    assert split(None, "c.s", "t") == ("c", "s", "t")
+    assert split("c.s.t", None, None) == ("c", "s", "t")
+    assert split("`c`.`s`", None, None) == ("c", "s", "")
+    # A part that disagrees with a field already given, or a folder path, stays as it was.
+    assert split("other", None, "c.s.t") == ("other", "", "c.s.t")
+    assert split(None, None, "/Users/a.b") == ("", "", "/Users/a.b")
+    assert split(None, None, "a.b.c.d") == ("", "", "a.b.c.d")
+
+
 def test_find_access_for_a_principal(db):
     seed(db, position=1, kind="catalog", schema="", principals="g_new", privileges="USE_CATALOG")
     seed(db, position=2, principals="g_analysts;G_NEW")
@@ -830,9 +929,10 @@ def test_find_access_suggests_a_schema_asked_for_as_a_catalog(db):
         ("schema", "enterprise_dev", "Platinum_Insights", ["dev"]),
     ]
 
+    # A full name given as the catalog is spread across catalog, schema and table.
     dotted = ledger.find_access(db, catalog="enterprise_prd.platinum_insights.sales", environment="prd")
-    assert ("table", "enterprise_prd", "platinum_insights", "sales") in [
-        (s.securable_type, s.catalog, s.schema_name, s.object_name) for s in dotted.suggestions]
+    assert [(m.securable_type, m.object_name, m.via) for m in dotted.matches] == [
+        ("table", "sales", "direct"), ("schema", "", "parent")]
 
     partial = ledger.find_access(db, catalog="platinum")
     assert {s.schema_name for s in partial.suggestions} == {"platinum_insights", "Platinum_Insights"}

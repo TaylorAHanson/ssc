@@ -7,7 +7,7 @@ This workflow allows users to request the creation of a new folder in the Worksp
 
 ## Information to Gather
 1. **Target Workspace**: Which workspace should this folder be created in?
-    *   *Action*: You MUST use `get_target_workspaces` to find the exact `host` URL for the requested workspace.
+    *   *Action*: Take the exact `host` URL for the requested workspace from the target workspace list you were given (call `get_target_workspaces` only if it isn't there).
 2. **Folder Path**: The full path where the folder should be created (e.g., `/Shared/Projects/MyProject`).
     *   *Existence Check (REQUIRED)*: Before calling `execute_workflow`, you MUST use `check_workspace_path` (passing the `target_host`) to verify the folder doesn't already exist.
 3. **Justification**: Why this folder is needed.

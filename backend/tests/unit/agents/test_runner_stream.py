@@ -335,6 +335,124 @@ def _lookup_tool_call(i: int, query: str = "edh onboarding") -> Dict[str, Any]:
     }
 
 
+def _workspaces_tool() -> _FakeTool:
+    tool = _FakeTool(
+        name="get_target_workspaces",
+        result={"count": 1, "workspaces": [{"name": "dev", "host": "https://dev.example.com"}]},
+    )
+    tool.reuse_in_conversation = True
+    return tool
+
+
+def _history_with_workspaces_call(content: str) -> List[Dict[str, Any]]:
+    return [
+        {"role": "user", "content": "list my tables"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": "tc-earlier",
+                "type": "function",
+                "function": {"name": "get_target_workspaces", "arguments": "{}"},
+            }],
+        },
+        {"role": "tool", "tool_call_id": "tc-earlier", "name": "get_target_workspaces", "content": content},
+        {"role": "assistant", "content": "Here they are."},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_conversation_wide_lookup_is_reused_from_an_earlier_turn():
+    """get_target_workspaces runs once per conversation, not once per turn."""
+    tool = _workspaces_tool()
+    calls = 0
+
+    async def _execute(**kwargs):
+        nonlocal calls
+        calls += 1
+        return tool._result
+
+    tool.execute = _execute  # type: ignore[method-assign]
+    runner = _make_runner(
+        tools=[tool],
+        scripted=[
+            _FakeLLMResponse(tool_calls=[{
+                "id": "tc-now", "type": "function",
+                "function": {"name": "get_target_workspaces", "arguments": {}},
+            }]),
+            _FakeLLMResponse(content="dev is at https://dev.example.com"),
+        ],
+    )
+    history = _history_with_workspaces_call('{"count": 1, "workspaces": [{"name": "dev"}]}')
+
+    events = [ev async for ev in runner.run_stream(query="which workspace?", history=history)]
+
+    assert calls == 0
+    assert not [ev for ev in events if isinstance(ev, ToolCallEvent)]
+    replayed = [m for m in runner.llm_client.calls[1]["messages"] if m.get("tool_call_id") == "tc-now"]
+    assert replayed and '"dev"' in replayed[0]["content"]
+    assert [ev for ev in events if isinstance(ev, MessageEvent)]
+
+
+def test_the_default_prompt_lists_the_target_workspaces():
+    """With the workspaces in the prompt, most turns never need the tool."""
+    from types import SimpleNamespace
+
+    info = [SimpleNamespace(name="dev", environment="dev", host="https://dev.example.com")]
+    with patch("app.core.workspaces.get_target_workspace_info", return_value=info):
+        runner = AgentRunner(tools=[_workspaces_tool()], user_identity={"email": "a@b.c"})
+
+    assert "TARGET WORKSPACES" in runner.system_prompt
+    assert "- dev (dev): https://dev.example.com" in runner.system_prompt
+
+
+@pytest.mark.asyncio
+async def test_a_failed_earlier_lookup_is_run_again():
+    """Only a good earlier result stands in for a rerun."""
+    tool = _workspaces_tool()
+    runner = _make_runner(
+        tools=[tool],
+        scripted=[
+            _FakeLLMResponse(tool_calls=[{
+                "id": "tc-now", "type": "function",
+                "function": {"name": "get_target_workspaces", "arguments": {}},
+            }]),
+            _FakeLLMResponse(content="done"),
+        ],
+    )
+    history = _history_with_workspaces_call("Tool error: timed out")
+
+    events = [ev async for ev in runner.run_stream(query="which workspace?", history=history)]
+
+    assert len([ev for ev in events if isinstance(ev, ToolCallEvent)]) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_lookup_repeated_once_in_a_turn_gets_the_earlier_result_and_continues():
+    """One repeat (say find_access before a preview) must not cut the turn short."""
+    lookup = _FakeTool(name="find_access", result={"matches": [{"principal_name": "grp_x"}]})
+    lookup.is_lookup = True
+    preview = _FakeTool(name="preview_access_change", result={"ok": True})
+    call = {"type": "function", "function": {"name": "find_access", "arguments": {"catalog": "c"}}}
+    runner = _make_runner(
+        tools=[lookup, preview],
+        scripted=[
+            _FakeLLMResponse(tool_calls=[{**call, "id": "a"}]),
+            _FakeLLMResponse(tool_calls=[{**call, "id": "b"}]),
+            _FakeLLMResponse(tool_calls=[{
+                "id": "c", "type": "function",
+                "function": {"name": "preview_access_change", "arguments": {}},
+            }]),
+        ],
+    )
+    runner.max_iterations = 5
+
+    events = [ev async for ev in runner.run_stream(query="give grp_x access")]
+
+    names = [ev.name for ev in events if isinstance(ev, ToolCallEvent)]
+    assert names == ["find_access", "preview_access_change"]
+
+
 @pytest.mark.asyncio
 async def test_duplicate_lookup_calls_are_skipped_and_the_agent_wraps_up():
     """The model repeating the same catalog search must not fan out 15 pills.

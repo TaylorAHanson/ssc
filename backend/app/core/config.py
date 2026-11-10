@@ -547,6 +547,9 @@ class Settings(BaseSettings):
     # Default is "data_owner". If blank or not present on an asset, falls back to the direct owner.
     # Editable in Admin -> Settings.
     DATA_ASSET_OWNER_TAG: str = os.getenv("DATA_ASSET_OWNER_TAG", "data_owner")
+    # Tag naming the system a table's data comes from (e.g. "SAP"), shown with
+    # answers the assistant computes from it. Editable in Admin -> Settings.
+    DATA_ASSET_SOURCE_SYSTEM_TAG: str = os.getenv("DATA_ASSET_SOURCE_SYSTEM_TAG", "source_system")
     DATA_ASSET_SYNC_CRON: str = "0 * * * *"
     # How far back the sync looks in system.access.table_lineage for dashboards
     # that read each metric view (lineage keeps a rolling year). A dashboard

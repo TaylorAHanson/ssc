@@ -18,8 +18,9 @@ Admin screens appear in two sidebar sections, depending on your role:
 | Control Tower | **Context Catalog**, **Workflow Studio**, **Tool Registry**, **Preview Features**, **Training Studio** | Super, application and governance admins. Governance admins see the Tool Registry read-only. |
 
 Roles come from the groups people belong to. See
-[Roles & Access](settings-and-access.md#roles--access) to change who gets
-which role.
+[Role Mappings](settings-and-access.md#role-mappings) to change who gets
+which role, and [Role Permissions](settings-and-access.md#role-permissions) for
+what each role can do.
 
 ## The Admin page
 

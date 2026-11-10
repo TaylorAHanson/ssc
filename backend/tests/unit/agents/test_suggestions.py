@@ -286,6 +286,39 @@ def test_suggestions_are_serialized_only_when_present():
 
 
 @pytest.mark.asyncio
+async def test_the_stream_stops_the_turn_when_the_client_disconnects(monkeypatch):
+    """Stop in the chat closes the connection; the runner must not keep going."""
+    from app.api.v1 import agent as agent_api
+
+    produced: list = []
+
+    class _Runner:
+        async def run_stream(self, **_kwargs):
+            for i in range(5):
+                produced.append(i)
+                yield MessageEvent(content=f"step {i}")
+            yield DoneEvent()
+
+    async def _build(*_args, **_kwargs):
+        return _Runner(), [], "unified"
+
+    async def _gone():
+        return True
+
+    monkeypatch.setattr(agent_api, "_build_runner_and_history", _build)
+    response = await agent_api.stream_conversation(
+        agent_api.ConversationRequest(query="go"),
+        SimpleNamespace(state=SimpleNamespace(token=None), is_disconnected=_gone),
+        db=None,
+        current_user=SimpleNamespace(email="a@example.com"),
+    )
+    chunks = [chunk async for chunk in response.body_iterator]
+
+    assert chunks == []
+    assert produced == [0]
+
+
+@pytest.mark.asyncio
 async def test_the_route_rewrite_keeps_the_suggestions(monkeypatch):
     from app.api.v1 import agent as agent_api
 

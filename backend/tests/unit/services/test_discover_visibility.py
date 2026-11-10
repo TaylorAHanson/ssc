@@ -189,6 +189,46 @@ def test_lineage_drops_hidden_neighbours(db):
     assert out["downstreams"] == []
 
 
+_NO_LINEAGE_SCOPE = RuntimeError("Provided OAuth token does not have required scopes: unity-catalog")
+
+
+def test_lineage_outside_the_apps_scopes_reads_the_system_table_as_the_user(db):
+    from databricks.sdk.service.sql import StatementState
+
+    client = MagicMock()
+    client.api_client.do.side_effect = _NO_LINEAGE_SCOPE
+    client.statement_execution.execute_statement.return_value = SimpleNamespace(
+        status=SimpleNamespace(state=StatementState.SUCCEEDED),
+        result=SimpleNamespace(data_array=[
+            ["main.raw.orders", "TABLE", "main.fin.visible", "TABLE"],
+            ["main.secret.b", "TABLE", "main.fin.visible", "TABLE"],
+            ["main.fin.visible", "TABLE", "main.fin.mv_visible", "METRIC_VIEW"],
+        ]),
+    )
+    with patch.object(settings, "DATABRICKS_WAREHOUSE_ID", "wh"), \
+            patch("app.core.workspaces.uc_client_for", return_value=(MagicMock(), client)):
+        out = api.get_databricks_table_lineage("main.fin.visible", SimpleNamespace(state=SimpleNamespace(token="t")), db=db)
+    assert out["source"] == "system_table" and out["error"] is None
+    assert [u["name"] for u in out["upstreams"]] == ["main.raw.orders"]
+    assert [d["name"] for d in out["downstreams"]] == ["main.fin.mv_visible"]
+    params = client.statement_execution.execute_statement.call_args.kwargs["parameters"]
+    assert params[0].value == "main.fin.visible"
+
+
+def test_lineage_falls_back_to_what_the_sync_recorded_and_says_so(db):
+    client = MagicMock()
+    client.api_client.do.side_effect = _NO_LINEAGE_SCOPE
+    client.statement_execution.execute_statement.side_effect = RuntimeError("no SELECT on system.access")
+    req = SimpleNamespace(state=SimpleNamespace(token="t"))
+    with patch.object(settings, "DATABRICKS_WAREHOUSE_ID", "wh"), \
+            patch("app.core.workspaces.uc_client_for", return_value=(MagicMock(), client)):
+        mv = api.get_databricks_table_lineage("main.fin.mv_visible", req, db=db)
+        source = api.get_databricks_table_lineage("main.fin.visible", req, db=db)
+    assert mv["error_kind"] == "scope_missing" and mv["source"] == "catalog_cache" and mv["as_of"]
+    assert [u["name"] for u in mv["upstreams"]] == ["main.fin.visible"]
+    assert [d["name"] for d in source["downstreams"]] == ["main.fin.mv_visible"]
+
+
 def test_accessible_ids_skip_hidden_assets(db):
     req = SimpleNamespace(state=SimpleNamespace(token="t"))
     provider = MagicMock()

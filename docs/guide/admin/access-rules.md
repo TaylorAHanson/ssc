@@ -279,7 +279,8 @@ uses:
   `CREATE_CATALOG`, `CREATE_EXTERNAL_LOCATION`, `CREATE_STORAGE_CREDENTIAL`,
   `CREATE_CONNECTION`, `CREATE_SHARE`, `CREATE_RECIPIENT` and `CREATE_PROVIDER`.
 - **System groups** nobody may change, the **Default owner** and **Naming
-  rules**.
+  rules**. The assistant also never suggests a system group when someone asks
+  which group to join, because everyone is already in it.
 - **Header aliases**, for a renamed workbook column, **Remove duplicate rows
   on import** (on by default), and **Allow reset and re-import**.
 

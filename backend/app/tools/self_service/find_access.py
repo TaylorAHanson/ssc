@@ -1,12 +1,16 @@
 """
 Tool to look up who holds what in the Access Rules ledger (ADR 0005 D9).
 """
+import logging
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from app.core.config import settings
 from app.services.approval_scope import parse_csv
 from app.tools.mcp import tool
+
+logger = logging.getLogger(__name__)
 
 
 _SPLIT = " Split a dotted name like 'catalog.schema.table' across catalog, schema_name and object_name."
@@ -54,6 +58,16 @@ _NOTE = (
     "whether access is live right now. Call these 'the access rules'; don't say 'desired state' or 'ledger'."
 )
 
+_GROUPS_NOTE = (
+    "groups_to_join lists the groups that grant access here, narrowest first, and governed_by says the level "
+    "the rules sit at. level='schema' or 'catalog' means the securable is governed from that parent: joining "
+    "the group covers it and everything else there, so say that. level='nearby' is a group on another object "
+    "in the same schema; it does NOT grant this one, but its owners are who to ask. level='tag' comes from the "
+    "table's access-group tag in the catalog. To answer 'which group do I need?', name the first group, its "
+    "level and the securable it's on, and use that group in any request. Never suggest a built-in group such "
+    "as 'users' or 'account users'."
+)
+
 _TRY_SUGGESTIONS = (
     "Nothing matched as asked, but `suggestions` lists securables with that name at another level or in "
     "another environment (a name given as a catalog may be a schema or table). If one clearly fits, look it "
@@ -77,12 +91,14 @@ _NOTHING_FOUND = (
         "unsure whether a name is a catalog, schema or table, pass your best guess: when nothing matches, the "
         "result suggests securables with that name at any level. Each rule is flagged held_by_you when it is "
         "held by a group the signed-in user is in, so this also answers 'do I have access to X?'; pass mine=true "
-        "alone for 'what do I have access to?'."
+        "alone for 'what do I have access to?'. For 'which group do I need?', name the table: groups_to_join "
+        "lists the groups that grant it, including ones on its schema or catalog when it's governed from there."
     ),
     args_schema=FindAccessInput,
     feature_flag="rbac",
     friendly_label="Looking up access rules",
     friendly_completion_label="Looked up access rules",
+    is_lookup=True,
 )
 def find_access(
     securable_type: Optional[str] = None,
@@ -100,12 +116,18 @@ def find_access(
     from app.services.rbac import ledger
 
     email = (kwargs.get("_user_email") or "").strip().lower()
-    # The signed-in user's own email leads their group list; only the rest are groups.
+    # The signed-in user's own email leads their group list; only the rest are groups. Built-in
+    # groups everyone is in (RBAC_SYSTEM_GROUPS) never explain or grant access to a securable.
+    system = {g.strip().lower() for g in (settings.RBAC_SYSTEM_GROUPS or []) if g}
     my_groups: List[str] = [
-        g for g in parse_csv(kwargs.get("_user_entitlements")) if g.strip().lower() != email
+        g for g in parse_csv(kwargs.get("_user_entitlements"))
+        if g.strip().lower() != email and g.strip().lower() not in system
     ]
     mine_set = {g.lower() for g in my_groups}
     about_a_securable = any((securable_type, catalog, schema_name, object_name, workspace_name))
+    if not workspace_name:
+        catalog, schema_name, object_name = (
+            v or None for v in ledger.split_securable_name(catalog, schema_name, object_name))
 
     if mine and not my_groups:
         return {"ok": True, "matches": [], "count": 0, "truncated": False, "suggestions": [],
@@ -122,12 +144,16 @@ def find_access(
             object_name=object_name,
             workspace_name=workspace_name,
             principal_name=principal_name,
-            principals_in=my_groups if mine else None,
+            # On a named securable every rule is read and the user's are flagged instead, so the
+            # schema or catalog rules held by groups they aren't in still show what to join.
+            principals_in=my_groups if mine and not about_a_securable else None,
             environment=environment,
             # Read wide when the user's groups are known, so a rule of theirs isn't cut off
             # by the limit before it can be flagged and put first.
             limit=100 if mine_set else cap,
         )
+        if catalog and schema_name and object_name and not principal_name:
+            _add_tagged_access_group(db, result, f"{catalog}.{schema_name}.{object_name}")
     except ledger.LedgerError as exc:
         return {"ok": False, "error": str(exc)}
     finally:
@@ -136,6 +162,8 @@ def find_access(
     if mine_set:
         for m in result.matches:
             m.held_by_you = m.principal_name.strip().lower() in mine_set
+        for g in result.groups_to_join:
+            g.held_by_you = g.principal_name.strip().lower() in mine_set
         # Stable: the user's own rules first, each group's order otherwise kept.
         result.matches.sort(key=lambda m: not m.held_by_you)
         result.truncated = result.truncated or len(result.matches) > cap
@@ -144,9 +172,39 @@ def find_access(
     note = _NOTE
     if mine or about_a_securable:
         note += " " + (_YOURS_NOTE if mine_set else _NO_GROUPS_NOTE)
+    if result.groups_to_join:
+        note += " " + _GROUPS_NOTE
     out: Dict[str, Any] = {**result.model_dump(mode="json"), "count": len(result.matches), "note": note}
+    if not result.groups_to_join:
+        out.pop("groups_to_join", None)
+    if not result.governed_by:
+        out.pop("governed_by", None)
     if result.suggestions:
         out["next_step"] = _TRY_SUGGESTIONS
     elif not result.matches and about_a_securable:
         out["next_step"] = _NOTHING_FOUND
     return out
+
+
+def _add_tagged_access_group(db: Any, result: Any, full_name: str) -> None:
+    """Add the group named by the table's access-group tag in the catalog cache, if it isn't listed."""
+    from sqlalchemy import func
+
+    from app.db.data_asset import DataAssetModel
+    from app.models.rbac import GroupToJoin
+    from app.services.data_asset_owner import resolve_data_asset_owner
+
+    key = (settings.ACCESS_GROUP_TAG_KEY or "").strip()
+    if not key:
+        return
+    try:
+        asset = db.query(DataAssetModel).filter(func.lower(DataAssetModel.id) == full_name.lower()).first()
+        tagged = resolve_data_asset_owner(None, getattr(asset, "tags", None), owner_tag=key) if asset else None
+    except Exception:
+        logger.warning("Couldn't read the access-group tag for %s", full_name, exc_info=True)
+        return
+    if not isinstance(tagged, str) or not tagged.strip():
+        return
+    if any(g.principal_name.lower() == tagged.strip().lower() for g in result.groups_to_join):
+        return
+    result.groups_to_join.append(GroupToJoin(principal_name=tagged.strip(), level="tag", securable=full_name))

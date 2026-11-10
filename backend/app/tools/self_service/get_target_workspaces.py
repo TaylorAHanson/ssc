@@ -15,7 +15,8 @@ class GetTargetWorkspacesInput(BaseModel):
         "List configured target Databricks workspace host URLs for cross-workspace operations. "
         "Instant (reads app settings, with workspace_id/status when known)."
     ),
-    args_schema=GetTargetWorkspacesInput
+    args_schema=GetTargetWorkspacesInput,
+    reuse_in_conversation=True,
 )
 def get_target_workspaces() -> Dict[str, Any]:
     """

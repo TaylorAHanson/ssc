@@ -50,6 +50,7 @@ class McpTool:
         allow_service_principals: bool = False,
         available_when: Optional[Callable[[], bool]] = None,
         required_capability: Optional[str] = None,
+        reuse_in_conversation: bool = False,
     ):
         if required_capability:
             from app.core.capabilities import get_capability
@@ -82,6 +83,7 @@ class McpTool:
         self._success_predicate = success_predicate
         self._hide_result = hide_result
         self._is_lookup = is_lookup
+        self._reuse_in_conversation = reuse_in_conversation
         self._requires_identity = requires_identity
         self._allow_service_principals = allow_service_principals
         self._available_when = available_when
@@ -178,6 +180,16 @@ class McpTool:
         and skips duplicate argument sets.
         """
         return self._is_lookup
+
+    @property
+    def reuse_in_conversation(self) -> bool:
+        """Whether an earlier result for the same arguments stands for the whole conversation.
+
+        For lookups whose answer doesn't change between turns (configured
+        workspaces, who the user is, an object's owner). The runner hands the
+        model the earlier result instead of running the tool again.
+        """
+        return self._reuse_in_conversation
 
     @property
     def requires_identity(self) -> bool:
@@ -359,6 +371,7 @@ def tool(
     allow_service_principals: bool = False,
     available_when: Optional[Callable[[], bool]] = None,
     required_capability: Optional[str] = None,
+    reuse_in_conversation: bool = False,
 ):
     """
     Decorator to register a function as a tool.
@@ -391,6 +404,9 @@ def tool(
 
     Set ``is_lookup=True`` for knowledge-retrieval tools the runner should
     budget (duplicate-skip + per-turn cap via ``AGENT_MAX_LOOKUP_CALLS``).
+
+    Set ``reuse_in_conversation=True`` when a result for the same arguments
+    holds for the whole conversation (see ``McpTool.reuse_in_conversation``).
 
     Set ``requires_identity=True`` when the result depends on the caller, and
     ``allow_service_principals=True`` to let registered service principals call
@@ -459,6 +475,7 @@ def tool(
             allow_service_principals=allow_service_principals,
             available_when=available_when,
             required_capability=required_capability,
+            reuse_in_conversation=reuse_in_conversation,
         )
         
     return decorator

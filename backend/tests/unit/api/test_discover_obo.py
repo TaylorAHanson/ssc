@@ -53,6 +53,13 @@ def test_lineage_permission_error_is_the_users_own(user_client):
     assert out["upstreams"] == [] and out["downstreams"] == []
 
 
+def test_a_token_missing_a_scope_is_not_reported_as_the_user_lacking_access():
+    from app.api.v1.data_assets import _classify_uc_error
+
+    assert _classify_uc_error("Provided OAuth token does not have required scopes: unity-catalog") == "scope_missing"
+    assert _classify_uc_error("User does not have SELECT on Table 'main.hr.salaries'") == "permission_denied"
+
+
 def test_table_details_run_as_the_user(user_client):
     client, uc = user_client
     client.tables.get.return_value = SimpleNamespace(

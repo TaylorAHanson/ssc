@@ -244,7 +244,8 @@ def test_preparing_again_ignores_the_requests_own_rows_but_warns_about_others(db
 
     agent_request(db, "req-b", item(principal="g_two"))
     other = run_prepare(db, "req-b")
-    assert "Open access request req-a will also change this row." in other["report_markdown"]
+    assert "Open access request req-a" in other["report_markdown"]
+    assert "will also change the rule on schema sales\\_dev.orders" in other["report_markdown"]
     assert set(inflight.touched_rule_ids(db)[target.id]) == {"req-a", "req-b"}
 
 

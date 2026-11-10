@@ -15,6 +15,7 @@ from app.tools.mcp import tool
 from app.db.session import get_db
 from app.db.data_asset import DataAssetModel
 from app.db.legacy_dashboard import LegacyDashboardMappingModel
+from app.services import catalog_search
 from app.services.discover_domains import (
     EMPTY,
     OTHER_LABEL,
@@ -30,20 +31,6 @@ from app.services.discover_visibility import (
     load_visibility,
     visible_dashboards,
 )
-
-
-# Common filler words that would only add noise to a keyword scan.
-_STOPWORDS = {
-    "data", "table", "tables", "dataset", "datasets", "the", "a", "an", "info",
-    "information", "about", "show", "me", "list", "find", "get", "all", "for",
-    "of", "in", "on", "any", "what", "which", "is", "are", "do", "we", "have",
-}
-
-
-def _tokenize(query: str) -> List[str]:
-    """Split a free-text query into meaningful lowercase keywords."""
-    raw = re.split(r"[^a-zA-Z0-9]+", query.lower())
-    return [t for t in raw if len(t) >= 2 and t not in _STOPWORDS]
 
 
 # A fully-qualified Unity Catalog name: catalog.schema.table (backticks optional).
@@ -209,6 +196,7 @@ class SearchDataAssetsInput(BaseModel):
     args_schema=SearchDataAssetsInput,
     feature_flag="data_discovery",
     friendly_label="Scanning the data catalog...",
+    is_lookup=True,
 )
 def search_data_assets(
     query: str,
@@ -248,14 +236,17 @@ def search_data_assets(
         if certified_only:
             q = q.filter(DataAssetModel.certified.is_(True))
 
-        tokens = _tokenize(query)
-        if tokens:
-            # Match assets containing ANY token (OR), then rank by how many
-            # tokens hit so e.g. "cancel pushout" surfaces a table named
+        # One group per query word, holding its stem.
+        groups = catalog_search.term_groups(query)
+        tokens = [form for group in groups for form in group]
+        if groups:
+            # Match assets containing ANY word (OR), then rank by how many
+            # words hit so e.g. "cancel pushout" surfaces a table named
             # ...cancel_pushout above tables matching only one word.
             token_clauses = [
-                or_(*[col.ilike(f"%{tok}%") for col in search_cols], *_domain_hits(memberships, tok))
-                for tok in tokens
+                or_(*[col.ilike(catalog_search.like_pattern(form)) for col in search_cols for form in group],
+                    *[hit for form in group for hit in _domain_hits(memberships, form)])
+                for group in groups
             ]
             q = q.filter(or_(*token_clauses))
         else:
@@ -269,7 +260,7 @@ def search_data_assets(
         # A fully-qualified name that matches an asset's id leads, then name hits, then the rest.
         relevance = literal(0)
         for tok in tokens:
-            pat = f"%{tok}%"
+            pat = catalog_search.like_pattern(tok)
             relevance = relevance + case(
                 (or_(DataAssetModel.id.ilike(pat), DataAssetModel.table_name.ilike(pat)), 2), else_=0)
             relevance = relevance + case((or_(*[c.ilike(pat) for c in search_cols]), 1), else_=0)
@@ -291,7 +282,7 @@ def search_data_assets(
                 {"dashboard": m.dashboard, "status": m.status, "owner": m.owner})
         legacy_hits = {
             m.metric_view_id for m in legacy_rows
-            if any(t.lower() in m.dashboard.lower() for t in terms)
+            if any(t.lower() in catalog_search.normalized(m.dashboard) for t in terms)
         }
         missing = legacy_hits - {a.id for a in candidates}
         if missing:
@@ -306,7 +297,7 @@ def search_data_assets(
         candidates = vis.visible(candidates)
 
         def _score(asset: DataAssetModel) -> float:
-            if not tokens:
+            if not groups:
                 return 1.0
             tag_text = " ".join(asset.tags) if isinstance(asset.tags, list) else ""
             kpi_text = ""
@@ -329,15 +320,17 @@ def search_data_assets(
                 if v
             )
             legacy_text = " ".join(d["dashboard"] for d in legacy_by_mv.get(asset.id, []))
-            haystack = f"{haystack} {legacy_text.lower()}"
-            name_hay = f"{asset.id or ''} {asset.table_name or ''}".lower()
-            score = sum(1 for t in tokens if t in haystack)
+            haystack = catalog_search.normalized(f"{haystack} {legacy_text}")
+            name_hay = catalog_search.normalized(f"{asset.id or ''} {asset.table_name or ''}")
+            score = sum(catalog_search.group_weight(group, haystack) for group in groups)
             # The exact table named in the query always leads.
             if fqn and (asset.id or "").lower() == fqn:
                 score += 1000
+            if not score:
+                return 0.0
             # Boost matches that land in the name/FQN (more relevant than a
             # description mention) and give certified assets a slight edge.
-            score += sum(1 for t in tokens if t in name_hay)
+            score += sum(catalog_search.group_weight(group, name_hay) for group in groups)
             if asset.certified:
                 score += 0.5
             # Metric Views position over raw tables:
@@ -350,7 +343,10 @@ def search_data_assets(
                 score += 2.0
             return score
 
-        candidates.sort(key=_score, reverse=True)
+        scores = {id(a): _score(a) for a in candidates}
+        # The SQL prefilter matches inside words; drop rows that only did so by coincidence.
+        candidates = [a for a in candidates if scores[id(a)] > 0]
+        candidates.sort(key=lambda a: scores[id(a)], reverse=True)
         top = candidates[:limit]
         hidden_dashboards = hidden_linked_dashboards(top)
         assets = [_serialize(a, legacy_by_mv.get(a.id), vis, hidden_dashboards, memberships.get(a.id, EMPTY))

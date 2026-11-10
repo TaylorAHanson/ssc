@@ -70,6 +70,20 @@ async def test_run_sql_parses_typed_data_array():
 
 
 @pytest.mark.asyncio
+async def test_run_sql_says_how_the_answer_was_computed():
+    resp = _succeeded_response(["n"], [_typed("3")])
+    described = [{"name": "samples.bakehouse.x", "in_catalog": False}]
+    with patch("app.tools.data_chat.run_sql.call_dbsql_tool", new=AsyncMock(return_value=resp)), \
+            patch("app.tools.data_chat.run_sql.sql_provenance.describe_sources", return_value=described) as describe:
+        result = await run_sql.execute(sql="SELECT count(*) AS n FROM samples.bakehouse.x", _obo_token="tok")
+
+    assert result["sql"] == "SELECT count(*) AS n FROM samples.bakehouse.x"
+    assert result["statement_id"] == "stmt-1" and result["executed_at"]
+    assert result["source_tables"] == described
+    assert describe.call_args.args[1] == ["samples.bakehouse.x"]
+
+
+@pytest.mark.asyncio
 async def test_run_sql_polls_until_succeeded():
     pending = {
         "content": "",

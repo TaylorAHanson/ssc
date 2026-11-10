@@ -129,8 +129,9 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "help": "Max reasoning/tool loops the agent runs per turn."},
     {"group": "Agent", "section": "Limits & guardrails", "key": "AGENT_MAX_LOOKUP_CALLS",
      "label": "Max lookup calls per tool", "type": "int", "min": 1,
-     "help": "Per-turn cap on knowledge lookups (internal guidance search, Databricks docs). "
-             "Repeated calls with the same arguments are skipped. When the cap is reached "
+     "help": "Per-turn cap on lookups (internal guidance search, Databricks docs, catalog search, "
+             "owner and access-rule lookups). A repeated call with the same arguments gets the "
+             "earlier result instead of running again. When the cap is reached "
              "the agent answers from results it already has instead of searching again."},
     {"group": "Agent", "section": "Limits & guardrails", "key": "AGENT_MAX_RESPONSE_TOKENS",
      "label": "Max response tokens per turn", "type": "int", "min": 256,
@@ -227,6 +228,12 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
              "When this tag is present on an asset, its value is displayed as the owner instead of "
              "the direct Unity Catalog object owner. If the tag is not set or this setting is blank, "
              "falls back to the direct owner. Applies immediately — no restart needed."},
+    {"group": "Data Catalog", "key": "DATA_ASSET_SOURCE_SYSTEM_TAG", "label": "Source system tag",
+     "type": "string", "requires": ["features.data_discovery"],
+     "help": "Tag name that records which system a table's data comes from (e.g. 'source_system' "
+             "with a value such as 'SAP'). When the assistant answers from a query, it shows each "
+             "table's source system from this tag alongside its owner, certification and data quality. "
+             "Blank = don't show a source system. Applies immediately."},
     {"group": "Data Catalog", "key": "DATA_ASSET_LINEAGE_LOOKBACK_DAYS",
      "label": "Dashboard lineage lookback (days)", "type": "int", "min": 1, "max": 365,
      "requires": ["features.data_discovery"],
@@ -1228,17 +1235,22 @@ RETIRED_KEYS = frozenset({
 # ---------------------------------------------------------------------------
 # The Settings sub-nav mirrors the app sidebar: each section holds pages
 # (groups). CLIENT_GROUPS are rendered by the client rather than from fields
-# (the capability switches below, the role manager, the legacy dashboard
-# mappings and the training-completion upload); "Infrastructure" also shows
-# READONLY_FIELDS under its editable fields.
+# (the capability switches below, the role mappings, the role permissions grid,
+# the legacy dashboard mappings and the training-completion upload);
+# "Infrastructure" also shows READONLY_FIELDS under its editable fields.
 FEATURES_GROUP = "Features & Navigation"
-ROLES_GROUP = "Roles & Access"
+ROLE_MAPPINGS_GROUP = "Role Mappings"
+ROLE_PERMISSIONS_GROUP = "Role Permissions"
 LEGACY_DASHBOARDS_GROUP = "Legacy Dashboards"
 TRAINING_GROUP = "Training"
-CLIENT_GROUPS = frozenset({FEATURES_GROUP, ROLES_GROUP, LEGACY_DASHBOARDS_GROUP, TRAINING_GROUP})
+CLIENT_GROUPS = frozenset({
+    FEATURES_GROUP, ROLE_MAPPINGS_GROUP, ROLE_PERMISSIONS_GROUP, LEGACY_DASHBOARDS_GROUP, TRAINING_GROUP,
+})
 
 SECTIONS: List[Dict[str, Any]] = [
-    {"title": "General", "groups": ["Appearance", FEATURES_GROUP, ROLES_GROUP, "Notifications"]},
+    {"title": "General", "groups": [
+        "Appearance", FEATURES_GROUP, ROLE_MAPPINGS_GROUP, ROLE_PERMISSIONS_GROUP, "Notifications",
+    ]},
     {"title": "Discover & Analyze", "groups": ["Agent", "Data Catalog", LEGACY_DASHBOARDS_GROUP]},
     {"title": "Requests & Approvals", "groups": ["Approvals", "Group Management (LMWS)", "App Code Review"]},
     {"title": "Learn & Share", "groups": ["Links & Embedded Apps", "Calendar", TRAINING_GROUP]},
@@ -1258,7 +1270,8 @@ GROUP_DESCRIPTIONS: Dict[str, str] = {
         "sidebar. Turning a capability off disables its pages, API, background jobs, and agent tools, and "
         "hides it from the sidebar. Changes apply on the next page load."
     ),
-    ROLES_GROUP: "Who holds which role, and what each role can see and do.",
+    ROLE_MAPPINGS_GROUP: "Which Databricks groups, roles and users hold each app role.",
+    ROLE_PERMISSIONS_GROUP: "What each role can see and do. Read-only; change who holds a role under Role Mappings.",
     "Notifications": "How email is delivered, the base URL used in email links, and what a requester is told when a request is denied.",
     "Agent": "The AI agent's model, limits and guardrails, what it knows about the user up front, where it may look things up on the web, and how it checks for duplicate requests.",
     "Data Catalog": "Which Unity Catalog catalogs are governed and how often the searchable data catalog is refreshed from them.",
@@ -1341,7 +1354,7 @@ CAPABILITIES: List[Dict[str, Any]] = [
      "tabs": ["home"],
      "description": "The chat agent's sidebar link. The landing page always opens the chat, even when this is hidden."},
     {"id": "data_discovery", "section": "Discover & Analyze", "group": "Pages",
-     "label": "Data catalog (View & Search Catalog)", "feature": "data_discovery", "tabs": ["data_discovery"],
+     "label": "Data catalog (Discover)", "feature": "data_discovery", "tabs": ["data_discovery"],
      "description": "Browse and search the synced Unity Catalog data catalog, the agent's data-asset search, "
                     "and the background data-asset sync."},
     {"id": "reports", "section": "Discover & Analyze", "group": "Pages", "label": "Reports",

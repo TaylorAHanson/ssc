@@ -2164,7 +2164,13 @@ export interface LineageNeighbor {
   table_type?: string | null;
 }
 
-export type DatabricksMetadataErrorKind = 'not_found' | 'permission_denied' | 'error' | null;
+export type DatabricksMetadataErrorKind =
+  | 'not_found'
+  | 'permission_denied'
+  /** The app's sign-in token isn't allowed to call this Databricks API at all. */
+  | 'scope_missing'
+  | 'error'
+  | null;
 
 export interface TableLineageResponse {
   table_name: string;
@@ -2172,6 +2178,13 @@ export interface TableLineageResponse {
   downstreams: LineageNeighbor[];
   error?: string | null;
   error_kind?: DatabricksMetadataErrorKind;
+  /**
+   * Where the neighbours came from when the live lineage API couldn't be used:
+   * the lineage system table (queried as the user) or the catalog sync's record.
+   */
+  source?: 'system_table' | 'catalog_cache' | null;
+  /** When the catalog sync recorded `catalog_cache` lineage (ISO time). */
+  as_of?: string | null;
 }
 
 /**

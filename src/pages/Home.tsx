@@ -20,8 +20,9 @@ import { CatalogRails } from '../components/discover/CatalogRails';
 import { prefetchCatalog } from '../lib/catalogCache';
 import { buildDiscoverLink } from '../lib/discoverLinks';
 import { getRecentUserTopics } from '../lib/chatPersistence';
+import { FULL_CHAT_STORAGE_KEY } from '../stores/chatSessionStore';
 
-const STORAGE_KEY = 'chatview_messages_unified';
+const STORAGE_KEY = FULL_CHAT_STORAGE_KEY;
 
 function getButtonLabel(path: string): string {
     if (!path) return 'Continue to form';

@@ -7,6 +7,12 @@ import type { PendingPollEvent } from '../../lib/agentStream';
 import type { ChartEncoding, Dataset } from '../../lib/charting';
 import type { ToolCallStatus } from './ToolCallPill';
 
+export interface ChatChart {
+    dataset?: Dataset;
+    spec?: Record<string, unknown>;
+    encoding?: Partial<ChartEncoding>;
+}
+
 // Each chat surface holds its own UI-side message log. Tool invocations and
 // pending polls live as first-class entries here so the timeline reads
 // naturally (user msg -> tool pill -> agent summary). They round-trip back to
@@ -26,6 +32,8 @@ export type DisplayMessage =
         timestamp: string;
         /** Next-step replies offered as chips; shown only on the latest message. */
         suggestions?: string[];
+        /** The turn's one chart, drawn under the final answer it supports. */
+        chart?: ChatChart;
     }
     | {
         kind: 'tool';
@@ -73,7 +81,7 @@ export type DisplayMessage =
          * conversation's most recent Genie result so the chart is
          * self-contained for rendering.
          */
-        chart?: { dataset?: Dataset; spec?: Record<string, unknown>; encoding?: Partial<ChartEncoding> };
+        chart?: ChatChart;
         /** When set, this tool call was a pending-poll handoff. */
         poll?: PendingPollEvent;
         pollResolution?: 'complete' | 'failed' | 'cancelled' | 'timeout';

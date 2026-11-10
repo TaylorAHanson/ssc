@@ -201,6 +201,17 @@ export function isChartable(dataset: Dataset | undefined | null): dataset is Dat
     return !!dataset && dataset.columns.length > 0 && dataset.rows.length > 0;
 }
 
+/**
+ * Whether a dataset says more as a chart than as a table: at least two rows,
+ * a measure, and something to plot it against (a dimension or a second
+ * measure). A single value or a probe like ``SELECT 1`` never qualifies.
+ */
+export function isWorthCharting(dataset: Dataset | undefined | null): dataset is Dataset {
+    if (!isChartable(dataset) || dataset.rows.length < 2 || dataset.columns.length < 2) return false;
+    const types = inferFieldTypes(dataset);
+    return dataset.columns.some((c) => types[c] === 'quantitative');
+}
+
 interface FieldDef {
     field?: string;
     type?: FieldType;

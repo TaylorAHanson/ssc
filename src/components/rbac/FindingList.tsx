@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { AlertTriangle, Ban } from 'lucide-react';
+import { AlertTriangle, Ban, Info } from 'lucide-react';
 import type { RbacFinding, RbacSheetInfo } from '../../types/rbac';
 import { fieldLabel, plural } from './utils';
 
@@ -13,11 +13,35 @@ interface FindingListProps {
   denyHint?: string;
 }
 
-/** Policy findings, blocking (deny) first, then warnings. */
+type Tone = 'deny' | 'warn' | 'info';
+
+const TONES: Record<Tone, { icon: typeof Ban; section: string; header: string; list: string }> = {
+  deny: {
+    icon: Ban,
+    section: 'border-red-200 bg-red-50',
+    header: 'text-red-800',
+    list: 'divide-red-100 border-red-200',
+  },
+  warn: {
+    icon: AlertTriangle,
+    section: 'border-amber-200 bg-amber-50',
+    header: 'text-amber-900',
+    list: 'divide-amber-100 border-amber-200',
+  },
+  info: {
+    icon: Info,
+    section: 'border-blue-200 bg-blue-50',
+    header: 'text-blue-900',
+    list: 'divide-blue-100 border-blue-200',
+  },
+};
+
+/** Policy findings, blocking (deny) first, then warnings, then notes. */
 export function FindingList({ findings, context, sheet, total, denyHint = 'These block saving.' }: FindingListProps) {
   if (findings.length === 0) return null;
   const deny = findings.filter((f) => f.severity === 'deny');
-  const warn = findings.filter((f) => f.severity !== 'deny');
+  const warn = findings.filter((f) => f.severity === 'warn');
+  const info = findings.filter((f) => f.severity === 'info');
   return (
     <div className="space-y-3">
       {deny.length > 0 && (
@@ -40,6 +64,16 @@ export function FindingList({ findings, context, sheet, total, denyHint = 'These
           sheet={sheet}
         />
       )}
+      {info.length > 0 && (
+        <FindingGroup
+          tone="info"
+          title={plural(info.length, 'note')}
+          hint="For context; nothing to resolve."
+          findings={info}
+          context={context}
+          sheet={sheet}
+        />
+      )}
       {total !== undefined && total > findings.length && (
         <p className="text-xs text-gray-500">Showing the first {findings.length} of {total} findings.</p>
       )}
@@ -48,22 +82,22 @@ export function FindingList({ findings, context, sheet, total, denyHint = 'These
 }
 
 function FindingGroup({ tone, title, hint, findings, context, sheet }: {
-  tone: 'deny' | 'warn';
+  tone: Tone;
   title: string;
   hint: string;
   findings: RbacFinding[];
   context?: (finding: RbacFinding) => ReactNode;
   sheet?: RbacSheetInfo | null;
 }) {
-  const deny = tone === 'deny';
-  const Icon = deny ? Ban : AlertTriangle;
+  const style = TONES[tone];
+  const Icon = style.icon;
   return (
-    <section className={`rounded-md border ${deny ? 'border-red-200 bg-red-50' : 'border-amber-200 bg-amber-50'}`}>
-      <header className={`flex items-center gap-2 px-3 py-2 text-sm font-medium ${deny ? 'text-red-800' : 'text-amber-900'}`}>
+    <section className={`rounded-md border ${style.section}`}>
+      <header className={`flex items-center gap-2 px-3 py-2 text-sm font-medium ${style.header}`}>
         <Icon className="h-4 w-4" /> {title}
         <span className="font-normal opacity-80">· {hint}</span>
       </header>
-      <ul className={`max-h-80 divide-y overflow-y-auto border-t bg-white text-sm ${deny ? 'divide-red-100 border-red-200' : 'divide-amber-100 border-amber-200'}`}>
+      <ul className={`max-h-80 divide-y overflow-y-auto border-t bg-white text-sm ${style.list}`}>
         {findings.map((f, i) => (
           <li key={i} className="px-3 py-2">
             <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">

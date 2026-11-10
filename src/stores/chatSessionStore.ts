@@ -24,7 +24,7 @@ import { useCallback, useEffect, useMemo } from 'react';
 import { create } from 'zustand';
 
 import type { PendingPollEvent } from '../lib/agentStream';
-import type { ChatRouteInfo, DisplayMessage } from '../components/chat/chatTypes';
+import type { ChatChart, ChatRouteInfo, DisplayMessage } from '../components/chat/chatTypes';
 import {
     discard as discardTranscript,
     hydrateFromServer,
@@ -48,6 +48,8 @@ export interface ChatSessionInternals {
     toolArgs: Record<string, Record<string, unknown> | undefined>;
     /** Whitespace-normalized signature of the last applied agent message. */
     lastAgentSig: string;
+    /** The latest chart a tool produced this turn; attached to the final answer on `done`. */
+    turnChart: ChatChart | null;
     /** localStorage key for this session ('' disables persistence). */
     persistKey: string;
 }
@@ -63,6 +65,7 @@ export function getChatInternals(key: string): ChatSessionInternals {
             toolNames: {},
             toolArgs: {},
             lastAgentSig: '',
+            turnChart: null,
             persistKey: '',
         };
         internalsMap.set(key, internals);
@@ -192,6 +195,7 @@ export const useChatSessionStore = create<ChatSessionStore>((set, get) => {
             internals.toolNames = {};
             internals.toolArgs = {};
             internals.lastAgentSig = '';
+            internals.turnChart = null;
             if (internals.persistKey) {
                 // Clears the cache, deletes the stored transcript, and mints a
                 // new session id so the next conversation starts clean.
@@ -201,6 +205,26 @@ export const useChatSessionStore = create<ChatSessionStore>((set, get) => {
         },
     };
 });
+
+/** Storage key of the main chat on the home page. */
+export const FULL_CHAT_STORAGE_KEY = 'chatview_messages_unified';
+
+/**
+ * Append one persisted chat's messages to another and clear the source, e.g. to
+ * carry an in-page assistant conversation into the full chat. Both keys are
+ * storage keys (the session key of a persisted `ChatView`). Returns whether
+ * anything was moved.
+ */
+export function moveChatMessages(fromKey: string, toKey: string): boolean {
+    const store = useChatSessionStore.getState();
+    store.ensureSession(fromKey, fromKey);
+    const moving = useChatSessionStore.getState().sessions[fromKey]?.messages ?? [];
+    if (moving.length === 0) return false;
+    store.ensureSession(toKey, toKey);
+    store.setMessages(toKey, (prev) => [...prev, ...moving]);
+    store.resetSession(fromKey);
+    return true;
+}
 
 /**
  * Hook that binds a `ChatView` to its session slice. Returns the reactive

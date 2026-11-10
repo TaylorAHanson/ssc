@@ -1,10 +1,41 @@
-import { Fragment } from 'react';
-import { Check } from 'lucide-react';
+import { Fragment, useEffect, useState } from 'react';
+import { ArrowRight, Check, Loader2 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import type { CapabilityGrid } from '../../types';
+import { userService } from '../../services/userService';
+import { errorMessage } from '../../lib/errors';
+
+/** The Role Permissions settings page: loads the grid and links back to Role Mappings. */
+export const RolePermissions = ({ onOpenMappings }: { onOpenMappings: () => void }) => {
+    const [grid, setGrid] = useState<CapabilityGrid | null>(null);
+    const [error, setError] = useState<string | null>(null);
+
+    useEffect(() => {
+        userService
+            .getCapabilityGrid()
+            .then(setGrid)
+            .catch((err) => setError(errorMessage(err, 'Failed to load role capabilities')));
+    }, []);
+
+    if (error) {
+        return (
+            <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg">
+                Couldn't load what each role can do: {error}
+            </div>
+        );
+    }
+    if (!grid) {
+        return (
+            <div className="flex justify-center items-center h-64">
+                <Loader2 className="w-8 h-8 animate-spin text-primary" />
+            </div>
+        );
+    }
+    return <RoleCapabilityGrid grid={grid} onOpenMappings={onOpenMappings} />;
+};
 
 /** Read-only "What each role can do" table, built from GET /roles/capabilities. */
-export const RoleCapabilityGrid = ({ grid }: { grid: CapabilityGrid }) => {
+export const RoleCapabilityGrid = ({ grid, onOpenMappings }: { grid: CapabilityGrid; onOpenMappings?: () => void }) => {
     const groups = grid.groups.filter((g) => grid.capabilities.some((c) => c.group === g));
 
     // One footnote per setting that adds roles to a capability, numbered in table order.
@@ -27,6 +58,15 @@ export const RoleCapabilityGrid = ({ grid }: { grid: CapabilityGrid }) => {
                     Read-only. Super Admin holds every permission. A person with several roles gets everything
                     each of them allows.
                 </p>
+                {onOpenMappings && (
+                    <button
+                        type="button"
+                        onClick={onOpenMappings}
+                        className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline self-start"
+                    >
+                        Change who holds a role in Role Mappings <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                )}
             </CardHeader>
             <CardContent>
                 <div className="overflow-x-auto">

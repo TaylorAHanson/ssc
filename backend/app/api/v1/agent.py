@@ -414,6 +414,11 @@ async def _build_runner_and_history(
             if block:
                 parts.append(block)
         surface_context_block = "\n".join(parts) or None
+    elif isinstance(request.context, dict) and "page_context" in request.context:
+        from app.agents.prompts import render_page_context_block
+
+        # Popped for the same reason as the studio's draft: rendered as a block instead.
+        surface_context_block = render_page_context_block(request.context.pop("page_context")) or None
 
     visible_tools = _resolve_visible_tools(db, current_user, surface)
 
@@ -619,14 +624,22 @@ async def stream_conversation(
             detail="An internal error occurred while preparing the agent stream.",
         )
 
+    is_disconnected = getattr(req, "is_disconnected", None)
+
     async def event_source() -> AsyncIterator[bytes]:
+        events = runner.run_stream(
+            query=request.query,
+            history=history,
+            context=request.context,
+            obo_token=obo_token,
+        )
         try:
-            async for event in runner.run_stream(
-                query=request.query,
-                history=history,
-                context=request.context,
-                obo_token=obo_token,
-            ):
+            async for event in events:
+                # The user pressed Stop (or left): don't spend more model and
+                # tool calls on a turn nobody will read.
+                if is_disconnected is not None and await is_disconnected():
+                    logger.info("Agent stream client disconnected; stopping the turn")
+                    break
                 # The Self Service agent occasionally embeds a JSON
                 # ``route_to_form`` instruction inside its final
                 # ``MessageEvent``. We do the same post-processing the
@@ -662,6 +675,8 @@ async def stream_conversation(
                 ErrorEvent(message="Agent stream failed.", fatal=True)
             ).encode("utf-8")
             yield serialize_sse(DoneEvent()).encode("utf-8")
+        finally:
+            await events.aclose()
 
     headers = {
         # Disable buffering on intermediaries (nginx etc.) so events

@@ -1,7 +1,8 @@
 import { useState, useMemo } from 'react';
 import { ArrowLeftRight, CheckCircle2, ExternalLink, Loader, TrendingUp, XCircle } from 'lucide-react';
 import type { LegacyMapping, LegacyStatus } from '../../services/api';
-import { LEGACY_STATUSES, legacyMatches, prettyMetricViewName } from './legacyMappings';
+import { LEGACY_STATUSES, legacySearchFields, prettyMetricViewName } from './legacyMappings';
+import { parseCatalogQuery, rankByQuery } from '../../lib/catalogSearch';
 import { LEGACY_DASHBOARD_PIN_TYPE } from '../../lib/usePinnedAssets';
 import { PinButton } from './PinButton';
 import { subdomainLabel } from '../../lib/discoverDomains';
@@ -36,7 +37,10 @@ interface LegacyMappingTableProps {
 export function LegacyMappingTable({ mappings, searchTerm = '', showSubdomain = true, onOpenMetricView }: LegacyMappingTableProps) {
   const [status, setStatus] = useState<LegacyStatus | null>(null);
 
-  const matching = useMemo(() => mappings.filter((m) => legacyMatches(m, searchTerm)), [mappings, searchTerm]);
+  const matching = useMemo(
+    () => rankByQuery(mappings, parseCatalogQuery(searchTerm), legacySearchFields),
+    [mappings, searchTerm],
+  );
   const counts = useMemo(() => {
     const c: Record<LegacyStatus, number> = { Active: 0, Migrating: 0, Deprecated: 0 };
     matching.forEach((m) => (c[m.status] = (c[m.status] ?? 0) + 1));

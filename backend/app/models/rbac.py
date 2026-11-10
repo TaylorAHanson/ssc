@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 Plane = Literal["uc", "uc_metastore", "workspace"]
-Severity = Literal["deny", "warn"]
+Severity = Literal["deny", "warn", "info"]
 # Which write path a policy evaluation is for. Imports are warn-only.
 WritePath = Literal["request", "admin_edit"]
 
@@ -268,11 +268,28 @@ class SecurableSuggestion(BaseModel):
     environments: List[str] = Field(default_factory=list)
 
 
+class GroupToJoin(BaseModel):
+    """A group that grants access to a securable, and the level its rule sits at."""
+    principal_name: str
+    # direct = a rule on the securable itself; schema / catalog = inherited from that parent;
+    # nearby = a rule on another object in the same schema (a hint, not a grant);
+    # tag = named by the asset's access-group tag in the catalog.
+    level: Literal["direct", "schema", "catalog", "nearby", "tag"]
+    securable: str = ""
+    privileges: List[str] = Field(default_factory=list)
+    held_by_you: Optional[bool] = None
+
+
 class FindAccessResult(BaseModel):
     matches: List[AccessMatch]
     truncated: bool = False
     # Only when nothing matched: securables whose name matches any name asked about, at any level.
     suggestions: List[SecurableSuggestion] = Field(default_factory=list)
+    # For a Unity Catalog securable: the narrowest level with rules (table, view, schema, catalog...).
+    governed_by: Optional[str] = None
+    # For a Unity Catalog securable looked up without a principal filter: the groups to join,
+    # narrowest level first. Built-in groups (RBAC_SYSTEM_GROUPS) and service principals are left out.
+    groups_to_join: List[GroupToJoin] = Field(default_factory=list)
 
 
 # --- Permissions and sheets ---------------------------------------------------

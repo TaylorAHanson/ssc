@@ -9,6 +9,8 @@ pydantic-settings==2.13.1
 python-multipart==0.0.27
 python-dotenv==1.2.2
 sqlalchemy==2.0.48
+# Reads which tables a run_sql query used, to show where an answer came from.
+sqlglot==26.33.0
 psycopg2-binary==2.9.11
 httpx==0.28.1
 databricks-sdk==0.100.0

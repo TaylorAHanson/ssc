@@ -261,22 +261,92 @@ def _lookup_call_fingerprint(fn_name: str, fn_args: Dict[str, Any]) -> str:
     return f"{fn_name}:{rendered}"
 
 
+def _render_target_workspaces_block() -> str:
+    """The configured target workspaces, so most turns never need ``get_target_workspaces``.
+
+    Config only (no secrets, no network). Empty when the list can't be read; the
+    tool is still there as the fallback.
+    """
+    try:
+        from app.core.workspaces import get_target_workspace_info
+
+        infos = get_target_workspace_info(enrich=False)
+    except Exception as e:  # noqa: BLE001 - prompt enrichment must never break a turn
+        logger.warning("Could not list target workspaces for the prompt: %s", e)
+        return ""
+    rows = [f"- {w.name} ({w.environment}): {w.host}" for w in infos if w.host]
+    if not rows:
+        return ""
+    return (
+        "\n\nTARGET WORKSPACES (configured in this app; use these hosts as `target_host` "
+        "and don't call `get_target_workspaces` unless a workspace you need is missing):\n"
+        + "\n".join(rows)
+        + "\n"
+    )
+
+
+def _reuses_results(tool: Any) -> bool:
+    """Whether a repeat call with the same arguments gets the earlier result instead of a rerun."""
+    return bool(getattr(tool, "is_lookup", False) or getattr(tool, "reuse_in_conversation", False))
+
+
+_REUSED_PREFIX = "Already looked up with these arguments; same result as before (don't call it again): "
+
+
+def _parse_call_args(raw: Any) -> Dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _prior_reusable_results(
+    history: Optional[List[Dict[str, Any]]], tools: List[Any]
+) -> Dict[str, str]:
+    """Fingerprint -> result for earlier turns' calls to ``reuse_in_conversation`` tools.
+
+    Failed or truncated results are left out, so a call that went wrong (or
+    whose result was cut short) can still be made again.
+    """
+    reusable = {t.name for t in tools if getattr(t, "reuse_in_conversation", False)}
+    if not history or not reusable:
+        return {}
+    calls: Dict[str, str] = {}
+    for m in history:
+        for tc in m.get("tool_calls") or []:
+            fn = tc.get("function") or {}
+            name = fn.get("name")
+            if name in reusable and tc.get("id"):
+                calls[tc["id"]] = _lookup_call_fingerprint(name, _parse_call_args(fn.get("arguments")))
+    out: Dict[str, str] = {}
+    for m in history:
+        if m.get("role") != "tool":
+            continue
+        fingerprint = calls.get(m.get("tool_call_id") or "")
+        content = m.get("content")
+        if not fingerprint or not isinstance(content, str) or not content.strip():
+            continue
+        if content.startswith(("Tool error", "Error:", _REUSED_PREFIX)) or "[truncated" in content:
+            continue
+        if '"error"' in content[:200]:
+            continue
+        out[fingerprint] = content
+    return out
+
+
 def _lookup_skip_message(
     tool: Any,
     fn_name: str,
-    fn_args: Dict[str, Any],
     counts: Dict[str, int],
-    seen: set,
 ) -> Optional[str]:
-    """Return a skip reason for a budgeted lookup, or None to execute it."""
+    """Return a skip reason for a lookup over its per-turn budget, or None to execute it."""
     if not getattr(tool, "is_lookup", False):
         return None
-    fingerprint = _lookup_call_fingerprint(fn_name, fn_args)
-    if fingerprint in seen:
-        return (
-            f"Skipped duplicate '{fn_name}' with the same arguments. "
-            "Use the result already returned and answer the user now."
-        )
     cap = int(getattr(settings, "AGENT_MAX_LOOKUP_CALLS", 3) or 3)
     cap = max(1, cap)
     if counts.get(fn_name, 0) >= cap:
@@ -332,6 +402,9 @@ class AgentRunner:
         # prompt needs to know who it is talking to just as much as the default.
         if user_context_block:
             self.system_prompt += user_context_block
+
+        if system_prompt is None and self._find_tool("get_target_workspaces"):
+            self.system_prompt += _render_target_workspaces_block()
 
         # What the user currently has open in the host page (today: the workflow
         # draft in the authoring studio, including their unsaved edits). Appended
@@ -440,7 +513,10 @@ class AgentRunner:
         agent_message = ""
         last_tool_calls: List[Dict[str, Any]] = []
         lookup_counts: Dict[str, int] = {}
-        seen_lookups: set = set()
+        # Results a repeat call gets instead of a rerun: earlier turns' results
+        # for tools that hold for the conversation, plus this turn's lookups.
+        reusable_results: Dict[str, str] = _prior_reusable_results(history, self.tools)
+        reuse_counts: Dict[str, int] = {}
 
         # One MLflow trace per turn; child LLM/tool spans group under it. No-op
         # when tracing is disabled. trace_id is surfaced on the terminal events.
@@ -603,9 +679,27 @@ class AgentRunner:
                         executed_any = True
                         continue
 
-                    skip_msg = _lookup_skip_message(
-                        matching_tool, fn_name, fn_args, lookup_counts, seen_lookups
-                    )
+                    fingerprint = _lookup_call_fingerprint(fn_name, fn_args)
+                    reused = reusable_results.get(fingerprint) if _reuses_results(matching_tool) else None
+                    if reused is not None:
+                        # No pill: the user already saw this call. The model gets
+                        # the earlier result and the turn carries on, unless it
+                        # keeps asking for it (a loop), which wraps the turn up.
+                        logger.info("Reusing earlier %s result instead of a rerun", fn_name)
+                        reuse_counts[fingerprint] = reuse_counts.get(fingerprint, 0) + 1
+                        tool_outputs.append(
+                            {
+                                "tool_call_id": tool_call_id,
+                                "name": fn_name,
+                                "content": _REUSED_PREFIX + reused,
+                            }
+                        )
+                        executed_any = True
+                        if reuse_counts[fingerprint] > 1:
+                            force_wrap_up = True
+                        continue
+
+                    skip_msg = _lookup_skip_message(matching_tool, fn_name, lookup_counts)
                     if skip_msg:
                         logger.info("Skipping lookup %s: %s", fn_name, skip_msg)
                         tool_outputs.append(
@@ -620,7 +714,6 @@ class AgentRunner:
                         continue
 
                     if getattr(matching_tool, "is_lookup", False):
-                        seen_lookups.add(_lookup_call_fingerprint(fn_name, fn_args))
                         lookup_counts[fn_name] = lookup_counts.get(fn_name, 0) + 1
 
                     # Announce the call so the UI can show a running pill.
@@ -726,6 +819,8 @@ class AgentRunner:
                             err_val = result.get("error")
                             if isinstance(err_val, str) and err_val.strip():
                                 tool_error_msg = err_val
+                        if not tool_error_msg and _reuses_results(matching_tool):
+                            reusable_results[fingerprint] = truncated
                         hidden = bool(getattr(matching_tool, "hide_result", False))
                         shown = None if hidden else result
                         if tool_error_msg:

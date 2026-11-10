@@ -4,7 +4,7 @@
 
 ## Information to Gather
 1. **Target Workspace**: Which workspace do you need access to?
-   * *Action*: You MUST use `get_target_workspaces` to find the exact `host` URL for the requested workspace.
+   * *Action*: Take the exact `host` URL for the requested workspace from the target workspace list you were given (call `get_target_workspaces` only if it isn't there).
 2. **Duration**: Is this access permanent or temporary?
    * If temporary, ask for an expiration date (e.g., "30 days", "until Dec 31st").
 3. **Justification**: A brief reason why the user needs access to this workspace.

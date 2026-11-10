@@ -49,7 +49,6 @@ LEGACY_PREPARED_FACT = "rbac_plan_recorded"
 KIND_ITEMS = "items"
 KIND_CHANGES = "changes"
 KIND_REVERT = "revert"
-OVERLAP_CODE = "inflight_overlap"
 # execute_workflow's placeholder title, replaced by a descriptive one when the change is prepared.
 _AGENT_TITLE_PREFIX = "Agent Request:"
 _TITLE_LIMIT = 200
@@ -171,22 +170,7 @@ def _check_prepared_unchanged(db: Session, request, prepared: Dict[str, Any]) ->
 
 def _without_self_overlap(db: Session, findings: Sequence[Finding], request_id: str) -> List[Finding]:
     """Drop this request from in-flight overlap warnings (its own prepared change isn't an overlap)."""
-    touched = inflight.touched_rule_ids(db)
-    out: List[Finding] = []
-    for finding in findings:
-        if finding.code != OVERLAP_CODE or not finding.rule_id:
-            out.append(finding)
-            continue
-        holders = touched.get(finding.rule_id, [])
-        others = [r for r in holders if r != request_id]
-        if not others:
-            continue
-        if len(others) != len(holders):
-            noun = "request" if len(others) == 1 else "requests"
-            finding = finding.model_copy(
-                update={"message": f"Open access {noun} {', '.join(others)} will also change this row."})
-        out.append(finding)
-    return out
+    return ledger.without_own_overlap(db, findings, request_id)
 
 
 def _siblings(db: Session, request, group_ref: Optional[str]) -> List[report.Sibling]:

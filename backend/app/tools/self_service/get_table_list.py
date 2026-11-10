@@ -139,7 +139,8 @@ class GetTableListInput(BaseModel):
         "when its metadata was last updated. For one exact table name it also returns the columns with their "
         "types and descriptions."
     ),
-    args_schema=GetTableListInput
+    args_schema=GetTableListInput,
+    reuse_in_conversation=True,
 )
 async def get_table_list(target_host: str, catalog_name: str, schema_name: str, name_pattern: Optional[str] = None, include_columns: Optional[bool] = None, _obo_token: Optional[str] = None) -> Dict[str, Any]:
     """

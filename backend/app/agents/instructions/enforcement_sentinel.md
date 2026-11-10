@@ -16,7 +16,7 @@ When triggered manually, gather the following from the user before executing:
 
 | # | Parameter | Required | Default | Notes |
 |---|-----------|----------|---------|-------|
-| 1 | **Target Workspace** | ✅ Yes | — | The workspace name or ID to scan. You MUST use the `get_target_workspaces` tool to find the exact `host` URL for the target. |
+| 1 | **Target Workspace** | ✅ Yes | — | The workspace name or ID to scan. Take the exact `host` URL for the target from the target workspace list you were given (call `get_target_workspaces` only if it isn't there). |
 | 2 | **Policies** | ❌ Optional | All | Comma-separated list of policy IDs to run (e.g., `notebooks_in_prod`, `tag_compliance`). Omit to run all. |
 | 3 | **Notify** | ❌ Optional | Resource Owner | Email addresses or group names to receive the report. Falls back to dynamically discovered resource owner. |
 

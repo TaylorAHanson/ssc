@@ -52,12 +52,11 @@ For example, to hide this guide, switch off **Guide** under **Learn & Share**.
 That removes it from the account menu and removes the help links that point to
 it from other pages.
 
-## Roles & Access
+## Role Mappings
 
-**General → Roles & Access** controls who holds which role. People get roles
-through **Role Mappings**, which link a group, role or user in Databricks to a
-role in {{brand_name}}. Someone with several roles gets everything each of them
-allows.
+**General → Role Mappings** controls who holds which role. A mapping links a
+group, role or user in Databricks to a role in {{brand_name}}. Someone with
+several roles gets everything each of them allows.
 
 | Role | What it's for |
 |---|---|
@@ -67,21 +66,16 @@ allows.
 | **Security Admin** | Security Admin approvals. |
 | **Finance Admin** | Finance Admin approvals. |
 | **Ops Admin** | Operations: sees every request and delegation, watches OmniGuard runs and clears stuck ones, and uses the workspace diagnostics tools, including the URL reachability check. |
+| **User** | Self-service: asking the assistant, filing and tracking your own requests. |
 
 The assistant no longer has its own cost, audit-log or privilege-audit tools.
 Cost and usage analysis, audit-log investigations and Unity Catalog-wide access
 audits are better done in Databricks Genie Code, which runs as you in your
 workspace; ask the assistant and it gives you a prompt to start from. See
 [Work that happens in Databricks](../using-the-assistant.md#work-that-happens-in-databricks).
-| **User** | Self-service: asking the assistant, filing and tracking your own requests. |
 
 Below the mappings, **Roles** lists each role with the groups and people mapped
-to it, and **What each role can do** shows every permission, grouped by area,
-with a check under each role that holds it. The Super Admin column is always
-fully checked. A permission marked with a number also goes to the roles listed
-in a setting, named in the footnote with its current value: for example the
-Metadata Manager editor roles, or the Access Rules viewer roles. The grid is
-read-only; change who holds a role through the mappings.
+to it.
 
 To add a mapping, select **Add Mapping**, enter the **External Identity
 (SCIM)** exactly as it's named in Databricks (a group name, role or user
@@ -93,6 +87,16 @@ When the Platform Admin role was renamed, every mapping to it became an
 Application Admin mapping, and the same group or person was also mapped to
 Super Admin so nobody lost access. Delete the Super Admin mappings you don't
 want to keep.
+
+## Role Permissions
+
+**General → Role Permissions** shows what each role can do: every permission,
+grouped by area, with a check under each role that holds it. The Super Admin
+column is always fully checked. A permission marked with a number also goes to
+the roles listed in a setting, named in the footnote with its current value:
+for example the Metadata Manager editor roles, or the Access Rules viewer
+roles. The page is read-only; change who holds a role on
+[Role Mappings](#role-mappings).
 
 ## Approvals
 

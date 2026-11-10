@@ -11,6 +11,7 @@
  *      array of record objects) or an inline Vega-Lite spec.
  */
 import {
+    isWorthCharting,
     type ChartEncoding,
     type ChartMark,
     type Dataset,
@@ -72,6 +73,31 @@ export function parseToolChart(result: unknown, toolName?: string): ToolChart | 
     if (toolName === 'render_chart') return { bindLast: true };
 
     return undefined;
+}
+
+// Access probes and metadata statements, which answer "can I read it" or "what
+// is it", never a question worth a chart.
+const _PROBE_SQL_RE = /^\s*(select\s+1\b|show\b|describe\b|desc\b|explain\b)/i;
+
+/**
+ * The chart a tool result should get in the chat, if any. Stricter than
+ * ``parseToolChart``: tabular results chart only when the agent asked for it
+ * (``visualize: true``), the statement isn't a probe, and the rows are worth
+ * plotting. ``render_chart`` directives and inline specs always chart.
+ */
+export function chartCandidate(
+    result: unknown,
+    toolName?: string,
+    args?: Record<string, unknown>,
+): ToolChart | undefined {
+    const parsed = parseToolChart(result, toolName);
+    if (!parsed) return undefined;
+    if (parsed.spec || parsed.bindLast || parsed.encoding) return parsed;
+    const obj = result as Record<string, unknown>;
+    if (obj.visualize !== true) return undefined;
+    const sql = typeof args?.sql === 'string' ? args.sql : '';
+    if (sql && _PROBE_SQL_RE.test(sql)) return undefined;
+    return isWorthCharting(parsed.dataset) ? parsed : undefined;
 }
 
 /**

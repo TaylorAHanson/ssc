@@ -7,7 +7,7 @@ This workflow allows users to request the creation of a new volume (managed or e
 
 ## Information to Gather
 1. **Target Workspace**: Which workspace should this volume be created in?
-    *   *Action*: You MUST use `get_target_workspaces` to find the exact `host` URL for the requested workspace.
+    *   *Action*: Take the exact `host` URL for the requested workspace from the target workspace list you were given (call `get_target_workspaces` only if it isn't there).
 2. **Volume Name**: The name for the new volume.
     *   *Existence Check (REQUIRED)*: Before calling `execute_workflow`, you MUST use `get_volume_list` (passing the `target_host`) to verify the volume doesn't already exist in the target catalog and schema.
 3. **Catalog**: The parent catalog name.

@@ -461,8 +461,45 @@ async def run_agent(
             history.extend(genie["history"])
         else:
             history.append({"role": "user", "content": question})
+            history.extend(replayed_tool_messages(result.get("messages") or []))
             history.append({"role": "assistant", "content": answer})
     return {"answer": answer, "tool_calls": tool_calls, "transcript": transcript}
+
+
+# What the chat replays of a tool result (HISTORY_TOOL_RESULT_MAX_CHARS in ChatView).
+_HISTORY_TOOL_RESULT_MAX_CHARS = 4000
+
+
+def replayed_tool_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """This turn's tool calls and results, shaped as the chat replays them into the next turn's history.
+
+    Each call becomes its own assistant message carrying the ``tool_calls`` block, then its
+    tool message, cut to what the browser sends. A call answered from an earlier result
+    showed no pill in the chat, so it isn't replayed.
+    """
+    from app.agents.runner import _REUSED_PREFIX
+
+    turn = _after_last_user_message(messages)
+    results = {m.get("tool_call_id"): m for m in turn if m.get("role") == "tool" and m.get("tool_call_id")}
+    out: List[Dict[str, Any]] = []
+    for msg in turn:
+        if msg.get("role") != "assistant":
+            continue
+        for call in msg.get("tool_calls") or []:
+            result = results.get(call.get("id"))
+            if result is None:
+                continue
+            content = result.get("content")
+            if not isinstance(content, str):
+                content = json.dumps(content, default=str)
+            if content.startswith(_REUSED_PREFIX):
+                continue
+            if len(content) > _HISTORY_TOOL_RESULT_MAX_CHARS:
+                content = content[:_HISTORY_TOOL_RESULT_MAX_CHARS] + " …[truncated]"
+            name = result.get("name") or (call.get("function") or {}).get("name")
+            out.append({"role": "assistant", "content": "", "tool_calls": [call]})
+            out.append({"role": "tool", "content": content, "tool_call_id": call.get("id"), "name": name})
+    return out
 
 
 def _after_last_user_message(summary: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

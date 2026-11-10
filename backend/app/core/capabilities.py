@@ -4,7 +4,7 @@ App roles and the capabilities each one holds — the single place authorization
 Every backend gate asks "may this user do X?" by capability id
 (``user.can("settings.manage")`` or the ``require_capability`` FastAPI dependency)
 rather than naming roles inline, so who-can-do-what is written down once here and
-rendered as the "What each role can do" grid on Admin -> Roles & Access.
+rendered as the "What each role can do" grid on Admin -> Settings -> Role Permissions.
 
 Rules:
 
@@ -155,7 +155,7 @@ _CAPABILITIES: Tuple[Capability, ...] = (
                "Add, change and remove which groups, users and roles map to each app role.",
                GROUP_ADMINISTRATION, (S,)),
     Capability("roles.view", "View role mappings",
-               "See the role mappings and this grid on Roles & Access.",
+               "See the Role Mappings and Role Permissions pages in Settings.",
                GROUP_ADMINISTRATION, (S, APP)),
     Capability("settings.manage", "Change settings",
                "Edit Admin -> Settings, including branding, features and navigation.",

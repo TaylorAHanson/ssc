@@ -52,10 +52,11 @@ def test_client_groups_are_placed():
 
 def test_only_card_pages_mix_fields_with_a_client_page():
     # The Settings page renders fields above a card page's body, but the
-    # Features and Roles pages are entirely client-drawn and show no fields.
+    # Features and Role pages are entirely client-drawn and show no fields.
     field_groups = {f["group"] for f in ss.EDITABLE_FIELDS}
     assert ss.FEATURES_GROUP not in field_groups
-    assert ss.ROLES_GROUP not in field_groups
+    assert ss.ROLE_MAPPINGS_GROUP not in field_groups
+    assert ss.ROLE_PERMISSIONS_GROUP not in field_groups
     assert {f["key"] for f in ss.EDITABLE_FIELDS if f["group"] == ss.TRAINING_GROUP} == {
         "TRAINING_ACADEMY_URL", "TRAINING_ACADEMY_SYNC_CRON", "TRAINING_ACADEMY_LANGUAGES",
     }
@@ -75,7 +76,8 @@ def test_group_requires_name_real_groups():
 
 def test_section_layout():
     assert [(s["title"], s["groups"]) for s in ss.SECTIONS] == [
-        ("General", ["Appearance", ss.FEATURES_GROUP, ss.ROLES_GROUP, "Notifications"]),
+        ("General", ["Appearance", ss.FEATURES_GROUP, ss.ROLE_MAPPINGS_GROUP, ss.ROLE_PERMISSIONS_GROUP,
+                     "Notifications"]),
         ("Discover & Analyze", ["Agent", "Data Catalog", ss.LEGACY_DASHBOARDS_GROUP]),
         ("Requests & Approvals", ["Approvals", "Group Management (LMWS)", "App Code Review"]),
         ("Learn & Share", ["Links & Embedded Apps", "Calendar", ss.TRAINING_GROUP]),

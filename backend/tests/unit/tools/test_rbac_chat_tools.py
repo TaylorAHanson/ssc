@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import app.db.session as db_session_module
-from app.models.rbac import AccessMatch, FindAccessResult, SecurableSuggestion
+from app.models.rbac import AccessMatch, FindAccessResult, GroupToJoin, SecurableSuggestion
 from app.services.rbac import ledger
 from app.services.rbac import requests as rbac_requests
 from app.tools.self_service.find_access import find_access
@@ -99,6 +99,55 @@ async def test_find_access_mine_lists_what_the_users_groups_hold(monkeypatch, se
                                     _user_entitlements="me@example.com,g_analysts,g_readers")
     assert seen["principals_in"] == ["g_analysts", "g_readers"]
     assert out["matches"][0]["held_by_you"] is True
+
+
+@pytest.mark.asyncio
+async def test_mine_on_a_named_table_still_reads_the_schema_rules_of_other_groups(monkeypatch, session):
+    seen = {}
+
+    def fake_find(db, **kwargs):
+        seen.update(kwargs)
+        return FindAccessResult(
+            matches=[_match("r-1", "g_analysts", via="parent")], governed_by="schema",
+            groups_to_join=[GroupToJoin(principal_name="g_analysts", level="schema", securable="sales_dev.orders")])
+
+    monkeypatch.setattr(ledger, "find_access", fake_find)
+    session.query.return_value.filter.return_value.first.return_value = None
+    out = await find_access.execute(
+        mine=True, object_name="sales_dev.orders.fiscal_month",
+        _user_email="me@example.com", _user_entitlements="me@example.com,users,account users,g_readers")
+
+    assert seen["principals_in"] is None
+    assert (seen["catalog"], seen["schema_name"], seen["object_name"]) == ("sales_dev", "orders", "fiscal_month")
+    assert out["governed_by"] == "schema"
+    assert out["groups_to_join"][0]["held_by_you"] is False
+    assert "governed from that parent" in out["note"]
+
+
+@pytest.mark.asyncio
+async def test_built_in_groups_are_never_the_users_groups(monkeypatch, session):
+    seen = {}
+
+    def fake_find(db, **kwargs):
+        seen.update(kwargs)
+        return FindAccessResult(matches=[_match("r-1", "users")])
+
+    monkeypatch.setattr(ledger, "find_access", fake_find)
+    out = await find_access.execute(mine=True, _user_email="me@example.com",
+                                    _user_entitlements="me@example.com,Users,account users,admins,g_readers")
+    assert seen["principals_in"] == ["g_readers"]
+    assert out["matches"][0]["held_by_you"] is False
+
+
+@pytest.mark.asyncio
+async def test_the_tables_access_group_tag_is_a_group_to_join(monkeypatch, session):
+    monkeypatch.setattr(ledger, "find_access", lambda db, **kw: FindAccessResult(matches=[]))
+    session.query.return_value.filter.return_value.first.return_value = MagicMock(
+        tags=["access_group=edh_supplychain_readers", "certified"])
+    out = await find_access.execute(catalog="sales_dev", schema_name="orders", object_name="shipments")
+    assert out["groups_to_join"] == [{
+        "principal_name": "edh_supplychain_readers", "level": "tag", "securable": "sales_dev.orders.shipments",
+        "privileges": [], "held_by_you": None}]
 
 
 @pytest.mark.asyncio

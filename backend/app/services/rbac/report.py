@@ -161,6 +161,10 @@ def _finding_lines(findings: Iterable[Finding]) -> List[List[str]]:
     return [[f"- {safe_text(f.message)}"] for f in findings]
 
 
+def _notes(findings: Iterable[Finding]) -> List[Finding]:
+    return [f for f in findings if f.severity == "info"]
+
+
 def _is_prerequisite(outcome: ItemOutcome, added: Sequence[AccessItem]) -> bool:
     return any(outcome.item == p for p in added)
 
@@ -221,6 +225,7 @@ def render_proposal_report(
                 + _finding_lines(loose_denies), "items"),
     )
     lines += _section("Warnings", _capped(_finding_lines(warnings), "warnings"))
+    lines += _section("Notes", _capped(_finding_lines(_notes(proposal.findings)), "notes"))
     if siblings:
         lines += _section(
             "Linked requests",
@@ -252,6 +257,7 @@ def render_change_set_report(
     lines += _section("Ledger rows", _capped([diff_lines(d) for d in preview.diffs], "rows"))
     lines += _section("Blocked", _capped(_finding_lines(denies), "findings"))
     lines += _section("Warnings", _capped(_finding_lines(warnings), "warnings"))
+    lines += _section("Notes", _capped(_finding_lines(_notes(preview.findings)), "notes"))
     return "\n".join(lines).strip() + "\n"
 
 
@@ -295,6 +301,7 @@ def render_revert_report(
     lines += _section("Ledger rows", _capped([diff_lines(d) for d in preview.diffs], "rows"))
     lines += _section("Blocked", _capped(_finding_lines(denies), "findings"))
     lines += _section("Warnings", _capped(_finding_lines(warnings), "warnings"))
+    lines += _section("Notes", _capped(_finding_lines(_notes(preview.findings)), "notes"))
     return "\n".join(lines).strip() + "\n"
 
 

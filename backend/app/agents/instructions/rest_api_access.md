@@ -4,7 +4,7 @@
 
 ## Information to Gather
 1.  **Target Workspace**: Which workspace are you requesting access to?
-    *   *Action*: You MUST use `get_target_workspaces` to find the exact `host` URL for the requested workspace.
+    *   *Action*: Take the exact `host` URL for the requested workspace from the target workspace list you were given (call `get_target_workspaces` only if it isn't there).
 2.  **Service**: Which service/endpoint do you need access to?
     *   *Examples*: `Jobs API`, `Clusters API`, `SQL API`.
 2.  **Access Type**: `Read-only` or `Manage` (Write) access?

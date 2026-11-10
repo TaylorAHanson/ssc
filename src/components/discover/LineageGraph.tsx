@@ -19,9 +19,24 @@ import {
     Star,
     TableIcon,
 } from 'lucide-react';
-import { api } from '../../services/api';
+import { api, type TableLineageResponse } from '../../services/api';
 import { catalogExplorerUrl } from '../../lib/databricksLinks';
 import { errorMessage } from '../../lib/errors';
+
+/** Says where lineage came from when it isn't the live lineage API. */
+function lineageNotice(resp: TableLineageResponse): string | null {
+    if (resp.source === 'system_table') {
+        return 'Lineage from the lineage system table (the last year of recorded reads and writes).';
+    }
+    if (resp.source === 'catalog_cache') {
+        const when = resp.as_of ? new Date(resp.as_of).toLocaleString() : null;
+        return (
+            `Live lineage isn't available here, so this shows what the catalog sync recorded` +
+            `${when ? ` as of ${when}` : ''}: the tables metric views are defined on. Open the table in Catalog Explorer for full lineage.`
+        );
+    }
+    return null;
+}
 
 // ---------------------------------------------------------------------------
 // Types & helpers
@@ -273,6 +288,7 @@ export function LineageGraph({ seedTables, workspaceUrl, height = '100%' }: Line
     const [edges, setEdges] = useState<Edge[]>([]);
     const [loadingFqn, setLoadingFqn] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const [notice, setNotice] = useState<string | null>(null);
 
     // Initial seed: place primaries at column 0 plus any pre-known neighbors.
     useEffect(() => {
@@ -348,12 +364,19 @@ export function LineageGraph({ seedTables, workspaceUrl, height = '100%' }: Line
             setError(null);
             try {
                 const resp = await api.getTableLineage(fqn);
-                if (resp.error_kind === 'permission_denied') {
+                setNotice(lineageNotice(resp));
+                if (resp.error_kind === 'permission_denied' && resp.source !== 'catalog_cache') {
                     setError(
-                        `You don't have access to ${fqn} in Unity Catalog yet, so its lineage can't be ` +
-                        `shown. Request access, or ask the data owner for USE CATALOG / USE SCHEMA / SELECT.`,
+                        `Unity Catalog didn't let you see the lineage of ${fqn}. Lineage needs access to the ` +
+                        `table itself (USE CATALOG / USE SCHEMA / SELECT); request access or ask its owner.`,
                     );
-                } else if (resp.error) {
+                } else if (resp.error_kind === 'scope_missing' && resp.source !== 'catalog_cache') {
+                    setError(
+                        `Live lineage for ${fqn} isn't available in this app: Databricks doesn't let apps read ` +
+                        `lineage on your behalf, and no lineage was recorded for it during the catalog sync. ` +
+                        `Open the table in Catalog Explorer to see its full lineage. Your access to the table isn't affected.`,
+                    );
+                } else if (resp.error && resp.source !== 'catalog_cache') {
                     setError(resp.error);
                 }
                 setInternal((prev) => {
@@ -448,6 +471,11 @@ export function LineageGraph({ seedTables, workspaceUrl, height = '100%' }: Line
             {error && (
                 <div className="mb-2 text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-md px-3 py-2">
                     {error}
+                </div>
+            )}
+            {notice && !error && (
+                <div className="mb-2 text-xs text-gray-700 bg-slate-50 border border-slate-200 rounded-md px-3 py-2">
+                    {notice}
                 </div>
             )}
             {isLonely && (
