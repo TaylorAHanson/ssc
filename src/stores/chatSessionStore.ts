@@ -4,8 +4,8 @@
  * navigation (route changes unmount `ChatView`, but this store does not).
  *
  * Two layers per session, keyed by the caller's `storageKey`:
- *   * reactive state (messages / isStreaming / statusLabel / pendingPoll /
- *     routeCta) in the Zustand store — what the view renders.
+ *   * reactive state (messages / isStreaming / statusLabel / routeCta)
+ *     in the Zustand store — what the view renders.
  *   * non-reactive `internals` (AbortController, event-gate clock, tool-name /
  *     tool-arg maps, last-applied-signature) in a plain module Map — the
  *     mutable "refs" the SSE loop reads/writes. Because both live outside the
@@ -23,7 +23,6 @@
 import { useCallback, useEffect, useMemo } from 'react';
 import { create } from 'zustand';
 
-import type { PendingPollEvent } from '../lib/agentStream';
 import type { ChatChart, ChatRouteInfo, DisplayMessage } from '../components/chat/chatTypes';
 import {
     discard as discardTranscript,
@@ -80,7 +79,6 @@ export interface ChatSessionState {
     messages: DisplayMessage[];
     isStreaming: boolean;
     statusLabel: string | null;
-    pendingPoll: PendingPollEvent | null;
     routeCta: ChatRouteInfo | null;
 }
 
@@ -91,7 +89,6 @@ function freshState(): ChatSessionState {
         messages: EMPTY_MESSAGES,
         isStreaming: false,
         statusLabel: null,
-        pendingPoll: null,
         routeCta: null,
     };
 }
@@ -122,7 +119,6 @@ interface ChatSessionStore {
     setMessages: (key: string, updater: Updater<DisplayMessage[]>) => void;
     setIsStreaming: (key: string, value: boolean) => void;
     setStatusLabel: (key: string, value: string | null) => void;
-    setPendingPoll: (key: string, value: PendingPollEvent | null) => void;
     setRouteCta: (key: string, value: ChatRouteInfo | null) => void;
     resetSession: (key: string) => void;
 }
@@ -176,11 +172,6 @@ export const useChatSessionStore = create<ChatSessionStore>((set, get) => {
             set((s) => {
                 const cur = ensureSlot(s.sessions, key);
                 return { sessions: { ...s.sessions, [key]: { ...cur, statusLabel: value } } };
-            }),
-        setPendingPoll: (key, value) =>
-            set((s) => {
-                const cur = ensureSlot(s.sessions, key);
-                return { sessions: { ...s.sessions, [key]: { ...cur, pendingPoll: value } } };
             }),
         setRouteCta: (key, value) =>
             set((s) => {
@@ -283,11 +274,6 @@ export function useChatSession(sessionKey: string, persistKey: string) {
         (value: string | null) => useChatSessionStore.getState().setStatusLabel(sessionKey, value),
         [sessionKey],
     );
-    const setPendingPoll = useCallback(
-        (value: PendingPollEvent | null) =>
-            useChatSessionStore.getState().setPendingPoll(sessionKey, value),
-        [sessionKey],
-    );
     const setRouteCta = useCallback(
         (value: ChatRouteInfo | null) => useChatSessionStore.getState().setRouteCta(sessionKey, value),
         [sessionKey],
@@ -296,25 +282,17 @@ export function useChatSession(sessionKey: string, persistKey: string) {
         () => useChatSessionStore.getState().resetSession(sessionKey),
         [sessionKey],
     );
-    // Always-current pendingPoll for async closures that outlive a render.
-    const getPendingPoll = useCallback(
-        () => useChatSessionStore.getState().sessions[sessionKey]?.pendingPoll ?? null,
-        [sessionKey],
-    );
 
     return {
         messages: session.messages,
         isStreaming: session.isStreaming,
         statusLabel: session.statusLabel,
-        pendingPoll: session.pendingPoll,
         routeCta: session.routeCta,
         setMessages,
         setIsStreaming,
         setStatusLabel,
-        setPendingPoll,
         setRouteCta,
         resetSession,
-        getPendingPoll,
         internals: getChatInternals(sessionKey),
     };
 }

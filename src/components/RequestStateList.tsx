@@ -188,7 +188,7 @@ export function RequestStateList({ request }: { request: Request }) {
           // Human approval gates (data_owner / manager / admin roles). The step
           // id is the stage name (e.g. "await_approval"), so we identify the
           // gate by its `type` rather than a hardcoded id.
-          const HUMAN_GATE_TYPES = ['data_owner', 'manager', 'platform_admin', 'security', 'security_admin', 'governance_admin', 'finance_admin'];
+          const HUMAN_GATE_TYPES = ['data_owner', 'manager', 'platform_admin', 'security', 'security_admin', 'governance_admin'];
           // A manual task pauses for a person but grants nothing, so it gets its
           // own "assigned to" block rather than the approver list.
           const isManualTask = step.type === 'manual_task';

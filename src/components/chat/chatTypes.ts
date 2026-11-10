@@ -3,7 +3,6 @@
  * (`src/stores/chatSessionStore.ts`) and the view can both reference them
  * without a circular import.
  */
-import type { PendingPollEvent } from '../../lib/agentStream';
 import type { ChartEncoding, Dataset } from '../../lib/charting';
 import type { ToolCallStatus } from './ToolCallPill';
 
@@ -13,8 +12,8 @@ export interface ChatChart {
     encoding?: Partial<ChartEncoding>;
 }
 
-// Each chat surface holds its own UI-side message log. Tool invocations and
-// pending polls live as first-class entries here so the timeline reads
+// Each chat surface holds its own UI-side message log. Tool invocations
+// live as first-class entries here so the timeline reads
 // naturally (user msg -> tool pill -> agent summary). They round-trip back to
 // the backend via the stream's final `done` event in the form the runner
 // expects.
@@ -59,32 +58,19 @@ export type DisplayMessage =
          * Raw, JSON-serializable payload the tool returned. Captured
          * from the ``tool_result`` SSE event for synchronous tools so
          * the UI can render a "Raw output" expander under every pill.
-         * For pending-poll handoffs (Genie) the analogous structured
-         * data lives on ``genieResult`` and is rendered via
-         * ``GenieDetailsPanel``.
          */
         toolResult?: unknown;
         /** Set when the backend withheld the result (a tool marked ``hide_result``). */
         resultHidden?: boolean;
         /**
-         * Raw structured payload from a completed Genie poll. Surfaces
-         * the SQL, result rows, chart spec, and per-conversation deep
-         * link via `<GenieDetailsPanel>`. Set on the tool pill's
-         * resolution; absent until `pollResolution === 'complete'`.
-         */
-        genieResult?: Record<string, unknown>;
-        /**
          * Resolved chart payload for tools that produce a chart (the
          * ``render_chart`` agent tool, or any tool returning tabular data /
          * a Vega-Lite spec). Bound at event-handle time: when the tool asks
          * to re-graph the last answer, the dataset is filled in from the
-         * conversation's most recent Genie result so the chart is
+         * conversation's most recent tabular result so the chart is
          * self-contained for rendering.
          */
         chart?: ChatChart;
-        /** When set, this tool call was a pending-poll handoff. */
-        poll?: PendingPollEvent;
-        pollResolution?: 'complete' | 'failed' | 'cancelled' | 'timeout';
     }
     | {
         kind: 'reasoning';

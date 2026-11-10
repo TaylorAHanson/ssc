@@ -85,11 +85,6 @@ describe the failure in terms of tokens, hosts or other internals.
 - Asking a clarifying question is CORRECT when the expectation says required \
 information is missing. Fabricating a value the user never supplied, or inventing \
 a fact the tools never returned, is a failure even if the answer reads well.
-- When the assistant calls ask_your_data, Genie writes the answer and the user is \
-shown it as-is, so the final answer is Genie's own text and the tool entry in the \
-transcript is what Genie returned (its SQL and rows). Grade how the assistant used \
-Genie: the question it sent, the conversation it continued, and not working around \
-it. Do not grade Genie's wording or formatting.
 - Judge only what the expectation covers. Ignore tone and formatting unless the \
 expectation mentions them.
 
@@ -218,188 +213,6 @@ def prompt_footprint(tools: Sequence[Any], email: str = DEFAULT_EMAIL, role: str
     return out
 
 
-# ---------------------------------------------------------------------- genie
-# ``ask_your_data`` does not answer inside the agent loop. It hands the browser a
-# conversation to poll, the browser shows Genie's written answer as-is, and on the
-# next turn replays the exchange (with the conversation id) as history. Without the
-# same steps here a Genie case would end on "Asking Genie..." and could say nothing
-# about what the user actually saw.
-GENIE_KIND = "genie"
-GENIE_POLL_TIMEOUT_SECONDS = 240
-_GENIE_ROWS_IN_EVIDENCE = 5
-
-GeniePollFn = Callable[..., Awaitable[Any]]
-
-
-async def drain_genie_poll(
-    ids: Dict[str, Any],
-    *,
-    obo_token: Optional[str],
-    email: str,
-    role: str,
-    timeout: float = GENIE_POLL_TIMEOUT_SECONDS,
-    poll_fn: Optional[GeniePollFn] = None,
-    sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
-) -> Dict[str, Any]:
-    """Poll one Genie conversation until it settles, as the chat UI does.
-
-    Goes through the same endpoint function the browser calls, so the rows,
-    ``incomplete`` handling and conversation id are the ones a user would get.
-    Returns ``{"status": "complete", "result": {...}}``, or ``{"status": "failed" |
-    "timeout", "error": "..."}``.
-    """
-    from types import SimpleNamespace
-
-    from fastapi import HTTPException
-
-    from app.api.v1 import agent_polls
-
-    body = agent_polls.GeniePollRequest(
-        space_id=ids.get("space_id") or None,
-        conversation_id=str(ids.get("conversation_id") or ""),
-        message_id=str(ids.get("message_id") or ""),
-        question=ids.get("question"),
-    )
-    request = SimpleNamespace(state=SimpleNamespace(token=obo_token))
-    user = synthetic_user(email, role)
-    poll = poll_fn or agent_polls.poll_genie
-    deadline = time.monotonic() + timeout
-    while True:
-        try:
-            polled = await poll(body, request, user)
-        except HTTPException as e:
-            return {"status": "failed", "error": str(e.detail)}
-        if polled.status == "complete":
-            return {"status": "complete", "result": polled.result or {}}
-        if polled.status == "failed":
-            return {"status": "failed", "error": polled.error or "Genie failed."}
-        if time.monotonic() >= deadline:
-            return {"status": "timeout", "error": f"Genie had not answered after {int(timeout)}s."}
-        await sleep((polled.attempt_after_ms or 3000) / 1000)
-
-
-def genie_result_table(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """The first result table in a settled Genie answer: ``{columns, rows, total}``.
-
-    Reads ``attachments[].query.result`` the way the chat's ``parseGenieResult`` does;
-    columns arrive as names or as ``{name, type_text}`` objects.
-    """
-    for attachment in result.get("attachments") or []:
-        query = attachment.get("query") if isinstance(attachment, dict) else None
-        data = query.get("result") if isinstance(query, dict) else None
-        if not isinstance(data, dict):
-            continue
-        columns = [c.get("name") if isinstance(c, dict) else c for c in data.get("columns") or []]
-        rows = data.get("rows")
-        if columns and isinstance(rows, list) and rows:
-            return {
-                "columns": [str(c) for c in columns],
-                "rows": rows,
-                "total": data.get("total_row_count") or len(rows),
-            }
-    return None
-
-
-def genie_answer(settled: Dict[str, Any]) -> str:
-    """What the user is shown for a settled Genie conversation."""
-    if settled.get("status") != "complete":
-        return f"Genie couldn't answer this. {settled.get('error') or ''}".strip()
-    result = settled.get("result") or {}
-    for key in ("final_answer", "text", "answer", "description"):
-        value = result.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return "Genie finished but returned no written answer."
-
-
-def genie_tool_message(question: str, settled: Dict[str, Any]) -> str:
-    """The tool message the chat replays into history after a Genie answer.
-
-    Kept word for word with ``buildHistory`` in ``ChatView.tsx`` (a unit test checks
-    the follow-up sentence), because the notes are what let the model chart the rows
-    and continue the same Genie conversation on a later turn.
-    """
-    result = settled.get("result") or {}
-    content = question or "Genie answered"
-    table = genie_result_table(result)
-    if table:
-        content += (
-            f" [Result columns: {', '.join(table['columns'])} ({len(table['rows'])} rows)."
-            " To visualize, call render_chart with these exact column names.]"
-        )
-    conversation_id = result.get("conversation_id")
-    if isinstance(conversation_id, str) and conversation_id:
-        content += (
-            f" [Genie conversation_id: {conversation_id}."
-            " For a follow-up to this answer, pass it as conversation_id to ask_your_data.]"
-        )
-    return content
-
-
-def genie_evidence(settled: Dict[str, Any]) -> str:
-    """What Genie returned, for the judge: the status, the SQL it ran and the first rows."""
-    if settled.get("status") != "complete":
-        return f"Genie {settled.get('status')}: {settled.get('error')}"
-    result = settled.get("result") or {}
-    parts = [f"Genie answered (conversation_id={result.get('conversation_id')})."]
-    for item in (result.get("query_items") or [])[:3]:
-        if isinstance(item, dict) and item.get("sql"):
-            parts.append(f"SQL: {item['sql']}")
-    table = genie_result_table(result)
-    if table:
-        shown = table["rows"][:_GENIE_ROWS_IN_EVIDENCE]
-        parts.append(
-            f"Columns: {', '.join(table['columns'])}. {table['total']} row(s); "
-            f"first {len(shown)}: {json.dumps(shown, default=str)}"
-        )
-    else:
-        parts.append("No result rows came back with the answer.")
-    return " ".join(parts)
-
-
-def genie_turn_records(
-    question: str,
-    pending: Dict[str, Any],
-    settled: Dict[str, Any],
-    answer: str,
-    arguments: Dict[str, Any],
-) -> Dict[str, List[Dict[str, Any]]]:
-    """History and transcript entries for one Genie turn.
-
-    History is shaped as the browser replays it: the assistant's tool call, the tool
-    message carrying the conversation id, then Genie's written answer.
-    """
-    tool_call_id = str(pending.get("tool_call_id") or "genie-call")
-    tool_name = str(pending.get("tool_name") or "ask_your_data")
-    asked = (arguments.get("question") if isinstance(arguments.get("question"), str) else "") or question
-    history: List[Dict[str, Any]] = [
-        {"role": "user", "content": question},
-        {
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [
-                {
-                    "id": tool_call_id,
-                    "type": "function",
-                    "function": {"name": tool_name, "arguments": json.dumps(arguments, default=str)},
-                }
-            ],
-        },
-        {
-            "role": "tool",
-            "content": genie_tool_message(asked, settled),
-            "tool_call_id": tool_call_id,
-            "name": tool_name,
-        },
-        {"role": "assistant", "content": answer},
-    ]
-    transcript: List[Dict[str, Any]] = [
-        {"role": "tool", "name": tool_name, "content": genie_evidence(settled)[:_EVIDENCE_PER_MESSAGE]},
-        {"role": "assistant", "content": answer[:_EVIDENCE_PER_MESSAGE]},
-    ]
-    return {"history": history, "transcript": transcript}
-
-
 # ---------------------------------------------------------------------- agent
 async def run_agent(
     case: EvalCase,
@@ -437,32 +250,18 @@ async def run_agent(
             call["turn"] = turn_index + 1
             tool_calls.append(call)
 
-        pending = result.get("pending_poll")
-        genie: Optional[Dict[str, List[Dict[str, Any]]]] = None
-        if isinstance(pending, dict) and pending.get("kind") == GENIE_KIND:
-            settled = await drain_genie_poll(
-                pending.get("ids") or {}, obo_token=obo_token, email=email, role=case.role
-            )
-            answer = genie_answer(settled)
-            call = next((c for c in turn_calls if c.get("id") == pending.get("tool_call_id")), {})
-            genie = genie_turn_records(question, pending, settled, answer, call.get("arguments") or {})
-
         # The runner returns the whole conversation every turn; keep only what
         # came after this turn's question so a multi-turn transcript reads once.
         turn_msgs = _summarize_transcript(
             result.get("messages") or [],
-            answer="" if genie else answer,
+            answer=answer,
             content_limit=_EVIDENCE_PER_MESSAGE,
         )
         transcript.append({"role": "user", "content": question, "turn": turn_index + 1})
         transcript.extend(_after_last_user_message(turn_msgs))
-        if genie:
-            transcript.extend(genie["transcript"])
-            history.extend(genie["history"])
-        else:
-            history.append({"role": "user", "content": question})
-            history.extend(replayed_tool_messages(result.get("messages") or []))
-            history.append({"role": "assistant", "content": answer})
+        history.append({"role": "user", "content": question})
+        history.extend(replayed_tool_messages(result.get("messages") or []))
+        history.append({"role": "assistant", "content": answer})
     return {"answer": answer, "tool_calls": tool_calls, "transcript": transcript}
 
 
@@ -551,12 +350,11 @@ def is_infrastructure_failure(answer: str) -> bool:
 # What tools return when the caller's Databricks token has lapsed. The assistant then
 # reports, correctly, that it could not check anything, which reads like a bad answer;
 # but the failure is the run's, so it is retried with a fresh token and never graded.
-# Genie surfaces the same lapse as an opaque transport error rather than a 403.
+# MCP tools surface the same lapse as an opaque transport error rather than a 403.
 _AUTH_FAILURES = (
     "invalid token",
     "invalid access token",
     "unhandled errors in a taskgroup",
-    "genie refused the request",
 )
 
 

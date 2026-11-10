@@ -52,7 +52,7 @@ def _user(email, roles=(), groups=()):
 
 
 ADMIN = _user("admin@example.com", roles=["Governance Admin"])
-VIEWER = _user("viewer@example.com", roles=["Finance Admin"])
+VIEWER = _user("viewer@example.com", roles=["Data Steward"])
 UC_MEMBER = _user("uc@example.com", groups=["uc approvers"])
 WS_MEMBER = _user("ws@example.com", groups=[WS_GROUP])
 EVERY_GROUP = _user("every@example.com", groups=[UC_GROUP, WS_GROUP, MS_GROUP])
@@ -77,7 +77,7 @@ def _settings(monkeypatch):
     monkeypatch.setattr(settings, "RBAC_UC_APPROVER_GROUP", UC_GROUP)
     monkeypatch.setattr(settings, "RBAC_WS_APPROVER_GROUP", WS_GROUP)
     monkeypatch.setattr(settings, "RBAC_METASTORE_APPROVER_GROUP", MS_GROUP)
-    monkeypatch.setattr(settings, "RBAC_VIEWER_ROLES", ["Finance Admin"])
+    monkeypatch.setattr(settings, "RBAC_VIEWER_ROLES", ["Data Steward"])
     monkeypatch.setattr(settings, "RBAC_ALLOW_RESET", False)
     monkeypatch.setattr(settings, "RBAC_MAX_CHANGES_PER_COMMIT", 200)
     monkeypatch.setattr(settings, "RBAC_MIN_REASON_LENGTH", 10)

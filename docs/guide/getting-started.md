@@ -11,7 +11,8 @@ organization uses and your role allows, so yours may be shorter than this list.
 
 | Section | Pages | What they're for |
 | --- | --- | --- |
-| Discover & Analyze | **Ask Anything**, **Discover**, **Requests**, **Reports** | Chat with the assistant, browse and search the data catalog, follow the requests you've made and act on the ones waiting for you, and manage reports the assistant generates on a schedule. |
+| Discover & Request | **{{brand_short_name}} Agent**, **Discover**, **My Requests & Approvals**, **Reports** | Chat with the assistant, browse and search the data catalog, follow the requests you've made and act on the ones waiting for you, and manage reports the assistant generates on a schedule. |
+| Data & AI | Your organization's apps, **Genie One**, **Workspaces** | Apps your organization adds, Genie One for analyzing data in plain language, and the Databricks workspaces you can use. See [Workspaces and Genie One](workspaces.md). |
 | Learn & Share | **Training**, **Event Calendar**, **Templates & Assets**, **Community Links** | Learning tracks, upcoming sessions, reusable patterns and recommended links. |
 | Watch Tower | Governance tools | For governance admins, and Ops admins for OmniGuard. See [Governance tools](admin/governance.md). |
 | Control Tower | Admin, workflow and catalog tools | For admins. See the [admin overview](admin/index.md). |
@@ -22,8 +23,10 @@ the sidebar, then **Guide**.
 Your organization may also add links to other apps, which open inside
 {{brand_name}} or in a new tab.
 
-Use the arrow at the top of the sidebar to collapse it to icons when you need
-more room. Each section can be folded away by clicking its heading.
+Hover over a page in the sidebar, or move to it with the keyboard, to see what
+it's for. Use the arrow at the top of the sidebar to collapse it to icons when
+you need more room; the same descriptions appear next to the icons. Each
+section can be folded away by clicking its heading.
 
 ## The account menu
 
@@ -44,8 +47,8 @@ Click your name at the bottom of the sidebar to open the account menu:
 
 ## Notifications
 
-When approvals are waiting for you, a red count appears on **Requests** in the
-sidebar and on your initials at the bottom of it. Click either one (for your
+When approvals are waiting for you, a red count appears on **My Requests &
+Approvals** in the sidebar and on your initials at the bottom of it. Click either one (for your
 initials, then **Notifications**) to go to **Needs my approval**. See
 [Approve or reject a request](requests-and-approvals.md#approve-or-reject-a-request).
 

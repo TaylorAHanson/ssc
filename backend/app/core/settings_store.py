@@ -105,7 +105,7 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
              "approver typed; it reads 'No reason was recorded.' when they left it blank."},
 
     # ===================================================================
-    # Discover & Analyze
+    # Discover & Request
     # ===================================================================
     # --- Agent ----------------------------------------------------------
     {"group": "Agent", "section": "Model", "key": "MODEL_SERVING_AGENT_LLM_ENDPOINT",
@@ -391,6 +391,12 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
     {"group": "Links & Embedded Apps", "section": "Support contact", "key": "yaml:support.notes",
      "label": "Hours or channel", "type": "textarea",
      "help": "Optional: support hours, a chat channel, or a link to the support portal. Shown verbatim."},
+    {"group": "Links & Embedded Apps", "key": "yaml:links.genie_one_url", "label": "Genie One link",
+     "type": "string", "placeholder": "https://...",
+     "help": "The address of account-level Genie One, where people analyze data across every workspace "
+             "they can use. Open Genie One at the account level and copy the address from the browser. "
+             "Shown as Genie One in the sidebar, and the assistant sends data-analysis questions there. "
+             "Blank hides the link."},
     {"group": "Links & Embedded Apps", "key": "yaml:embedded_apps", "label": "Embedded Apps",
      "type": "catalog", "kind": "embedded_apps", "add_label": "Add app",
      "help": "External web apps surfaced inside this app via an iframe. Each adds a sidebar link opening at /embedded/<id>. Note: targets that send X-Frame-Options/CSP frame-ancestors may render blank."},
@@ -1119,11 +1125,6 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
 
     # --- Infrastructure (editable part; the read-only deploy-time panel is
     # READONLY_FIELDS, rendered below these on the same page) -------------
-    {"group": "Infrastructure", "section": "Timeouts", "key": "yaml:tools.ask_your_data.poll_timeout_seconds",
-     "label": "Chat answer timeout (seconds)", "type": "int", "min": 5,
-     "help": "How long the chat keeps waiting for an answer that arrives asynchronously — a Genie data "
-             "question or a long-running external tool — before it shows a timeout. Each check is a short "
-             "request, so this is not a Databricks limit."},
     {"group": "Infrastructure", "section": "Logging", "key": "yaml:logging.client_events",
      "label": "Log page views and browser errors", "type": "bool",
      "help": "Each page a person opens, and any error their browser hits, is written to the app's own "
@@ -1215,6 +1216,11 @@ RETIRED_KEYS = frozenset({
     "yaml:web_search.algolia.index_name",
     "yaml:links.genie_full_experience_url",
     "yaml:tools.ask_your_data.default_genie_space_id",
+    # Ask Your Data (Genie in the chat); data analysis now happens in Genie One.
+    "yaml:tools.ask_your_data.poll_timeout_seconds",
+    "features.ask_your_data",
+    "features.genie_summarize_answer",
+    "ui.tabs.ask_your_data",
     # Replaced by the RBAC_ALLOWED_PRIVILEGES allow list.
     "RBAC_HARD_DENIED_PRIVILEGES",
     # GitOps tag changes, replaced by the Metadata Manager's desired-state tables (ADR-0006).
@@ -1251,7 +1257,7 @@ SECTIONS: List[Dict[str, Any]] = [
     {"title": "General", "groups": [
         "Appearance", FEATURES_GROUP, ROLE_MAPPINGS_GROUP, ROLE_PERMISSIONS_GROUP, "Notifications",
     ]},
-    {"title": "Discover & Analyze", "groups": ["Agent", "Data Catalog", LEGACY_DASHBOARDS_GROUP]},
+    {"title": "Discover & Request", "groups": ["Agent", "Data Catalog", LEGACY_DASHBOARDS_GROUP]},
     {"title": "Requests & Approvals", "groups": ["Approvals", "Group Management (LMWS)", "App Code Review"]},
     {"title": "Learn & Share", "groups": ["Links & Embedded Apps", "Calendar", TRAINING_GROUP]},
     {"title": "Watch Tower", "groups": ["OmniGuard", "Target Workspaces", "Data Certification", "Metadata Manager",
@@ -1349,37 +1355,35 @@ GROUP_DESCRIPTIONS: Dict[str, str] = {
 OTHER_SECTION = "Other"
 
 CAPABILITIES: List[Dict[str, Any]] = [
-    # --- Discover & Analyze --------------------------------------------
-    {"id": "agent", "section": "Discover & Analyze", "group": "Pages", "label": "Agent (Ask Anything)",
+    # --- Discover & Request --------------------------------------------
+    {"id": "agent", "section": "Discover & Request", "group": "Pages", "label": "Agent",
      "tabs": ["home"],
      "description": "The chat agent's sidebar link. The landing page always opens the chat, even when this is hidden."},
-    {"id": "data_discovery", "section": "Discover & Analyze", "group": "Pages",
+    {"id": "data_discovery", "section": "Discover & Request", "group": "Pages",
      "label": "Data catalog (Discover)", "feature": "data_discovery", "tabs": ["data_discovery"],
      "description": "Browse and search the synced Unity Catalog data catalog, the agent's data-asset search, "
                     "and the background data-asset sync."},
-    {"id": "reports", "section": "Discover & Analyze", "group": "Pages", "label": "Reports",
+    {"id": "workspaces", "section": "Discover & Request", "group": "Pages", "label": "Workspaces",
+     "tabs": ["workspaces"],
+     "description": "Explains the lakehouse and lists the workspaces each person can use, with links to open "
+                    "each one and its Genie One."},
+    {"id": "reports", "section": "Discover & Request", "group": "Pages", "label": "Reports",
      "tabs": ["reports"], "description": "The Reports page."},
-    {"id": "home_data_catalog", "section": "Discover & Analyze", "group": "Home page",
+    {"id": "home_data_catalog", "section": "Discover & Request", "group": "Home page",
      "label": "Data sections on the home page", "feature": "home_data_catalog"},
-    {"id": "enhanced_landing_page", "section": "Discover & Analyze", "group": "Home page",
+    {"id": "enhanced_landing_page", "section": "Discover & Request", "group": "Home page",
      "label": "Welcome header", "feature": "enhanced_landing_page"},
-    {"id": "ask_your_data", "section": "Discover & Analyze", "group": "Agent capabilities",
-     "label": "Ask Your Data (Genie)", "feature": "ask_your_data",
-     "tabs": [{"key": "ask_your_data", "label": "Answer in the chat only",
-               "help": "Off = the sidebar also shows an external 'Analyze and Explore' link to Databricks Genie."}]},
-    {"id": "genie_summarize_answer", "section": "Discover & Analyze", "group": "Agent capabilities",
-     "label": "Reword Genie answers", "feature": "genie_summarize_answer"},
-    {"id": "run_sql", "section": "Discover & Analyze", "group": "Agent capabilities",
+    {"id": "run_sql", "section": "Discover & Request", "group": "Agent capabilities",
      "label": "Run SQL", "feature": "run_sql"},
-    {"id": "user_context", "section": "Discover & Analyze", "group": "Agent capabilities",
+    {"id": "user_context", "section": "Discover & Request", "group": "Agent capabilities",
      "label": "User context", "feature": "user_context"},
-    {"id": "web_search", "section": "Discover & Analyze", "group": "Agent capabilities",
+    {"id": "web_search", "section": "Discover & Request", "group": "Agent capabilities",
      "label": "Web lookup", "feature": "web_search"},
-    {"id": "skills", "section": "Discover & Analyze", "group": "Agent capabilities",
+    {"id": "skills", "section": "Discover & Request", "group": "Agent capabilities",
      "label": "Skills", "feature": "skills"},
-    {"id": "onboarding_suggestions", "section": "Discover & Analyze", "group": "Agent capabilities",
+    {"id": "onboarding_suggestions", "section": "Discover & Request", "group": "Agent capabilities",
      "label": "Starter prompts", "feature": "onboarding_suggestions"},
-    {"id": "next_step_suggestions", "section": "Discover & Analyze", "group": "Agent capabilities",
+    {"id": "next_step_suggestions", "section": "Discover & Request", "group": "Agent capabilities",
      "label": "Suggest next steps", "feature": "next_step_suggestions"},
 
     # --- Requests & Approvals ------------------------------------------
@@ -1441,7 +1445,7 @@ CAPABILITIES: List[Dict[str, Any]] = [
 ]
 
 CAPABILITY_SECTIONS: List[str] = [
-    "Discover & Analyze", "Requests & Approvals", "Learn & Share", "Watch Tower",
+    "Discover & Request", "Requests & Approvals", "Learn & Share", "Watch Tower",
     "Control Tower", "Platform", OTHER_SECTION,
 ]
 
@@ -1464,9 +1468,8 @@ FEATURE_DESCRIPTIONS: Dict[str, str] = {
         "Off = no scheduled scans and the page is hidden. For manual scans only, leave this on and blank the "
         "scan schedule under OmniGuard settings."
     ),
-    "ask_your_data": "\u201cAsk Your Data\u201d — natural-language data questions answered by Databricks Genie.",
-    "run_sql": "Lets the agent run read-only SQL it composes itself, on-behalf-of the user, feeding the in-chat charts.",
-    "genie_summarize_answer": "Rewords Genie's answer through the agent (adds latency/cost). Off = show Genie's grounded answer verbatim.",
+    "run_sql": "Lets the agent run read-only SQL it composes itself, on-behalf-of the user, to check access "
+               "and look around the data while finding it. Data analysis is sent to Genie One.",
     "context_catalog": "Context Catalog: a curated knowledge base the agent retrieves from.",
     "workflow_authoring": "No-code, database-backed workflow authoring in the admin Workflow Studio.",
     "onboarding_suggestions": "Personalized, clickable starter prompts on the home page at login.",

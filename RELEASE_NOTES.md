@@ -13,6 +13,20 @@ Format rules (the app parses this file, so keep to them):
   before), and what the reader will notice or should do now.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
 
+## 3.0.0 — 2026-11-10
+
+### Changed
+
+- **Data analysis now happens in Genie One.** The assistant used to answer questions such as "total sales by month" itself, sometimes by handing them to Genie behind the scenes, which could take minutes and gave answers that were hard to check or build on. Genie One is made for that work, so the assistant now sends analysis there, with a link, the full name of the table to use and a question you can paste in. It still helps you find the right data, check that you can read it and look at a few sample rows, and admins can still chart this app's own activity, such as requests over time. The **Ask your data** settings are gone from **Admin → Settings**.
+- **The sidebar is reorganized.** The old section names didn't say what their pages were for, and the data pages were scattered. The first section is now **Discover & Request**, with the agent (labeled with your app's short name), **Discover**, **My Requests & Approvals** and **Reports**. The new **Data & AI** section holds the apps your organization adds, **Genie One** and **Workspaces**. Apps an admin had placed under the old **Build & Customize** section move to **Data & AI** on their own, and the matching **Admin → Settings** section is renamed **Discover & Request**.
+- **Every sidebar page explains itself.** Hover over a page in the sidebar, or move to it with the keyboard, to see a one-line description of what it's for. Before, the collapsed icon rail showed only the page name and the expanded sidebar showed nothing. Pages that open in a new tab, or have approvals waiting for you, say so in the description.
+- **The Finance Admin role is removed.** Cost and usage work moved to Genie Code in an earlier release, so the role had nothing left to do. Role mappings to it are deleted when you upgrade, and any approvals still waiting on a Finance Admin go to Application Admins instead. A tool that only Finance Admins could use is limited to Super Admins, so nothing opens up to everyone.
+
+### Added
+
+- **A Workspaces page.** The sidebar's **Lakehouse** link always opened the same workspace, whichever one you needed. The new **Workspaces** page explains what the lakehouse is and when to use it rather than Genie One, then shows a card for each Databricks workspace your groups can use, according to your organization's access rules. Each card has **Open Lakehouse** and **Open Genie One** buttons for that workspace. Admins can hide the page under **Admin → Settings → Discover & Request**.
+- **Genie One in the sidebar.** There was no quick way to reach Genie One for your whole Databricks account. An admin can now set its address under **Admin → Settings → Links & Embedded Apps → Genie One link**, and **Genie One** appears in the sidebar and on the welcome page. The assistant links it too. Until it's set, the sidebar entry stays hidden and the assistant links each workspace's own Genie One instead.
+
 ## 2.14.0 — 2026-11-09
 
 ### Assistant

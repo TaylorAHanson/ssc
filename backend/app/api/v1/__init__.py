@@ -2,7 +2,7 @@
 API v1 routes.
 """
 from fastapi import APIRouter
-from app.api.v1 import requests, agent, agent_polls, approvals, content, delegations, branding, callbacks, roles, reports, github, training, allowlist, data_assets, data_contracts, odps, system, context_catalog, feedback, workflows, tool_registry, skills, settings, governance, legacy_dashboards, preview_features, rbac, metadata, pins
+from app.api.v1 import requests, agent, approvals, content, delegations, branding, callbacks, roles, reports, github, training, allowlist, data_assets, data_contracts, odps, system, context_catalog, feedback, workflows, tool_registry, skills, settings, governance, legacy_dashboards, preview_features, rbac, metadata, pins, workspaces
 
 router = APIRouter()
 
@@ -12,7 +12,6 @@ router.include_router(requests.router, prefix="/requests", tags=["requests"])
 router.include_router(agent.router, prefix="/agent", tags=["agent"])
 # Poll endpoints for asynchronous agent tools (Genie, etc.). Mounted at
 # /agent/poll/* so they're discoverable next to the conversation routes.
-router.include_router(agent_polls.router, prefix="/agent/poll", tags=["agent"])
 router.include_router(approvals.router, prefix="/approvals", tags=["approvals"])
 router.include_router(delegations.router, prefix="/delegations", tags=["delegations"])
 router.include_router(roles.router, prefix="/roles", tags=["roles"])
@@ -46,6 +45,7 @@ router.include_router(preview_features.router, prefix="/preview-features", tags=
 router.include_router(rbac.router, prefix="/rbac", tags=["rbac"])
 router.include_router(metadata.router, prefix="/metadata", tags=["metadata"])
 router.include_router(pins.router, prefix="/pins", tags=["pins"])
+router.include_router(workspaces.router, prefix="/workspaces", tags=["workspaces"])
 # Dev/Test routes
 from app.api.v1 import dev
 router.include_router(dev.router, prefix="/dev", tags=["dev"])

@@ -314,9 +314,9 @@ cases:
     tags: [using-data, consumer, handoff]
     question: Please create a dashboard of shipments by month for me.
     expected: >
-      Does not claim to have built a dashboard. It either offers an in-chat chart of
-      the data or hands the user off to where dashboards are built, explaining the
-      next step briefly. It is not a dead end. It leads with the hand-off instead of
+      Does not claim to have built a dashboard and does not chart the data in the
+      chat. It hands the user off to where dashboards are built, explaining the
+      next step briefly, and may mention Genie One for exploring the numbers. It is not a dead end. It leads with the hand-off instead of
       researching first.
     forbid_tools: [get_table_list, get_catalog_list, get_schema_list, run_sql, search_data_assets, search_metadata]
     max_tool_calls: 4

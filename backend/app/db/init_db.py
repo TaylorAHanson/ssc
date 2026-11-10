@@ -12,7 +12,6 @@ DEFAULT_MAPPINGS = [
     {"external_role": "super_admin", "internal_role": "Super Admin"},
     {"external_role": "platform_admin", "internal_role": "Application Admin"},
     {"external_role": "governance_admin", "internal_role": "Governance Admin"},
-    {"external_role": "finance_admin", "internal_role": "Finance Admin"},
     {"external_role": "security_admin", "internal_role": "Security Admin"},
     {"external_role": "ops_admin", "internal_role": "Ops Admin"},
     {"external_role": "users", "internal_role": "User"},

@@ -94,7 +94,7 @@ Catalog*.
    environments to make the same changes there (see [Environments](#environments)).
 4. Add a reason (if your admin requires one) and save. Changes you're allowed to make are saved straight
    away; the rest become one approval request, which you can follow under
-   **Requests** → **My requests**.
+   **My Requests & Approvals** → **My requests**.
 
 **Discard** on the bar drops every unsaved change. A key with no value, such as
 `pii`, is a key-only tag and is applied as a tag with no value.
@@ -215,7 +215,7 @@ change** saves the opposite change. Undoing the change that started managing an
 object stops managing it instead: Unity Catalog keeps the tags and description
 it has, and the preview marks the object *Stops being managed* and warns about
 anything changed on it since. Changes still waiting for approval are under
-**Requests** → **My requests**.
+**My Requests & Approvals** → **My requests**.
 
 ## Sync & admin
 

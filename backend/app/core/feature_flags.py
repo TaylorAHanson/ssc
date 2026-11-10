@@ -26,7 +26,7 @@ def is_tool_enabled(tool_name: str) -> bool:
     Check if a specific tool is enabled.
 
     A tool entry in ``configuration.yaml`` may be either a bare bool
-    (``run_sql: true``) or a nested config dict (``ask_your_data: {enabled: true,
+    (``run_sql: true``) or a nested config dict (``some_tool: {enabled: true,
     ...}``). For dict entries we honor an explicit ``enabled:`` key and otherwise
     treat the presence of config as "enabled" — using bare ``bool(dict)`` would
     silently ignore ``enabled: false`` (a non-empty dict is always truthy) and

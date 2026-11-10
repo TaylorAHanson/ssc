@@ -75,7 +75,7 @@ export const NAV_SECTIONS: NavSection[] = [
   { title: 'Get started', slugs: ['', 'getting-started'] },
   {
     title: 'Everyday tasks',
-    slugs: ['using-the-assistant', 'discover-data', 'requests-and-approvals', 'community-and-training'],
+    slugs: ['using-the-assistant', 'discover-data', 'requests-and-approvals', 'workspaces', 'community-and-training'],
   },
   {
     title: 'For admins',

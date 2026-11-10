@@ -12,12 +12,6 @@ Two entry points:
   generator into the legacy dict shape (``{content, tool_calls,
   messages}``). Background callers and the existing non-streaming
   endpoint keep working unchanged.
-
-When a tool returns a value matching the *pending-poll envelope*
-(``{"pending_poll": {...}}``), the runner emits a :class:`PendingPollEvent`
-and stops the iteration loop early. The UI is responsible for draining
-the poll, then re-invoking the runner with a synthetic ``tool`` message
-carrying the resolved result so the LLM can summarize the answer.
 """
 import json
 import logging
@@ -31,7 +25,6 @@ from app.agents.events import (
     DoneEvent,
     ErrorEvent,
     MessageEvent,
-    PendingPollEvent,
     ReasoningEvent,
     StatusEvent,
     ToolCallEvent,
@@ -221,22 +214,6 @@ def _summarize_args(fn_args: Dict[str, Any], max_chars: int = 120) -> Optional[s
     if len(rendered) > max_chars:
         return rendered[: max_chars - 1] + "\u2026"
     return rendered
-
-
-def _extract_pending_poll(result: Any) -> Optional[Dict[str, Any]]:
-    """If a tool result is a pending-poll envelope, return its payload.
-
-    The envelope shape is ``{"pending_poll": {kind, ids, ...}}``. Anything
-    else (or an envelope missing ``kind``) is treated as a normal result.
-    """
-    if not isinstance(result, dict):
-        return None
-    pp = result.get("pending_poll")
-    if not isinstance(pp, dict):
-        return None
-    if not pp.get("kind"):
-        return None
-    return pp
 
 
 def _append_tool_messages(
@@ -439,9 +416,7 @@ class AgentRunner:
                         "ok": ev.ok,
                         "ms": round((time.monotonic() - began) * 1000) if began else None,
                     })
-                elif isinstance(ev, PendingPollEvent):
-                    outcome = "pending_poll"
-                elif isinstance(ev, DoneEvent) and outcome != "pending_poll":
+                elif isinstance(ev, DoneEvent):
                     outcome = "answered"
                 elif isinstance(ev, ErrorEvent) and ev.fatal:
                     outcome, error = "error", ev.message[:300]
@@ -614,7 +589,6 @@ class AgentRunner:
 
                 tool_outputs: List[Dict[str, Any]] = []
                 executed_any = False
-                pending_poll_event: Optional[PendingPollEvent] = None
                 force_wrap_up = False
 
                 for tc in tool_calls:
@@ -764,32 +738,6 @@ class AgentRunner:
                             result = await executor.run(matching_tool, tool_ctx, **fn_args)
                             tracing.set_span_outputs(tool_span, result)
 
-                        # Async hand-off: the tool returned a poll envelope
-                        # rather than a final result. We surface it to the
-                        # UI, stop processing further tool calls in this
-                        # iteration, and break out of the ReAct loop. The
-                        # UI re-invokes us once the poll resolves.
-                        pending_poll = _extract_pending_poll(result)
-                        if pending_poll is not None:
-                            pending_poll_event = PendingPollEvent(
-                                kind=str(pending_poll.get("kind")),
-                                ids={
-                                    k: v
-                                    for k, v in pending_poll.items()
-                                    if k not in ("kind", "friendly_label")
-                                },
-                                friendly_label=str(
-                                    pending_poll.get(
-                                        "friendly_label", matching_tool.friendly_label
-                                    )
-                                ),
-                                tool_call_id=tool_call_id,
-                                tool_name=fn_name,
-                            )
-                            # Stop processing remaining tool calls so the
-                            # UI sees a single poll for the turn.
-                            break
-
                         serialized = json.dumps(result, default=str)
                         max_tool_chars = getattr(
                             settings, "AGENT_MAX_TOOL_OUTPUT_CHARS", 25000
@@ -859,22 +807,6 @@ class AgentRunner:
                             error=str(e),
                         )
                         executed_any = True
-
-                # Pending poll handed off control to the UI. Emit the event and
-                # exit. The *polled* tool gets its tool message later (the poll
-                # continuation adds it once it resolves), but any OTHER tool calls
-                # in this same assistant turn already ran — we MUST persist their
-                # outputs now. Otherwise the assistant turn carries tool_calls with
-                # no matching tool messages (orphan tool_calls), which providers
-                # reject on resume, and those results would be silently lost.
-                if pending_poll_event is not None:
-                    _append_tool_messages(messages, tool_outputs)
-                    yield pending_poll_event
-                    final_content = agent_message
-                    tracing.end_root_span(turn_span, outputs={"pending_poll": True})
-                    turn_span = None
-                    yield DoneEvent(messages=messages, trace_id=trace_id)
-                    return
 
                 _append_tool_messages(messages, tool_outputs)
 
@@ -965,17 +897,11 @@ class AgentRunner:
         Backward-compatible shim over :py:meth:`run_stream`. Drains all
         events into the legacy ``{content, tool_calls, messages}`` shape
         used by the non-streaming endpoint and any background callers.
-
-        Pending-poll events have no analogue in this dict shape, so we
-        surface them via a ``pending_poll`` key for callers that opt
-        into the streaming mental model.
         """
         final_content = ""
         suggestions: List[str] = []
         tool_calls: List[Dict[str, Any]] = []
         messages: List[Dict[str, Any]] = []
-        pending_poll: Optional[Dict[str, Any]] = None
-        last_tool_call_event: Optional[ToolCallEvent] = None
         trace_id: Optional[str] = None
 
         async for ev in self.run_stream(
@@ -985,7 +911,6 @@ class AgentRunner:
                 final_content = ev.content
                 suggestions = ev.suggestions or []
             elif isinstance(ev, ToolCallEvent):
-                last_tool_call_event = ev
                 tool_calls.append(
                     {
                         "id": ev.id,
@@ -997,8 +922,6 @@ class AgentRunner:
                         "function": {"name": ev.name, "arguments": ev.arguments or {}},
                     }
                 )
-            elif isinstance(ev, PendingPollEvent):
-                pending_poll = ev.model_dump(mode="json")
             elif isinstance(ev, DoneEvent):
                 if ev.messages is not None:
                     messages = ev.messages
@@ -1014,7 +937,6 @@ class AgentRunner:
             "suggestions": suggestions,
             "tool_calls": tool_calls,
             "messages": messages,
-            "pending_poll": pending_poll,
             "trace_id": trace_id,
         }
 

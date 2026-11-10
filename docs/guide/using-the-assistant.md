@@ -1,16 +1,17 @@
 # Using the assistant
 
 The assistant is the chat that opens when you start {{brand_name}}. You can
-also reach it from **Ask Anything** at the top of the sidebar. Ask in plain
-language: it finds data, answers questions about your data, and starts
-requests for you.
+also reach it from **{{brand_short_name}} Agent** at the top of the sidebar.
+Ask in plain language: it finds data, checks your access, answers questions
+about this app, and starts requests for you. Analyzing data happens in Genie
+One; see [Workspaces and Genie One](workspaces.md).
 
 ## Ask a question
 
 Type in the **Ask a question...** box and press Enter. Some things to try:
 
 - "Which datasets do we have about customer orders?"
-- "How many orders did we ship last month, by region?"
+- "Where can I find shipments data, and can I read it?"
 - "I need read access to the sales orders table."
 
 The assistant may suggest prompts when you start. After each reply it also
@@ -44,15 +45,18 @@ that instead of looking it up again.
 
 ## Answers about your data
 
-When you ask about the numbers in your data, the assistant queries it for you
-and shows the answer in the chat. When it knows the table, it runs a SQL query
-directly, which takes seconds; otherwise it asks Databricks Genie.
-**Genie is working…** means a Genie query is still running.
+The assistant helps you find data and get to it, but it doesn't analyze it in
+the chat. Totals, averages, rankings, trends, breakdowns, comparisons and
+forecasts are for Genie One, which is built for them. When you ask something
+like "How many orders did we ship last month, by region?", the assistant sends
+you to Genie One with a link, the full name of the table to use, and a question
+you can paste in. See [Workspaces and Genie One](workspaces.md).
 
-A chart appears only when it helps: for a trend, a comparison or a breakdown,
-or when you ask for one. A single number, a yes-or-no answer such as whether
-you have access, or a list of rows is given in words or as a table, and at
-most one chart appears per answer.
+It still looks inside a table when that helps you find or check data:
+
+- a few sample rows, the number of rows, the range of dates it covers or the
+  values a column holds;
+- whether you can read it, with a one-row read as you.
 
 Under a query's results, **How this was answered** shows where the answer
 came from:
@@ -63,26 +67,18 @@ came from:
 - the SQL itself, run with your permissions, with **Copy SQL**, **Open the SQL
   editor** and **Query history** to check or re-run it in Databricks.
 
-Ask "What table is that number from?" and the assistant answers from the query
-it already ran, by full table name, without running it again. When an answer
-comes from a table that isn't certified or has failed quality checks, it says
-so, and it prefers certified tables when more than one could answer.
+Ask "What table is that from?" and the assistant answers from the query it
+already ran, by full table name, without running it again. When a table isn't
+certified or has failed quality checks, it says so, and it prefers certified
+tables when more than one could answer.
 
-- Click **Customize** on a chart to change its type, its axes, the field that
-  sets the colors, and how values are combined.
-- Open **Genie details** to see the SQL that was run. From there you can copy
-  the SQL, or open the same conversation in Databricks Genie to keep exploring.
-- Genie can take a minute or two, so the assistant uses it only when a faster
-  lookup, or a query on a table it already knows, won't do. A follow-up such as
-  "now by region" continues the same Genie conversation instead of starting over.
+Charts are rare. Admins asking about this app's own activity, such as "plot
+requests over time", get a chart of it in the chat. Click **Customize** on a
+chart to change its type, its axes, the field that sets the colors, and how
+values are combined.
 
 The assistant uses your own Databricks permissions, so it can only see and
 query the data you already have access to.
-
-Asking Genie also needs access to Genie itself in Unity Catalog. If the
-assistant says **Genie refused the request**, ask a workspace admin to grant
-you `EXECUTE` on `system.ai.genie_one_mcp` (with `USE CATALOG` on `system` and
-`USE SCHEMA` on `system.ai`), then sign out of {{brand_name}} and back in.
 
 ### Ask about one table
 
@@ -200,7 +196,7 @@ so you can check one won't undo the other. It's a note, with nothing to
 resolve, when one of them only needs the rule as a prerequisite, such as access
 to a schema that's needed to read a table in it.
 
-Once you confirm, the request is created and tracked under **Requests** → **My requests**.
+Once you confirm, the request is created and tracked under **My Requests & Approvals** → **My requests**.
 Requests that need sign-off go to the right approvers first. See
 [Requests and approvals](requests-and-approvals.md).
 

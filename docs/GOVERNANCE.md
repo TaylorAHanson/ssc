@@ -46,7 +46,6 @@ Roles are assigned per user (Super Admins manage this under **Admin → Settings
 | **Application Admin** | Runs the app: system settings, the Admin pages, the Tool Registry, workflows. Formerly called Platform Admin. It no longer includes the governance tools below. |
 | **Governance Admin** | Run governance day-to-day: data certification, the Sentinel, allowlist exceptions, Access Rules, tags, data products, workflows, and the context library. Cannot change system settings. |
 | **Security Admin** | Security-focused approvals. Audit-log investigations happen in Databricks Genie Code. |
-| **Finance Admin** | Finance approvals. Cost and usage analysis happens in Databricks Genie Code. |
 | **Ops Admin** | Operations: every request and delegation, watching Sentinel runs and clearing stuck ones. |
 | **User** | Standard self-service: make requests, browse the catalog, take training. |
 
@@ -243,7 +242,7 @@ The **Context Catalog** (*Control Tower → Context Catalog*) is where you keep 
 
 ## 7. Settings you can change yourself
 
-The platform is designed so you rarely need an engineer. **Admin → Settings** (Super and Application Admins) groups the changeable settings into the same sections as the sidebar (General, Discover & Analyze, Requests & Approvals, Learn & Share, Watch Tower, Control Tower, Platform); edits take effect immediately, no redeploy. Settings that belong to a feature which is switched off are collapsed under **Inactive settings** with a link to turn the feature on. The most governance-relevant pages:
+The platform is designed so you rarely need an engineer. **Admin → Settings** (Super and Application Admins) groups the changeable settings into the same sections as the sidebar (General, Discover & Request, Requests & Approvals, Learn & Share, Watch Tower, Control Tower, Platform); edits take effect immediately, no redeploy. Settings that belong to a feature which is switched off are collapsed under **Inactive settings** with a link to turn the feature on. The most governance-relevant pages:
 
 | Page | What you can change | Why it matters |
 | :--- | :--- | :--- |
@@ -253,7 +252,7 @@ The platform is designed so you rarely need an engineer. **Admin → Settings** 
 | **Watch Tower → Data Certification** | The quality table, contract sync schedule, and which workspace runs data certification. | Controls where certification runs. |
 | **General → Features & Navigation** | Which capabilities are on and which sidebar pages are shown. | Turning a capability off hides its pages and its settings. |
 | **General → Appearance** | Names, logo, colors, and the site-wide system banner. | Announce maintenance, freezes, or policy changes to everyone. |
-| **Discover & Analyze → Agent** | Assistant limits and whether tool-policy enforcement is on. | Tunes how strict the pre-request coaching layer is. |
+| **Discover & Request → Agent** | Assistant limits and whether tool-policy enforcement is on. | Tunes how strict the pre-request coaching layer is. |
 | **Learn & Share → Links & Embedded Apps** | Community links and embedded apps. | Curate what users see and do. |
 
 Some settings are **read-only** in the UI (environment, database, email provider, cron schedules, Git settings). Those are set at deploy time and shown for visibility only — changing them is an engineering task.

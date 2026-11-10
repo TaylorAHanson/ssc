@@ -36,9 +36,8 @@ interface BrandingState {
     /** Day-to-day support contact set by an admin; every field is blank until then. */
     supportContact: SupportContact;
     embeddedApps: EmbeddedApp[];
-    genieFullExperienceUrl: string;
-    /** Client-side Genie poll window (seconds) before a timeout is surfaced. */
-    geniePollTimeoutSeconds: number;
+    /** Account-level Genie One, set in Admin → Settings; '' hides the sidebar link. */
+    genieOneUrl: string;
     features: Record<string, boolean>;
     tools: Record<string, boolean>;
     uiTabs: Record<string, boolean>;
@@ -68,8 +67,7 @@ export const useBrandingStore = create<BrandingState>((set) => ({
     databricksWorkspaceUrl: '',
     supportContact: { name: '', email: '', notes: '' },
     embeddedApps: [],
-    genieFullExperienceUrl: '',
-    geniePollTimeoutSeconds: 300,
+    genieOneUrl: '',
     features: {},
     tools: {},
     uiTabs: {},
@@ -108,17 +106,13 @@ export const useBrandingStore = create<BrandingState>((set) => ({
                         title: a.title || a.id,
                         url: a.url,
                         icon: a.icon || 'LayoutDashboard',
-                        group: a.group || 'Build & Customize',
+                        group: a.group || 'Data & AI',
                         description: a.description || '',
                         allowedPersonas: Array.isArray(a.allowed_personas) && a.allowed_personas.length
                             ? (a.allowed_personas as string[])
                             : undefined,
                     })),
-                genieFullExperienceUrl: (branding as { genie_full_experience_url?: string }).genie_full_experience_url || '',
-                geniePollTimeoutSeconds: (() => {
-                    const v = (branding as { genie_poll_timeout_seconds?: number }).genie_poll_timeout_seconds;
-                    return typeof v === 'number' && v > 0 ? v : 300;
-                })(),
+                genieOneUrl: branding.genie_one_url || '',
                 features: branding.features || {},
                 tools: branding.tools || {},
                 uiTabs: branding.ui?.tabs || {},

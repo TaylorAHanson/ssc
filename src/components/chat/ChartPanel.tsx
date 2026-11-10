@@ -5,7 +5,7 @@
  * chart the user can re-graph on the fly: change the mark (bar / line /
  * area / scatter / pie), swap the x / y / color fields, and pick an
  * aggregation — all recomputed client-side with no re-query. It seeds
- * from an optional initial spec (e.g. one Genie or the agent supplied)
+ * from an optional initial spec (e.g. one the agent supplied)
  * and otherwise auto-infers a sensible default from the column types.
  *
  * The chart state is intentionally ephemeral: it lives on the rendered
@@ -34,7 +34,7 @@ import {
 
 export interface ChartPanelProps {
     dataset: Dataset;
-    /** Optional Vega-Lite spec to seed the controls from (Genie/agent supplied). */
+    /** Optional Vega-Lite spec to seed the controls from (agent supplied). */
     initialSpec?: Record<string, unknown>;
     /** Optional compact encoding to seed from (e.g. the render_chart tool). */
     initialEncoding?: Partial<ChartEncoding>;

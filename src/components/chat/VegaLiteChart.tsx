@@ -1,13 +1,12 @@
 /**
- * Renders a Vega-Lite chart spec produced by Databricks Genie.
+ * Renders a Vega-Lite chart spec in the chat.
  *
  * The Vega-Lite library is heavy (~500 KB minified) and most chats
  * never need it, so we lazy-load `vega-embed` on mount. Charts render
  * once the dynamic import resolves; users see a tiny skeleton while
  * we wait, then the chart fades in.
  *
- * Genie's chart specifications follow the standard Vega-Lite schema —
- * we don't transform them, just hand them to vega-embed and let it do
+ * Specs follow the standard Vega-Lite schema — we don't transform them, just hand them to vega-embed and let it do
  * its thing. If the spec is malformed or the inline data is missing,
  * we surface a small error instead of crashing the chat.
  */
@@ -15,7 +14,7 @@ import { useEffect, useRef, useState } from 'react';
 import { errorMessage } from '../../lib/errors';
 
 export interface VegaLiteChartProps {
-    /** The Vega-Lite spec object as Genie returned it. */
+    /** The Vega-Lite spec object. */
     spec: Record<string, unknown>;
     /** Optional explicit data table (rows + columns) merged into the spec. */
     data?: Array<Record<string, unknown>>;
@@ -41,8 +40,8 @@ export function VegaLiteChart({ spec, data, height = 280, onDatumClick }: VegaLi
         // tear the rendered view down on unmount or spec change.
         let viewFinalize: (() => void) | undefined;
 
-        // Compose the final spec: if Genie returned the chart and the
-        // data separately we splice them together so vega-embed has a
+        // Compose the final spec: if the chart and the data arrive
+        // separately we splice them together so vega-embed has a
         // self-contained spec to render.
         const finalSpec: Record<string, unknown> =
             data && data.length > 0

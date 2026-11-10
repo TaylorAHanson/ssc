@@ -8,7 +8,7 @@ ones you're most likely to change.
 ## How Settings works
 
 The settings menu on the left is organized like the sidebar: **General**,
-**Discover & Analyze**, **Requests & Approvals**, **Learn & Share**, **Watch
+**Discover & Request**, **Requests & Approvals**, **Learn & Share**, **Watch
 Tower**, **Control Tower** and **Platform**. Each page starts with a short
 description of what it controls.
 
@@ -61,10 +61,9 @@ several roles gets everything each of them allows.
 | Role | What it's for |
 |---|---|
 | **Super Admin** | Everything. The only role that changes role mappings, and the only one that can act on any approval as a break-glass override. |
-| **Application Admin** | Runs the app: settings, the Admin pages, the Tool Registry, Workflow Studio, Application Admin approvals and Edit & Restart. Doesn't hold governance, security or finance permissions. This role used to be called Platform Admin. |
+| **Application Admin** | Runs the app: settings, the Admin pages, the Tool Registry, Workflow Studio, Application Admin approvals and Edit & Restart. Doesn't hold governance or security permissions. This role used to be called Platform Admin. |
 | **Governance Admin** | The governance tools in Watch Tower, Access Rules administration, Governance Admin approvals and the assistant's contract and data product drafting tools. |
 | **Security Admin** | Security Admin approvals. |
-| **Finance Admin** | Finance Admin approvals. |
 | **Ops Admin** | Operations: sees every request and delegation, watches OmniGuard runs and clears stuck ones, and uses the workspace diagnostics tools, including the URL reachability check. |
 | **User** | Self-service: asking the assistant, filing and tracking your own requests. |
 
@@ -137,14 +136,20 @@ visit most often:
   the catalog sync runs as needs the **MANAGE DISCOVER** permission there;
   without it, Discover keeps the last domains it read, and shows everything
   under **Other** if it has never read any.
-- **Legacy Dashboards** (under **Discover & Analyze**): map dashboards people
+- **Legacy Dashboards** (under **Discover & Request**): map dashboards people
   used before, for example in Tableau, to the metric views that replace them.
   People then find them in Discover under **Legacy Dashboards** and when they
   search for the old name. Select **Add mapping**, or **Import** to paste a
   list from a spreadsheet. The page is marked **Off** while the data catalog
   is switched off, because nobody would see the mappings.
 - **Links & Embedded Apps**: the links on the **Community Links** page, and
-  other apps shown inside {{brand_name}} from the sidebar. **Support contact**
+  other apps shown inside {{brand_name}} from the sidebar. An embedded app
+  with no **Sidebar group** goes under **Data & AI**; apps saved under the old
+  **Build & Customize** or **Discover & Analyze** groups move to **Data & AI**
+  and **Discover & Request**. **Genie One link** is the address of Genie One
+  for your Databricks account, such as the one you open from the account
+  console. While it's blank, **Genie One** is hidden from the sidebar and the
+  assistant links each workspace's own Genie One instead. **Support contact**
   holds the name, email and hours or channel of whoever handles day-to-day
   help. It shows on the **Team & Support** tab of every dataset in Discover,
   and the assistant gives it when someone asks who to contact. It is blank

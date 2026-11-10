@@ -16,6 +16,7 @@ import { renderNavIcon } from '../lib/navIcons';
 export function EmbeddedApp() {
   const { appId } = useParams<{ appId: string }>();
   const embeddedApps = useBrandingStore((s) => s.embeddedApps);
+  const brandShortName = useBrandingStore((s) => s.brandShortName);
   const app = embeddedApps.find((a) => a.id === appId);
 
   if (!app) {
@@ -38,7 +39,7 @@ export function EmbeddedApp() {
           to="/request"
           className="mt-6 inline-flex items-center gap-2 px-4 py-2 rounded-md bg-accent text-white text-sm hover:opacity-90 transition-opacity"
         >
-          Back to Ask Anything
+          Back to the {brandShortName} Agent
         </Link>
       </div>
     );

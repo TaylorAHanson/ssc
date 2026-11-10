@@ -99,9 +99,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 
     # External deep links surfaced in-app.
     "links": {
-        # "Open in Databricks" link on the Ask Your Data page. Blank hides it
-        # (frontend falls back to the workspace /one entry when configured).
-        "genie_full_experience_url": "",
+        # Account-level Genie One, shown as "Genie One" in the sidebar and where the
+        # agent sends data-analysis questions. Blank hides the link.
+        "genie_one_url": "",
     },
 
     "logging": {
@@ -144,10 +144,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         # (ENFORCEMENT_SENTINEL_CRON) and the OmniGuard page. For manual runs
         # only, leave this on and blank the cron.
         "sentinel": True,
-        "ask_your_data": True,
         "run_sql": True,
-        # False = surface Genie's grounded answer verbatim (no extra LLM turn).
-        "genie_summarize_answer": False,
         "context_catalog": True,
         "workflow_authoring": True,
         "onboarding_suggestions": True,
@@ -185,7 +182,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "tabs": {
             "home": True,
             "data_discovery": True,
-            "ask_your_data": True,
+            "workspaces": True,
             "my_requests": True,
             "pending_approvals": True,
             "training": True,
@@ -282,14 +279,6 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "search_databricks_docs": True,
         "fetch_doc_page": True,
         "submit_feedback": True,
-        # Databricks Genie via Managed MCP. default_genie_space_id: blank = ask
-        # everything; set to pin all traffic to one curated Genie Space.
-        "ask_your_data": {
-            "enabled": True,
-            "default_genie_space_id": "",
-            # Client-side poll window before "Genie did not respond" (seconds).
-            "poll_timeout_seconds": 300,
-        },
         "render_chart": True,
         "run_sql": True,
         "draft_odcs_contract": True,

@@ -23,7 +23,7 @@ cases:
   - id: gc-cost-by-workspace
     name: DBU spend by workspace goes to Genie Code
     tags: [genie-code, cost]
-    role: Finance Admin
+    role: Application Admin
     question: What did we spend on DBUs last month by workspace?
     expected: >
       Says this kind of cost and usage analysis is best done in Genie Code in the

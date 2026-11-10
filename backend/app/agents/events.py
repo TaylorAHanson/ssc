@@ -50,9 +50,6 @@ class ToolCallEvent(BaseModel):
 class ToolResultEvent(BaseModel):
     """Emitted after a tool finishes execution.
 
-    Skipped for tools that yield a ``pending_poll`` envelope - the poll
-    lifecycle (handled by the UI) replaces the immediate result.
-
     ``result`` carries the raw, JSON-serializable payload the tool
     returned. The UI surfaces it in a collapsible "Raw output" panel
     underneath the pill so SAs / advanced users can see exactly what
@@ -73,23 +70,6 @@ class ToolResultEvent(BaseModel):
     # The tool's output is for the agent only (``McpTool.hide_result``), so
     # ``result`` is withheld and the UI shows no raw output for it.
     result_hidden: bool = False
-
-
-class PendingPollEvent(BaseModel):
-    """Tool returned an async handle the UI must poll to drain.
-
-    ``kind`` identifies the polling protocol (e.g. "genie") so the UI
-    knows which poll endpoint to call. ``ids`` carries whatever
-    identifiers the poll endpoint needs (conversation_id, message_id,
-    etc.). Generic by design so future async MCP servers reuse this.
-    """
-
-    type: Literal["pending_poll"] = "pending_poll"
-    kind: str
-    ids: Dict[str, Any]
-    friendly_label: str
-    tool_call_id: str
-    tool_name: str
 
 
 class ReasoningEvent(BaseModel):
@@ -159,7 +139,6 @@ AgentEvent = Union[
     StatusEvent,
     ToolCallEvent,
     ToolResultEvent,
-    PendingPollEvent,
     ReasoningEvent,
     MessageEvent,
     RouteEvent,
@@ -216,7 +195,6 @@ __all__ = [
     "StatusEvent",
     "ToolCallEvent",
     "ToolResultEvent",
-    "PendingPollEvent",
     "ReasoningEvent",
     "MessageEvent",
     "RouteEvent",

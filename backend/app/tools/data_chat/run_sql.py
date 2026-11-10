@@ -1,11 +1,10 @@
 """
 ``run_sql`` tool: run a **read-only** SQL query on Databricks SQL, as the user.
 
-This is the SQL-native sibling of ``ask_your_data`` (Genie). Where Genie turns a
-natural-language question into SQL behind an opaque, slow Managed-MCP call, this
-tool lets the agent run SQL it has already composed against a known table and get
-the rows back *directly and deterministically* — which is exactly what the
-charting pipeline needs (Genie sometimes answers in prose with no rows attached).
+The agent uses it to find and check data (access probes, a peek at a table's
+shape, counts that answer "is this the right table?"), not for analysis, which
+belongs in Genie One. It runs SQL the agent has already composed against a known
+table and gets the rows back directly and deterministically.
 
 Identity / governance:
   * The query runs through the **Databricks-managed DBSQL MCP server**

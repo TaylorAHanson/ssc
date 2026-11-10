@@ -492,9 +492,9 @@ def test_the_users_own_email_is_not_reported_as_a_directory_group():
 
 
 def test_persona_follows_the_role_priority():
-    assert uc.derive_persona(["Finance Admin", "Platform Admin"]) == "Application Admin"
+    assert uc.derive_persona(["Security Admin", "Platform Admin"]) == "Application Admin"
     assert uc.derive_persona(["Ops Admin", "Super Admin"]) == "Super Admin"
-    assert uc.derive_persona(["Finance Admin"]) == "Finance Admin"
+    assert uc.derive_persona(["Security Admin"]) == "Security Admin"
     assert uc.derive_persona([]) == "User"
 
 

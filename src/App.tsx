@@ -10,6 +10,7 @@ import { Training } from './pages/Training';
 import { Events } from './pages/Events';
 import { ReusableAssets } from './pages/ReusableAssets';
 import { CommunityLinks } from './pages/CommunityLinks';
+import { Workspaces } from './pages/Workspaces';
 import { ReleaseNotes } from './pages/ReleaseNotes';
 import { AdminReports } from './pages/AdminReports';
 import { EmbeddedApp } from './pages/EmbeddedApp';
@@ -104,6 +105,7 @@ function App() {
           {/* Same page as /requests, opened on the approver's tab. */}
           <Route path="/approvals" element={<Requests />} />
           <Route path="/reports" element={<AdminReports />} />
+          {uiTabs?.workspaces !== false && <Route path="/workspaces" element={<Workspaces />} />}
           <Route
             path="/admin"
             element={<Navigate to="/admin/dashboard" replace />}

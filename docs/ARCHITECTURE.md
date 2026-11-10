@@ -383,7 +383,7 @@ Tool *availability* is data-driven, not hardcoded. A single DB-backed catalog
 - **Three usage contexts (the columns).** Each row toggles independently:
   `enabled_for_main_agent` (unified self-service chat), `enabled_for_workflow_agent`
   (workflow-authoring chat), and `enabled_for_workflow_execution` (usable as a workflow graph
-  step / building block). So e.g. `ask_your_data` never appears while authoring,
+  step / building block). So e.g. a chat-only lookup tool can stay out of authoring,
   `preview_workflow_spec` never appears in the main chat, and provider tools like
   `terraform_apply` are workflow-execution-only and never chat-callable. This replaced the old
   static `required_role` filter + `_AUTHORING_TOOL_NAMES` whitelist in `api/v1/agent.py`.

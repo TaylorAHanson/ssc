@@ -363,8 +363,8 @@ def search_data_assets(
                 "No assets matched in the local catalog cache (it may be "
                 "incomplete or the term isn't a table). Do NOT give up: try the "
                 "live metadata tools (get_table_list / get_schema_list, after "
-                "get_target_workspaces), offer ask_your_data (Genie), or ask the "
-                "user to narrow to a catalog/schema/business area."
+                "get_target_workspaces), or ask the user to narrow to a "
+                "catalog/schema/business area."
             )
 
         return {

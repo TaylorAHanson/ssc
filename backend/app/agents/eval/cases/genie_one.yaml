@@ -1,0 +1,105 @@
+# Data analysis is answered in Genie One, not in this app's chat.
+#
+# The assistant finds data, explains it and gets people access to it. Questions whose
+# answer is worked out from the rows (totals, trends, rankings, breakdowns) go to
+# Genie One with the table name and a starting question. These cases check that
+# hand-off, and that the uses of SQL that remain (access probes, a quick look at a
+# table, charts of the app's own activity) still work.
+#
+# Run:   python -m app.agents.eval run --suite genie-one --repeat 3 --label <name>
+# Cases marked needs_identity need --obo-profile <databricks-cli-profile>.
+suite: genie-one
+description: Analysis goes to Genie One; discovery, access checks and quick looks stay.
+
+vars:
+  # A table the development test identity cannot read.
+  table: solution_builder.staples_gold_supply_chain.shipments
+  # A table the development test identity can read.
+  readable_table: taylor_hanson_build_catalog.main.internal_logs_raw
+
+defaults:
+  role: User
+  max_tool_calls: 4
+  answer_not_matches:
+    - "(?i)\\b(x-forwarded|obo token|bearer token|access token)\\b"
+
+cases:
+  - id: go-trend-named-table
+    name: A trend over a named table goes to Genie One
+    tags: [genie-one, analysis]
+    question: Show me shipments by month from ${table} for this year.
+    expected: >
+      Says this kind of question is answered in Genie One and links it. Names the
+      table ${table} and gives a short question the user can paste into Genie One.
+      It does not run a query, draw a chart or give any figures, and it offers
+      something it can do here (for example describing the table or checking access).
+    forbid_tools: [run_sql, render_chart]
+    answer_matches: ["(?i)genie\\s*one", "(?i)shipments"]
+
+  - id: go-just-run-it
+    name: "\"Just run it\" is still analysis"
+    tags: [genie-one, analysis]
+    question: Just run a query for me — who were our top 10 customers by revenue last quarter?
+    expected: >
+      Does not run the query. Says questions like this are answered in Genie One,
+      links it, and gives a starting question to paste there. If it suggests a table,
+      it found it with at most one data-catalog search. It does not invent customers,
+      revenue figures or a table name.
+    forbid_tools: [run_sql, render_chart]
+    tool_limits: {search_data_assets: 1}
+    answer_matches: ["(?i)genie\\s*one"]
+
+  - id: go-why-did-it-drop
+    name: A "why did it drop" question goes to Genie One
+    tags: [genie-one, analysis]
+    question: Why did on-time delivery drop in October?
+    expected: >
+      Points the user to Genie One for the analysis, with a starting question. It may
+      suggest a dataset to ask about. It does not speculate about causes, quote a
+      percentage or claim to have looked at the data.
+    forbid_tools: [run_sql, render_chart]
+    tool_limits: {search_data_assets: 1}
+    answer_matches: ["(?i)genie\\s*one"]
+
+  - id: go-quick-look
+    name: A quick look to confirm the right table still runs
+    tags: [genie-one, discovery, identity]
+    needs_identity: true
+    question: Show me a few sample rows from ${readable_table} so I can tell if it's the right table.
+    expected: >
+      Runs one small query and shows a handful of rows, presented as a look at the
+      table rather than an analysis. It does not chart them and does not send the
+      user away to Genie One for this.
+    expect_tools: [run_sql]
+    tool_limits: {run_sql: 1}
+    forbid_tools: [render_chart]
+    expect_tool_args:
+      - {tool: run_sql, arg: visualize, not_matches: "(?i)true"}
+
+  - id: go-where-to-analyze
+    name: Asking where to analyze data gets Genie One
+    tags: [genie-one]
+    question: Where do I go to analyze our sales data?
+    expected: >
+      Names Genie One as the place to analyze data and links it, or says how to open
+      it from their Databricks workspace. Its instructions give it the Genie One
+      address, so a link to the account's Genie One or to a workspace's `/one` page
+      (such as https://<workspace host>/one) is expected, not made up. It may offer
+      to find a sales dataset to ask about.
+    forbid_tools: [run_sql]
+    answer_matches: ["(?i)genie\\s*one"]
+
+  - id: go-admin-chart-of-requests
+    name: An admin chart of this app's requests is still answered
+    tags: [genie-one, admin, charts]
+    role: Application Admin
+    question: Plot requests over time for the last few weeks.
+    expected: >
+      Looks up the requests with its own request tool and answers here, with a chart
+      of requests over time or a short breakdown if a chart isn't possible. It does
+      not send the user to Genie One, because this is the app's own activity, not
+      business data.
+    requires_tools: [search_requests]
+    expect_tools: [search_requests]
+    forbid_tools: [run_sql]
+    answer_not_matches: ["(?i)genie\\s*one"]

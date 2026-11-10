@@ -34,14 +34,14 @@ File shape::
         forbid_tools: [execute_workflow]
         tool_limits: {submit_feedback: 1}
         expect_tool_args:                       # what a call passed, not just that it was made
-          - {tool: ask_your_data, arg: conversation_id, turn: 2, matches: "\\\\S"}
-          - {tool: ask_your_data, arg: question, not_matches: "(?i)\\\\bselect\\\\b"}
+          - {tool: find_owner, arg: object_name, turn: 2, matches: "\\\\S"}
+          - {tool: run_sql, arg: sql, not_matches: "(?i)\\\\bgroup by\\\\b"}
         max_tool_calls: 6                       # whole conversation; suite default under `defaults`
         answer_matches: ["(?i)owner"]
         answer_not_matches: ["(?i)token"]
         needs_identity: false                   # true: needs the caller's own Databricks identity
         requires_workflows: [some_workflow]     # skipped (not failed) unless these are published
-        requires_tools: [ask_your_data]         # skipped (not failed) unless the role is given these tools
+        requires_tools: [find_access]           # skipped (not failed) unless the role is given these tools
         enabled: true
 """
 from __future__ import annotations

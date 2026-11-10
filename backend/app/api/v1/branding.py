@@ -4,13 +4,14 @@ from typing import Any, Dict, List
 from fastapi import APIRouter
 from app.core.config import settings, _yaml_config, dev_features_allowed
 from app.core.settings_store import effective_ui_tabs
+from app.core.links import genie_one_url
 from app.core.support import get_support_contact
 from app.api.v1.client_events import client_events_enabled
 
 router = APIRouter()
 
 # Sidebar group an embedded app lands in when its entry omits `group`.
-_DEFAULT_EMBEDDED_APP_GROUP = "Build & Customize"
+_DEFAULT_EMBEDDED_APP_GROUP = "Data & AI"
 _DEFAULT_EMBEDDED_APP_ICON = "LayoutDashboard"
 _SLUG_RE = re.compile(r"[^a-z0-9_-]+")
 
@@ -86,24 +87,6 @@ def _normalize_workspace_url(raw: str) -> str:
     return url
 
 
-def _genie_poll_timeout_seconds(default: int = 300) -> int:
-    """Resolve the Genie poll window (seconds) from configuration.
-
-    Reads ``tools.ask_your_data.poll_timeout_seconds`` and coerces it to a
-    sane positive int, falling back to ``default`` on a missing/garbage value.
-    """
-    tools_cfg = _yaml_config.get("tools") or {}
-    entry = tools_cfg.get("ask_your_data")
-    if isinstance(entry, dict):
-        try:
-            val = int(entry.get("poll_timeout_seconds", default))
-            if val > 0:
-                return val
-        except (TypeError, ValueError):
-            pass
-    return default
-
-
 @router.get("")
 @router.get("/")
 async def get_branding():
@@ -130,17 +113,8 @@ async def get_branding():
         # Config-driven list of iframe-embedded apps. Each renders a sidebar
         # link that opens the app in-page at /embedded/<id>, in list order.
         "embedded_apps": _embedded_apps(),
-        # External "open in Databricks" link surfaced inside the
-        # Ask Your Data page. Falls back to /one (Genie home) when not
-        # explicitly configured.
-        "genie_full_experience_url": _yaml_config.get("links", {}).get(
-            "genie_full_experience_url", ""
-        ),
-        # Client-side Genie poll window (seconds). Sourced from
-        # tools.ask_your_data.poll_timeout_seconds; the chat keeps polling for
-        # an answer up to this long before surfacing a timeout. Not a Databricks
-        # limit — each poll is a short request.
-        "genie_poll_timeout_seconds": _genie_poll_timeout_seconds(),
+        # Account-level Genie One (the sidebar's Genie One link); "" hides it.
+        "genie_one_url": genie_one_url(),
         "features": _yaml_config.get("features", {}),
         "tools": _yaml_config.get("tools", {}),
         # Tabs owned by a capability whose feature flag is off are reported

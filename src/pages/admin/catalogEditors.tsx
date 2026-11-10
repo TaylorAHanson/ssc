@@ -298,7 +298,7 @@ export function EmbeddedAppsEditor({
               <TextField
                 label="Sidebar group (optional)"
                 value={app.group || ''}
-                placeholder="Build & Customize"
+                placeholder="Data & AI"
                 onChange={(v) => update(i, { ...app, group: v })}
               />
             </div>

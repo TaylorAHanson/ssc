@@ -9,10 +9,6 @@
  * from rereading server logs. The panel is collapsed by default so it
  * doesn't crowd the conversation; one click expands a syntax-light
  * monospace dump of the payload (and the arguments that produced it).
- *
- * Genie tool calls have their own dedicated ``GenieDetailsPanel``
- * which renders SQL, a result table, and any chart spec — those tools
- * don't render this panel.
  */
 import { useMemo, useState } from 'react';
 import { Check, ChevronDown, ChevronRight, Copy } from 'lucide-react';

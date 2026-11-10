@@ -31,7 +31,6 @@ export const ROLE_LABELS: Record<string, string> = {
   manager: 'Manager',
   governance_admin: 'Governance Admin',
   security_admin: 'Security Admin',
-  finance_admin: 'Finance Admin',
   // Not a role: a manual_task item is work assigned to you, not an approval
   // you grant. Labeling it "Manual Task" keeps that distinction on screen.
   manual_task: 'Manual Task',

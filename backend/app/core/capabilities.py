@@ -29,7 +29,6 @@ SUPER_ADMIN = "Super Admin"
 APPLICATION_ADMIN = "Application Admin"
 GOVERNANCE_ADMIN = "Governance Admin"
 SECURITY_ADMIN = "Security Admin"
-FINANCE_ADMIN = "Finance Admin"
 OPS_ADMIN = "Ops Admin"
 USER = "User"
 
@@ -57,8 +56,6 @@ ROLES: Tuple[RoleDef, ...] = (
             "Metadata Manager, Workflow Studio and the governance tools in chat."),
     RoleDef("security_admin", SECURITY_ADMIN,
             "Handles security approval steps."),
-    RoleDef("finance_admin", FINANCE_ADMIN,
-            "Handles finance approval steps."),
     RoleDef("ops_admin", OPS_ADMIN,
             "Keeps the platform running: sees every request and delegation, schedules, "
             "OmniGuard runs (and can clean them up) and Metadata Manager syncs, and uses the "
@@ -132,8 +129,8 @@ class Capability:
     note: Optional[str] = None
 
 
-S, APP, GOV, SEC, FIN, OPS = (
-    SUPER_ADMIN, APPLICATION_ADMIN, GOVERNANCE_ADMIN, SECURITY_ADMIN, FINANCE_ADMIN, OPS_ADMIN,
+S, APP, GOV, SEC, OPS = (
+    SUPER_ADMIN, APPLICATION_ADMIN, GOVERNANCE_ADMIN, SECURITY_ADMIN, OPS_ADMIN,
 )
 
 GROUP_ADMINISTRATION = "Administration"
@@ -242,9 +239,6 @@ _CAPABILITIES: Tuple[Capability, ...] = (
     Capability("approvals.security", "Act on Security Admin steps",
                "Approve or reject steps addressed to Security Admins.",
                GROUP_APPROVALS, (S, SEC)),
-    Capability("approvals.finance", "Act on Finance Admin steps",
-               "Approve or reject steps addressed to Finance Admins.",
-               GROUP_APPROVALS, (S, FIN)),
     Capability("requests.edit_parameters", "Edit & Restart a request",
                "Change a waiting request's inputs and restart it from an Application Admin step.",
                GROUP_APPROVALS, (S, APP)),

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Link, useLocation } from 'react-router-dom';
 import {
   Settings,
@@ -17,7 +18,6 @@ import {
   Search,
   Sparkles,
   WandSparkles,
-  Database,
   ExternalLink,
   ShieldCheck,
   ShieldAlert,
@@ -33,13 +33,13 @@ import {
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { renderNavIcon } from '../../lib/navIcons';
+import { DatabricksIcon, GenieIcon } from '../icons/DatabricksIcons';
 import { CURRENT_VERSION } from '../../lib/releaseNotes';
 import { FeedbackModal } from '../feedback/FeedbackModal';
 
 import { useBrandingStore } from '../../stores/brandingStore';
 import { hasCapability, matchesRoles, useUserStore } from '../../stores/userStore';
 import { useRequestStore } from '../../stores/requestStore';
-import { genieHomeUrl, workspaceHomeUrl } from '../../lib/databricksLinks';
 import { api } from '../../services/api';
 import { getWhoAmI } from '../../services/metadataApi';
 import { ROLE_PRIORITY } from '../../types';
@@ -48,15 +48,21 @@ import type { UserPersona } from '../../types';
 // Explicit render order for sidebar groups. Groups not listed here fall to
 // the end (preserving their relative insertion order). Driving rendering
 // from this constant — rather than from the order items happen to appear
-// in `navItems` — keeps the layout stable as dynamic items (Genie,
-// Command Center, Lakehouse) get spliced in based on branding config.
+// in `navItems` — keeps the layout stable as dynamic items (embedded apps,
+// Genie One) get spliced in based on branding config.
 const GROUP_ORDER = [
-  'Discover & Analyze',
-  'Build & Customize',
+  'Discover & Request',
+  'Data & AI',
   'Learn & Share',
   'Watch Tower',
   'Control Tower',
 ] as const;
+
+// Embedded apps saved under a group name the sidebar no longer has.
+const RENAMED_GROUPS: Record<string, string> = {
+  'Discover & Analyze': 'Discover & Request',
+  'Build & Customize': 'Data & AI',
+};
 
 // Per-group collapse state is persisted to localStorage so the sidebar
 // remembers each section's expanded/collapsed state across page reloads.
@@ -95,6 +101,8 @@ interface NavItem {
   title: string;
   icon: React.ReactNode;
   group: string;
+  // What the page is for, shown on hover or keyboard focus.
+  tooltip: string;
   // Capability id(s) from GET /roles/me; holding any one shows the item. If
   // undefined (and no gate), shown to everyone.
   capability?: string | string[];
@@ -111,19 +119,44 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  // Discover & Analyze — the unified chat agent leads this section. Its title
-  // is overridden at render time with a brand-derived label (see allNavItems).
-  { id: 'home', title: 'Agent', icon: <WandSparkles className="w-5 h-5" />, path: '/request', group: 'Discover & Analyze' },
-  { id: 'data_discovery', title: 'Discover', icon: <Search className="w-5 h-5" />, path: '/discovery', group: 'Discover & Analyze' },
+  // Discover & Request — the unified chat agent leads this section. Its title
+  // is overridden at render time with "<brand short name> Agent" (see allNavItems).
+  {
+    id: 'home', title: 'Agent', icon: <WandSparkles className="w-5 h-5" />, path: '/request', group: 'Discover & Request',
+    tooltip: 'Chat with the assistant to find data, check your access and make requests.',
+  },
+  {
+    id: 'data_discovery', title: 'Discover', icon: <Search className="w-5 h-5" />, path: '/discovery', group: 'Discover & Request',
+    tooltip: 'Browse and search the data catalog: business domains, tables, metric views, dashboards and lineage.',
+  },
   // One page with tabs; opens on "Needs my approval" while anything is waiting.
-  { id: 'requests', title: 'Requests', icon: <List className="w-5 h-5" />, path: '/requests', group: 'Discover & Analyze', gate: 'requests' },
-  { id: 'reports', title: 'Reports', icon: <BarChart className="w-5 h-5" />, path: '/reports', group: 'Discover & Analyze' },
+  {
+    id: 'requests', title: 'My Requests & Approvals', icon: <List className="w-5 h-5" />, path: '/requests',
+    group: 'Discover & Request', gate: 'requests',
+    tooltip: 'Follow the requests you have made, and approve or reject the ones waiting on you.',
+  },
+  {
+    id: 'reports', title: 'Reports', icon: <BarChart className="w-5 h-5" />, path: '/reports', group: 'Discover & Request',
+    tooltip: 'Set up and manage reports the agent writes on a schedule.',
+  },
 
   // Community - Available to everyone
-  { id: 'training', title: 'Training', icon: <GraduationCap className="w-5 h-5" />, path: '/community/training', group: 'Learn & Share' },
-  { id: 'event_calendar', title: 'Event Calendar', icon: <Calendar className="w-5 h-5" />, path: '/community/events', group: 'Learn & Share' },
-  { id: 'templates_assets', title: 'Templates & Assets', icon: <FileText className="w-5 h-5" />, path: '/community/assets', group: 'Learn & Share' },
-  { id: 'community_links', title: 'Community Links', icon: <MessageSquare className="w-5 h-5" />, path: '/community/links', group: 'Learn & Share' },
+  {
+    id: 'training', title: 'Training', icon: <GraduationCap className="w-5 h-5" />, path: '/community/training', group: 'Learn & Share',
+    tooltip: 'Follow learning paths and courses on the platform.',
+  },
+  {
+    id: 'event_calendar', title: 'Event Calendar', icon: <Calendar className="w-5 h-5" />, path: '/community/events', group: 'Learn & Share',
+    tooltip: 'Upcoming events and sessions.',
+  },
+  {
+    id: 'templates_assets', title: 'Templates & Assets', icon: <FileText className="w-5 h-5" />, path: '/community/assets', group: 'Learn & Share',
+    tooltip: 'Find and share design patterns, templates and reusable components.',
+  },
+  {
+    id: 'community_links', title: 'Community Links', icon: <MessageSquare className="w-5 h-5" />, path: '/community/links', group: 'Learn & Share',
+    tooltip: 'Curated links to resources, tools and documentation.',
+  },
 
   // Governance - Restricted
   {
@@ -133,6 +166,7 @@ const navItems: NavItem[] = [
     path: '/governance/certification',
     group: 'Watch Tower',
     capability: 'governance.control_tower',
+    tooltip: 'See which datasets meet your standards: data contracts, quality results and certification status.',
   },
   {
     id: 'odps',
@@ -141,6 +175,7 @@ const navItems: NavItem[] = [
     path: '/governance/odps',
     group: 'Watch Tower',
     capability: 'governance.control_tower',
+    tooltip: 'Catalog data products and draft new ones from certified data contracts.',
   },
   {
     id: 'allowlist',
@@ -149,6 +184,7 @@ const navItems: NavItem[] = [
     path: '/governance/allowlist',
     group: 'Watch Tower',
     capability: 'allowlist.manage',
+    tooltip: 'Record approved exceptions that OmniGuard leaves alone.',
   },
   {
     id: 'sentinel',
@@ -157,6 +193,7 @@ const navItems: NavItem[] = [
     path: '/governance/sentinel',
     group: 'Watch Tower',
     capability: 'sentinel.view',
+    tooltip: 'Scan your target workspaces for policy violations and review what to fix.',
   },
   {
     id: 'tag_management',
@@ -165,6 +202,7 @@ const navItems: NavItem[] = [
     path: '/governance/metadata',
     group: 'Watch Tower',
     gate: 'metadata',
+    tooltip: 'Find a table, then change its description and tags.',
   },
   {
     id: 'access_rules',
@@ -173,6 +211,7 @@ const navItems: NavItem[] = [
     path: '/governance/access-rules',
     group: 'Watch Tower',
     gate: 'access_rules',
+    tooltip: 'Which groups hold which privileges on data and workspaces, exported for Terraform.',
   },
   // Admin - Restricted
   {
@@ -182,6 +221,7 @@ const navItems: NavItem[] = [
     path: '/admin/dashboard',
     group: 'Control Tower',
     capability: ['admin.hub', 'feedback.manage'],
+    tooltip: 'Settings, roles, feedback and system messages.',
   },
   {
     id: 'context_catalog',
@@ -190,6 +230,7 @@ const navItems: NavItem[] = [
     path: '/governance/context-catalog',
     group: 'Control Tower',
     capability: 'context_catalog.manage',
+    tooltip: 'The curated knowledge base the assistant draws its answers from.',
   },
   {
     id: 'workflows',
@@ -198,6 +239,7 @@ const navItems: NavItem[] = [
     path: '/build/workflows',
     group: 'Control Tower',
     capability: 'workflows.author',
+    tooltip: 'Author the workflows the assistant runs, with their tools, policies and approvals.',
   },
   {
     id: 'tool_registry',
@@ -206,6 +248,7 @@ const navItems: NavItem[] = [
     path: '/build/tool-registry',
     group: 'Control Tower',
     capability: 'tools.registry.view',
+    tooltip: 'Every tool the assistant can use: where it is available, who can use it and which identity it runs as.',
   },
   {
     id: 'preview_features',
@@ -214,6 +257,7 @@ const navItems: NavItem[] = [
     path: '/build/preview-features',
     group: 'Control Tower',
     capability: 'preview_features.manage',
+    tooltip: 'Databricks Beta and Public Preview features across your target workspaces, and requests to turn them on.',
   },
   {
     id: 'training_admin',
@@ -222,6 +266,7 @@ const navItems: NavItem[] = [
     path: '/build/training',
     group: 'Control Tower',
     capability: 'training.manage',
+    tooltip: 'Author learning tracks and courses, upload media and track who completes them.',
   },
 ];
 
@@ -256,9 +301,9 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const { uiTabs } = useBrandingStore();
   const brandName = useBrandingStore((s) => s.brandName);
   const brandLogoUrl = useBrandingStore((s) => s.brandLogoUrl);
-  const databricksWorkspaceUrl = useBrandingStore((s) => s.databricksWorkspaceUrl);
+  const brandShortName = useBrandingStore((s) => s.brandShortName);
+  const genieOneUrl = useBrandingStore((s) => s.genieOneUrl);
   const embeddedApps = useBrandingStore((s) => s.embeddedApps);
-  const features = useBrandingStore((s) => s.features);
   // "Dev Persona Mode" is a local/dev-only convenience; the backend ignores the
   // role-override header outside dev envs, so hide the toggle everywhere else.
   const devFeaturesEnabled = useBrandingStore((s) => s.devFeaturesEnabled);
@@ -402,6 +447,15 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     loadCollapsedGroups
   );
 
+  // Rendered in a portal: the nav scrolls and clips horizontally, so a tooltip
+  // positioned inside it would be cut off at the rail's edge.
+  const [navTip, setNavTip] = useState<{ id: string; title: string; text: string; top: number; left: number } | null>(null);
+  const showNavTip = useCallback((id: string, title: string, text: string, el: HTMLElement) => {
+    const rect = el.getBoundingClientRect();
+    setNavTip({ id, title, text, top: rect.top + rect.height / 2, left: rect.right + 8 });
+  }, []);
+  const hideNavTip = useCallback(() => setNavTip(null), []);
+
   const toggleGroup = useCallback((groupId: string) => {
     setCollapsedGroups((prev) => {
       const next = { ...prev, [groupId]: !prev[groupId] };
@@ -410,66 +464,52 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     });
   }, []);
 
-  // External Databricks entries depend on the configured workspace URL, so
-  // they're derived per-render rather than baked into the static `navItems`.
-  // They drop out silently if the workspace URL is not configured.
+  // Data & AI: config-driven embedded apps in list order, then the account's
+  // Genie One (only once an admin sets its address) and the Workspaces page.
+  // Each embedded app renders in-app at /embedded/<id> so it participates in
+  // normal active-state styling and back/forward history.
   const externalNavItems = React.useMemo<NavItem[]>(() => {
-    const items: NavItem[] = [];
-    // "Analyze and Explore" / Ask Your Data is now folded into the unified
-    // chat (the Request entry), so we no longer add a dedicated in-app item.
-    // When the in-app feature is disabled, fall back to an external Databricks
-    // Genie deep-link so legacy environments keep a data-exploration entry.
-    const askYourDataEnabled =
-      uiTabs?.ask_your_data !== false && features?.ask_your_data !== false;
-    if (!askYourDataEnabled) {
-      const genieUrl = genieHomeUrl(databricksWorkspaceUrl);
-      if (genieUrl) {
-        items.push({
-          id: 'databricks_genie',
-          title: 'Analyze and Explore',
-          icon: <Sparkles className="w-5 h-5" />,
-          href: genieUrl,
-          group: 'Discover & Analyze',
-        });
-      }
-    }
-    // Config-driven embedded apps (embedded_apps in configuration.yaml),
-    // rendered in list order. Each renders in-app at /embedded/<id> so the
-    // icon participates in normal active-state styling and back/forward
-    // history.
-    for (const app of embeddedApps) {
-      items.push({
+    const items: NavItem[] = embeddedApps.map((app) => {
+      const group = app.group || 'Data & AI';
+      return {
         id: app.id,
         title: app.title,
         icon: renderNavIcon(app.icon),
         path: `/embedded/${app.id}`,
-        group: app.group || 'Build & Customize',
+        group: RENAMED_GROUPS[group] ?? group,
+        tooltip: app.description || `Open ${app.title} here.`,
         ...(app.allowedPersonas ? { allowedPersonas: app.allowedPersonas } : {}),
-      });
-    }
-    const lakehouseUrl = workspaceHomeUrl(databricksWorkspaceUrl);
-    if (lakehouseUrl) {
+      };
+    });
+    if (genieOneUrl) {
       items.push({
-        id: 'databricks_lakehouse',
-        title: 'Lakehouse',
-        icon: <Database className="w-5 h-5" />,
-        href: lakehouseUrl,
-        group: 'Build & Customize',
+        id: 'genie_one',
+        title: 'Genie One',
+        icon: <GenieIcon className="w-5 h-5" />,
+        href: genieOneUrl,
+        group: 'Data & AI',
+        tooltip: 'Ask questions of your data in plain language, across every workspace, and get answers, charts and dashboards.',
       });
     }
+    items.push({
+      id: 'workspaces',
+      title: 'Workspaces',
+      icon: <DatabricksIcon className="w-5 h-5" />,
+      path: '/workspaces',
+      group: 'Data & AI',
+      tooltip: 'The Databricks workspaces you can use, each with links to its lakehouse and its Genie One.',
+    });
     return items;
-  }, [databricksWorkspaceUrl, embeddedApps, uiTabs?.ask_your_data, features?.ask_your_data]);
+  }, [embeddedApps, genieOneUrl]);
 
   const allNavItems = React.useMemo(
     () => {
-      // The unified chat agent is presented as "Ask Anything" — a fixed,
-      // intent-led label rather than a brand-derived "<Brand> Agent".
       const items = navItems.map((item) =>
-        item.id === 'home' ? { ...item, title: 'Ask Anything' } : item
+        item.id === 'home' ? { ...item, title: `${brandShortName} Agent` } : item
       );
       return [...items, ...externalNavItems];
     },
-    [externalNavItems]
+    [externalNavItems, brandShortName]
   );
 
   // Filter items based on current persona
@@ -596,7 +636,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         // the vertical bar so it sits on top of the navy surface cleanly.
         "flex-1 overflow-y-auto overflow-x-hidden space-y-6 dark-scrollbar",
         collapsed ? "px-2 py-4" : "p-4"
-      )}>
+      )} onScroll={hideNavTip}>
         {orderedGroups.map(([group, items]) => {
           // When the entire rail is collapsed (icons-only mode) per-group
           // collapse is irrelevant — we always show every icon.
@@ -672,9 +712,20 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                           : "text-gray-300 hover:bg-nav-hover hover:text-white"
                       )
                 );
-                const title = collapsed
-                  ? `${item.title}${isExternal ? ' (opens in new tab)' : ''}${badgeCount > 0 ? ` (${badgeCount} pending)` : ''}`
-                  : undefined;
+                const tipNotes = [
+                  ...(badgeCount > 0 ? [`${badgeCount} waiting for you.`] : []),
+                  ...(isExternal ? ['Opens in a new tab.'] : []),
+                ];
+                const tipText = [item.tooltip, ...tipNotes].join(' ');
+                const tipProps = {
+                  'aria-label': collapsed ? item.title : undefined,
+                  'aria-describedby': navTip?.id === itemKey ? 'sidebar-nav-tip' : undefined,
+                  onMouseEnter: (e: React.MouseEvent<HTMLElement>) => showNavTip(itemKey, item.title, tipText, e.currentTarget),
+                  onFocus: (e: React.FocusEvent<HTMLElement>) => showNavTip(itemKey, item.title, tipText, e.currentTarget),
+                  onMouseLeave: hideNavTip,
+                  onBlur: hideNavTip,
+                  onClick: hideNavTip,
+                };
                 const body = (
                   <>
                     {collapsed && badgeCount > 0 ? (
@@ -712,7 +763,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                       target="_blank"
                       rel="noopener noreferrer"
                       className={className}
-                      title={title}
+                      {...tipProps}
                     >
                       {body}
                     </a>
@@ -723,7 +774,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                     key={itemKey}
                     to={itemPath!}
                     className={className}
-                    title={title}
+                    {...tipProps}
                   >
                     {body}
                   </Link>
@@ -958,6 +1009,18 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         </div>
       </div>
     </div>
+    {navTip && createPortal(
+      <div
+        id="sidebar-nav-tip"
+        role="tooltip"
+        className="pointer-events-none fixed z-[60] w-64 -translate-y-1/2 rounded-md bg-gray-900 px-3 py-2 text-xs leading-snug text-white shadow-lg ring-1 ring-white/10"
+        style={{ top: navTip.top, left: navTip.left }}
+      >
+        <p className="font-semibold">{navTip.title}</p>
+        <p className="mt-0.5 text-gray-200">{navTip.text}</p>
+      </div>,
+      document.body,
+    )}
     <FeedbackModal open={feedbackOpen} onClose={() => setFeedbackOpen(false)} />
     </>
   );

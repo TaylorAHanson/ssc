@@ -101,8 +101,8 @@ def test_building_and_changing_things_is_handed_off_to_the_workspace():
     for need in ("troubleshoot a query", "create or edit a dashboard", "change a table or its data"):
         assert need in text
     assert "Never make up a URL" in text
-    # Answering a question with rows and editing tags stay with the app.
-    assert "use `run_sql`" in text and "Metadata Manager tools" in text
+    # Answering a question with rows goes to Genie One; editing tags stays with the app.
+    assert "that is analysis, so send it to Genie One" in text and "Metadata Manager tools" in text
 
 
 def test_the_page_context_block_lists_what_is_open_as_quoted_data():

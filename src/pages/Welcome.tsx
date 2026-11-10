@@ -6,26 +6,21 @@ import {
   BarChart,
   Bell,
   Calendar,
-  CheckCircle2,
   Compass,
-  // Database, // re-enable together with the (disabled) Lakehouse tile below
   ExternalLink,
   FileText,
   GraduationCap,
-  Home as HomeIcon,
   List,
   MapPin,
   MessageSquare,
   Search,
-  Sparkles,
   Users,
   WandSparkles,
-  // Wrench, // re-enable together with the (disabled) Lakehouse tile below
 } from 'lucide-react';
 import { useBrandingStore } from '../stores/brandingStore';
 import type { EmbeddedApp } from '../stores/brandingStore';
 import { matchesRoles, useUserStore } from '../stores/userStore';
-import { genieHomeUrl /*, workspaceHomeUrl */ } from '../lib/databricksLinks';
+import { DatabricksIcon, GenieIcon } from '../components/icons/DatabricksIcons';
 import { renderNavIcon } from '../lib/navIcons';
 import type { User } from '../types';
 
@@ -62,24 +57,37 @@ type WelcomeGroup = {
 };
 
 const ICON_CLASS = 'w-4 h-4';
+const DATA_AND_AI = 'Data & AI';
+// Embedded apps saved under a group name the sidebar no longer has.
+const RENAMED_GROUPS: Record<string, string> = {
+  'Discover & Analyze': 'Discover & Request',
+  'Build & Customize': DATA_AND_AI,
+};
 
 function buildGroups(opts: {
-  workspaceUrl: string;
+  brandShortName: string;
+  genieOneUrl: string;
+  showWorkspaces: boolean;
   embeddedApps: EmbeddedApp[];
   currentUser: User | null;
 }): WelcomeGroup[] {
-  const genieUrl = genieHomeUrl(opts.workspaceUrl);
-  // const lakehouseUrl = workspaceHomeUrl(opts.workspaceUrl); // Lakehouse tile disabled
-
   const groups: WelcomeGroup[] = [
     {
       id: 'discover',
-      title: 'Discover & Analyze',
+      title: 'Discover & Request',
       description:
-        'Find the data, dashboards, and AI assistants already available across the platform.',
+        'Find the data you need, check your access and request what you are missing.',
       icon: <Compass className="w-5 h-5" />,
       accentClass: 'bg-blue-50 text-blue-600',
       items: [
+        {
+          id: 'home',
+          title: `${opts.brandShortName} Agent`,
+          description:
+            'Chat with the assistant to find data, check your access and make requests.',
+          icon: <WandSparkles className={ICON_CLASS} />,
+          to: '/request',
+        },
         {
           id: 'data_discovery',
           title: 'Discover',
@@ -89,81 +97,32 @@ function buildGroups(opts: {
           to: '/discovery',
         },
         {
-          id: 'databricks_genie',
-          title: 'Analyze and Explore',
+          id: 'requests',
+          title: 'My Requests & Approvals',
           description:
-            'Ask natural-language questions of your Databricks data.',
-          icon: <Sparkles className={ICON_CLASS} />,
-          href: genieUrl ?? undefined,
-          requireUrl: genieUrl,
-        },
-      ],
-    },
-    {
-      id: 'self-service',
-      title: 'Requests & Approvals',
-      description:
-        'Request new data, access, or workspaces — and track everything you have in flight.',
-      icon: <HomeIcon className="w-5 h-5" />,
-      accentClass: 'bg-emerald-50 text-emerald-600',
-      items: [
-        {
-          id: 'home',
-          title: 'Request',
-          description:
-            'Start a new request for data, access, or a workspace.',
-          icon: <WandSparkles className={ICON_CLASS} />,
-          to: '/request',
-        },
-        {
-          id: 'my_requests',
-          title: 'My Requests',
-          description:
-            'Track the status of every request you have submitted.',
+            'Track the requests you have made, and approve the ones waiting on you.',
           icon: <List className={ICON_CLASS} />,
           to: '/requests',
-        },
-        {
-          id: 'pending_approvals',
-          title: 'Pending Approvals',
-          description:
-            'Review and approve requests waiting on you.',
-          icon: <CheckCircle2 className={ICON_CLASS} />,
-          to: '/approvals',
         },
         {
           id: 'reports',
           title: 'Reports',
           description:
-            'See usage metrics and request reports at a glance.',
+            'Set up and manage reports the agent writes on a schedule.',
           icon: <BarChart className={ICON_CLASS} />,
           to: '/reports',
         },
       ],
     },
-    /* Lakehouse tile — DISABLED (kept for easy re-enable). To restore, uncomment
-       this block plus the `Database`/`Wrench`/`workspaceHomeUrl` imports and the
-       `lakehouseUrl` line above.
     {
-      id: 'build-deploy',
-      title: 'Build & Customize',
+      id: 'data-ai',
+      title: DATA_AND_AI,
       description:
-        'Jump into the building blocks of the lakehouse and the companion operations tooling.',
-      icon: <Wrench className="w-5 h-5" />,
+        'Work with your data in Databricks: analyze it with Genie One or build in a workspace.',
+      icon: <DatabricksIcon className="w-5 h-5" />,
       accentClass: 'bg-indigo-50 text-indigo-600',
-      items: [
-        {
-          id: 'databricks_lakehouse',
-          title: 'Lakehouse',
-          description:
-            'Jump straight to your Databricks workspace.',
-          icon: <Database className={ICON_CLASS} />,
-          href: lakehouseUrl ?? undefined,
-          requireUrl: lakehouseUrl,
-        },
-      ],
+      items: [],
     },
-    */
     {
       id: 'community',
       title: 'Learn & Share',
@@ -209,13 +168,14 @@ function buildGroups(opts: {
   ];
 
   // Merge config-driven embedded apps into the welcome grid. Each app lands
-  // in the group named by its `group` field (default "Build & Customize"),
-  // creating that group on the fly if the welcome page doesn't already define
-  // it. Role-gated apps are hidden from users who lack the role.
+  // in the group named by its `group` field (default "Data & AI"), creating
+  // that group on the fly if the welcome page doesn't already define it.
+  // Role-gated apps are hidden from users who lack the role.
   for (const app of opts.embeddedApps) {
     if (app.allowedPersonas && !matchesRoles(opts.currentUser, app.allowedPersonas)) {
       continue;
     }
+    const groupTitle = RENAMED_GROUPS[app.group] ?? (app.group || DATA_AND_AI);
     const item: WelcomeItem = {
       id: app.id,
       title: app.title,
@@ -224,19 +184,40 @@ function buildGroups(opts: {
       to: `/embedded/${app.id}`,
       allowedPersonas: app.allowedPersonas,
     };
-    const target = groups.find((g) => g.title === app.group);
+    const target = groups.find((g) => g.title === groupTitle);
     if (target) {
       target.items.push(item);
     } else {
       groups.push({
-        id: `embedded-${app.group.replace(/\s+/g, '-').toLowerCase()}`,
-        title: app.group,
+        id: `embedded-${groupTitle.replace(/\s+/g, '-').toLowerCase()}`,
+        title: groupTitle,
         description: 'Companion apps embedded into this portal.',
         icon: <AppWindow className="w-5 h-5" />,
         accentClass: 'bg-indigo-50 text-indigo-600',
         items: [item],
       });
     }
+  }
+
+  const dataAndAi = groups.find((g) => g.title === DATA_AND_AI)!;
+  dataAndAi.items.push({
+    id: 'genie_one',
+    title: 'Genie One',
+    description:
+      'Ask questions of your data in plain language, across every workspace, and get answers, charts and dashboards.',
+    icon: <GenieIcon className={ICON_CLASS} />,
+    href: opts.genieOneUrl || undefined,
+    requireUrl: opts.genieOneUrl,
+  });
+  if (opts.showWorkspaces) {
+    dataAndAi.items.push({
+      id: 'workspaces',
+      title: 'Workspaces',
+      description:
+        'The Databricks workspaces you can use, each with links to its lakehouse and its Genie One.',
+      icon: <DatabricksIcon className={ICON_CLASS} />,
+      to: '/workspaces',
+    });
   }
 
   return groups;
@@ -261,7 +242,9 @@ function buildLandingChoices(groups: WelcomeGroup[]) {
 
 export function Welcome() {
   const brandName = useBrandingStore((s) => s.brandName);
-  const workspaceUrl = useBrandingStore((s) => s.databricksWorkspaceUrl);
+  const brandShortName = useBrandingStore((s) => s.brandShortName);
+  const genieOneUrl = useBrandingStore((s) => s.genieOneUrl);
+  const showWorkspaces = useBrandingStore((s) => s.uiTabs?.workspaces !== false);
   const embeddedApps = useBrandingStore((s) => s.embeddedApps);
   const currentUser = useUserStore((s) => s.currentUser);
 
@@ -271,7 +254,9 @@ export function Welcome() {
   const groups = useMemo(
     () =>
       buildGroups({
-        workspaceUrl,
+        brandShortName,
+        genieOneUrl,
+        showWorkspaces,
         embeddedApps,
         currentUser,
       }).map((group) => ({
@@ -282,7 +267,7 @@ export function Welcome() {
           return true;
         }),
       })),
-    [workspaceUrl, embeddedApps, currentUser]
+    [brandShortName, genieOneUrl, showWorkspaces, embeddedApps, currentUser]
   );
 
   // Drop entire groups that ended up empty after filtering.

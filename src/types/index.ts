@@ -41,7 +41,6 @@ export type UserPersona =
   | 'Application Admin'
   | 'Governance Admin'
   | 'Security Admin'
-  | 'Finance Admin'
   | 'Ops Admin'
   | 'User';
 
@@ -51,7 +50,6 @@ export const ROLE_PRIORITY: UserPersona[] = [
   'Application Admin',
   'Governance Admin',
   'Security Admin',
-  'Finance Admin',
   'Ops Admin',
   'User',
 ];

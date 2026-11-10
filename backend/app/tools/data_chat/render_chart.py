@@ -32,7 +32,7 @@ _MARKS = {"bar", "line", "area", "point", "arc"}
 _AGGREGATES = {"sum", "mean", "median", "min", "max", "count", "none"}
 
 _DESCRIPTION = (
-    "Render or update a chart from previously retrieved tabular query data (e.g. from ask_your_data or run_sql). "
+    "Render or update a chart from previously retrieved tabular query data (from run_sql). "
     "Supports marks: 'bar', 'line', 'area', 'point', 'arc'. Binds automatically to tabular rows in the conversation."
 )
 
@@ -78,7 +78,7 @@ class RenderChartInput(BaseModel):
     name="render_chart",
     description=_DESCRIPTION,
     args_schema=RenderChartInput,
-    feature_flag="ask_your_data",
+    feature_flag="run_sql",
     side_effect_class="read",
     friendly_label="Building chart...",
     friendly_completion_label="Chart ready",

@@ -20,7 +20,7 @@ from app.db import ApprovalModel
 # JSON and on approval rows and is shown as "Application Admin"; it is not renamed.
 ALL_APPROVAL_TYPES = (
     "platform_admin", "manager", "data_owner", "security",
-    "security_admin", "finance_admin", "governance_admin", "manual_task",
+    "security_admin", "governance_admin", "manual_task",
 )
 
 ROLE_APPROVAL_TYPES = {
@@ -28,7 +28,6 @@ ROLE_APPROVAL_TYPES = {
     "application admin": ("platform_admin",),
     "governance admin": ("governance_admin",),
     "security admin": ("security", "security_admin"),
-    "finance admin": ("finance_admin",),
 }
 
 # ``manual_task`` with nobody on it. A gate that names no approver resolves to none

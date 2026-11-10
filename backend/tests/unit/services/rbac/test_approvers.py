@@ -28,7 +28,7 @@ def _settings(monkeypatch):
     monkeypatch.setattr(settings, "RBAC_UC_APPROVER_GROUP", f"  {UC_GROUP}  ")
     monkeypatch.setattr(settings, "RBAC_METASTORE_APPROVER_GROUP", MS_GROUP)
     monkeypatch.setattr(settings, "RBAC_WS_APPROVER_GROUP", WS_GROUP)
-    monkeypatch.setattr(settings, "RBAC_VIEWER_ROLES", ["Finance Admin"])
+    monkeypatch.setattr(settings, "RBAC_VIEWER_ROLES", ["Data Steward"])
     monkeypatch.setattr(settings, "RBAC_ALLOW_RESET", False)
     approvers._group_cache.clear()
     yield
@@ -162,7 +162,7 @@ def test_editable_planes_follow_planes_order():
 
 
 def test_viewer_role_views_but_edits_nothing():
-    viewer = _user(roles=["finance_admin"])
+    viewer = _user(roles=["data_steward"])
     assert approvers.can_view(viewer) is True
     assert approvers.editable_planes(viewer) == []
 
@@ -312,6 +312,6 @@ def test_rules_admin_imports_and_resets_only_when_allowed(fake_sdk, monkeypatch)
 
 
 def test_viewer_cannot_export(fake_sdk):
-    perms = asyncio.run(approvers.permissions(_user(roles=["Finance Admin"])))
+    perms = asyncio.run(approvers.permissions(_user(roles=["Data Steward"])))
     assert (perms.can_view, perms.can_export, perms.can_import) == (True, False, False)
     assert not any(p.can_edit for p in perms.planes)

@@ -79,7 +79,7 @@ def test_assistant_message_with_tool_calls_round_trips_into_assistant_role() -> 
                     "id": "call_abc123",
                     "type": "function",
                     "function": {
-                        "name": "ask_your_data",
+                        "name": "find_owner",
                         "arguments": '{"question":"Which tables have temporal columns?"}',
                     },
                 }
@@ -91,7 +91,7 @@ def test_assistant_message_with_tool_calls_round_trips_into_assistant_role() -> 
             content="adoc_dq_history.processed_at TIMESTAMP, ...",
             timestamp="2026-05-29T17:01:30Z",
             tool_call_id="call_abc123",
-            name="ask_your_data",
+            name="find_owner",
         ),
     ]
 
@@ -110,12 +110,12 @@ def test_assistant_message_with_tool_calls_round_trips_into_assistant_role() -> 
     tool_calls = wire[1]["tool_calls"]
     assert isinstance(tool_calls, list) and len(tool_calls) == 1
     assert tool_calls[0]["id"] == "call_abc123"
-    assert tool_calls[0]["function"]["name"] == "ask_your_data"
+    assert tool_calls[0]["function"]["name"] == "find_owner"
 
     # Tool result follows with the matching id.
     assert wire[2]["role"] == "tool"
     assert wire[2]["tool_call_id"] == "call_abc123"
-    assert wire[2]["name"] == "ask_your_data"
+    assert wire[2]["name"] == "find_owner"
 
 
 def test_assistant_message_without_tool_calls_does_not_attach_an_empty_block() -> None:
@@ -156,7 +156,7 @@ def test_tool_message_preserves_call_linkage() -> None:
             content="...",
             timestamp="2026-05-29T17:01:30Z",
             tool_call_id="call_abc123",
-            name="ask_your_data",
+            name="find_owner",
         )
     ]
 
@@ -164,7 +164,7 @@ def test_tool_message_preserves_call_linkage() -> None:
 
     assert wire[0]["role"] == "tool"
     assert wire[0]["tool_call_id"] == "call_abc123"
-    assert wire[0]["name"] == "ask_your_data"
+    assert wire[0]["name"] == "find_owner"
 
 
 @pytest.mark.parametrize("missing_field", ["tool_call_id", "name"])
@@ -180,7 +180,7 @@ def test_tool_message_missing_fields_fall_back_to_safe_defaults(
         "content": "...",
         "timestamp": "2026-05-29T17:01:30Z",
         "tool_call_id": "call_abc123",
-        "name": "ask_your_data",
+        "name": "find_owner",
     }
     fields.pop(missing_field)
     wire = _build([ChatMessage(**fields)])

@@ -23,7 +23,7 @@ def test_super_admin_sees_every_approval_type():
     types = allowed_approval_types(["Super Admin"])
     assert set(types) == {
         "platform_admin", "manager", "data_owner", "security",
-        "security_admin", "finance_admin", "governance_admin", "manual_task",
+        "security_admin", "governance_admin", "manual_task",
     }
 
 
@@ -62,13 +62,14 @@ def test_an_unassigned_manual_task_is_still_visible_to_an_application_admin(db_s
     assert [a.id for a in visible_to(["Platform Admin"])] == [orphan.id]
     assert [a.id for a in visible_to(["Super Admin"])] == [orphan.id]
     # Still scoped: it is not dumped into every admin's inbox.
-    assert visible_to(["Finance Admin"]) == []
+    assert visible_to(["Security Admin"]) == []
     assert visible_to([]) == []
 
 
 def test_scoped_roles_see_only_their_own_types():
     assert allowed_approval_types(["Security Admin"]) == ["security", "security_admin"]
-    assert allowed_approval_types(["Finance Admin"]) == ["finance_admin"]
+    # The retired Finance Admin role owns nothing now.
+    assert allowed_approval_types(["Finance Admin"]) == []
     assert allowed_approval_types(["Governance Admin"]) == ["governance_admin"]
 
 
@@ -85,7 +86,7 @@ def test_multiple_roles_union_without_duplicates():
 
 def test_parse_csv_handles_the_injected_kwarg_shapes():
     """Tools receive these flattened to a comma-separated string."""
-    assert parse_csv("Platform Admin, Finance Admin") == ["Platform Admin", "Finance Admin"]
+    assert parse_csv("Platform Admin, Data Steward") == ["Platform Admin", "Data Steward"]
     assert parse_csv("") == []
     assert parse_csv(None) == []
     assert parse_csv(" , ,") == []
@@ -96,7 +97,7 @@ def test_filter_covers_assignment_delegation_group_and_type(db_session):
     from app.db import ApprovalModel
 
     clause = str(approval_visibility_filter(
-        "me@example.com", roles=["Finance Admin"], entitlements=["my-group"]
+        "me@example.com", roles=["Data Steward"], entitlements=["my-group"]
     ))
 
     assert "approvals.assigned_to_email" in clause
@@ -105,7 +106,7 @@ def test_filter_covers_assignment_delegation_group_and_type(db_session):
     assert "approvals.approval_type" in clause
     # A query using it must actually execute against the schema.
     assert db_session.query(ApprovalModel).filter(
-        approval_visibility_filter("me@example.com", roles=["Finance Admin"], entitlements=["g"])
+        approval_visibility_filter("me@example.com", roles=["Data Steward"], entitlements=["g"])
     ).all() == []
 
 

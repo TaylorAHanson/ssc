@@ -2,7 +2,7 @@
 
 These tests fake out the LLM client and any tools so we can focus on
 the runner's event-emission protocol: status / tool_call / tool_result
-/ pending_poll / message / done.
+/ message / done.
 """
 from __future__ import annotations
 
@@ -14,7 +14,6 @@ import pytest
 from app.agents.events import (
     DoneEvent,
     MessageEvent,
-    PendingPollEvent,
     StatusEvent,
     ToolCallEvent,
     ToolResultEvent,
@@ -198,61 +197,6 @@ def test_workflow_instructions_are_marked_agent_only():
 
 
 @pytest.mark.asyncio
-async def test_run_stream_emits_pending_poll_and_halts():
-    """Pending-poll envelope => emits pending_poll, no tool_result, done."""
-    pending_envelope = {
-        "pending_poll": {
-            "kind": "genie",
-            "friendly_label": "Asking Genie...",
-            "space_id": "s",
-            "conversation_id": "c",
-            "message_id": "m",
-            "question": "?",
-        }
-    }
-    fake_tool = _FakeTool(
-        name="ask_your_data",
-        result=pending_envelope,
-        friendly_label="Asking Genie...",
-    )
-    # Even though we provide a follow-up scripted response, the runner
-    # should NOT call the LLM again after a pending_poll.
-    fake_llm_followup_marker = _FakeLLMResponse(content="must not be reached")
-    runner = _make_runner(
-        tools=[fake_tool],
-        scripted=[
-            _FakeLLMResponse(
-                tool_calls=[
-                    {
-                        "id": "tc-genie",
-                        "type": "function",
-                        "function": {"name": "ask_your_data", "arguments": {"question": "?"}},
-                    }
-                ]
-            ),
-            fake_llm_followup_marker,
-        ],
-    )
-
-    events = [ev async for ev in runner.run_stream(query="ask")]
-    types = [type(ev).__name__ for ev in events]
-
-    pending = [ev for ev in events if isinstance(ev, PendingPollEvent)]
-    tool_results = [ev for ev in events if isinstance(ev, ToolResultEvent)]
-
-    assert len(pending) == 1
-    assert pending[0].kind == "genie"
-    assert pending[0].tool_call_id == "tc-genie"
-    assert pending[0].ids["space_id"] == "s"
-    # No tool_result for a pending poll - the poll lifecycle replaces it.
-    assert tool_results == []
-    # Stream still terminates with a `done` event so the UI closes the reader.
-    assert types[-1] == "DoneEvent"
-    # The follow-up scripted response should still be queued (LLM not re-called).
-    assert fake_llm_followup_marker in runner.llm_client._scripted  # type: ignore[attr-defined]
-
-
-@pytest.mark.asyncio
 async def test_truncated_tool_arguments_are_reported_not_silently_emptied():
     """A cut-off arguments blob must not reach the tool as {}.
 
@@ -317,7 +261,6 @@ async def test_run_shim_drains_stream_into_legacy_dict():
     )
     result = await runner.run(query="hi")
     assert result["content"] == "Hello"
-    assert result["pending_poll"] is None
     # Messages list should include system + user (and any assistant turn
     # if tools were called - none here, so just system + user).
     assert any(m.get("role") == "system" for m in result["messages"])

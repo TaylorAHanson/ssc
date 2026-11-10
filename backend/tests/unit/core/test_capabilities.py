@@ -4,7 +4,6 @@ import pytest
 from app.core import capabilities as caps
 from app.core.capabilities import (
     APPLICATION_ADMIN,
-    FINANCE_ADMIN,
     GOVERNANCE_ADMIN,
     OPS_ADMIN,
     ROLE_LABELS,
@@ -80,12 +79,17 @@ def test_governance_admin_grid_row():
                        "requests.view_all", "approvals.application"}
 
 
-def test_finance_and_security_admins_hold_only_their_approval_steps():
-    assert capabilities_for([FINANCE_ADMIN]) == ["approvals.finance"]
+def test_security_admins_hold_only_their_approval_steps():
     assert capabilities_for([SECURITY_ADMIN]) == ["approvals.security"]
 
 
-@pytest.mark.parametrize("capability_id", ["finance.tools", "security.tools"])
+def test_the_finance_admin_role_is_retired():
+    assert "Finance Admin" not in ROLE_LABELS
+    # A stored "Finance Admin" is just an unknown custom role now and holds nothing.
+    assert capabilities_for(["Finance Admin"]) == []
+
+
+@pytest.mark.parametrize("capability_id", ["finance.tools", "security.tools", "approvals.finance"])
 def test_retired_chat_tool_capabilities_are_gone(capability_id):
     with pytest.raises(ValueError):
         get_capability(capability_id)
@@ -131,7 +135,7 @@ def test_custom_role_is_kept_as_given():
 def test_persona_priority():
     assert persona_for([USER, OPS_ADMIN, SUPER_ADMIN]) == SUPER_ADMIN
     assert persona_for([GOVERNANCE_ADMIN, "platform_admin"]) == APPLICATION_ADMIN
-    assert persona_for([FINANCE_ADMIN, SECURITY_ADMIN]) == SECURITY_ADMIN
+    assert persona_for(["Finance Admin", SECURITY_ADMIN]) == SECURITY_ADMIN
     assert persona_for([OPS_ADMIN]) == OPS_ADMIN
     assert persona_for([]) == USER
 
@@ -139,11 +143,11 @@ def test_persona_priority():
 def test_setting_list_extends_a_capability(monkeypatch):
     from app.core.config import settings
 
-    monkeypatch.setattr(settings, "RBAC_VIEWER_ROLES", ["Finance Admin", "platform_admin"], raising=False)
-    assert has_capability([FINANCE_ADMIN], "access_rules.view")
+    monkeypatch.setattr(settings, "RBAC_VIEWER_ROLES", ["Security Admin", "platform_admin"], raising=False)
+    assert has_capability([SECURITY_ADMIN], "access_rules.view")
     assert has_capability([APPLICATION_ADMIN], "access_rules.view")
-    assert not has_capability([FINANCE_ADMIN], "access_rules.admin")
-    assert caps.roles_for("access_rules.view") == [GOVERNANCE_ADMIN, FINANCE_ADMIN, APPLICATION_ADMIN]
+    assert not has_capability([SECURITY_ADMIN], "access_rules.admin")
+    assert caps.roles_for("access_rules.view") == [GOVERNANCE_ADMIN, SECURITY_ADMIN, APPLICATION_ADMIN]
     assert caps.roles_for("access_rules.view", include_setting=False) == [GOVERNANCE_ADMIN]
 
 

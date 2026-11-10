@@ -403,6 +403,93 @@ def delete_retired_tool_rows(engine: Engine) -> int:
     return deleted
 
 
+# --- Retired Finance Admin role ------------------------------------------------
+
+_RETIRED_ROLE = "finance admin"
+_RETIRED_APPROVAL_TYPE = "finance_admin"
+# Pending steps for the retired role are handed to Application Admins, who own the
+# ``platform_admin`` type, so they don't wait in nobody's inbox.
+_RETIRED_APPROVAL_SUCCESSOR = "platform_admin"
+
+
+def _is_retired_role(value: object) -> bool:
+    return isinstance(value, str) and " ".join(value.replace("_", " ").split()).lower() == _RETIRED_ROLE
+
+
+def _drop_retired_role(value: object) -> tuple[object, int]:
+    """Remove the retired role from every list in a JSON value."""
+    if isinstance(value, list):
+        kept = [item for item in value if not _is_retired_role(item)]
+        dropped = len(value) - len(kept)
+        nested = [_drop_retired_role(item) for item in kept]
+        dropped += sum(n for _, n in nested)
+        return ([new for new, _ in nested], dropped) if dropped else (value, 0)
+    if isinstance(value, dict):
+        out: dict = {}
+        dropped = 0
+        for key, item in value.items():
+            out[key], n = _drop_retired_role(item)
+            dropped += n
+        return (out, dropped) if dropped else (value, 0)
+    return value, 0
+
+
+def remove_finance_admin_role(engine: Engine) -> dict[str, int]:
+    """Remove the retired Finance Admin role from stored data. Safe on every boot.
+
+    * ``role_mappings``: rows mapping anything to Finance Admin are deleted.
+    * ``tool_registry.allowed_roles``: the role is dropped. A tool only Finance Admins
+      could use becomes Super Admin only, never open to everyone (an empty list).
+    * ``app_settings``: the role is dropped from persisted role lists.
+    * ``approvals``: pending Finance Admin steps move to Application Admins.
+    """
+    counts = {"role_mappings": 0, "tool_registry": 0, "settings": 0, "approvals": 0}
+    tables = set(inspect(engine).get_table_names())
+    with engine.begin() as conn:
+        if "role_mappings" in tables:
+            for row in conn.execute(text("SELECT id, internal_role FROM role_mappings")).all():
+                if _is_retired_role(row.internal_role):
+                    conn.execute(text("DELETE FROM role_mappings WHERE id = :id"), {"id": row.id})
+                    counts["role_mappings"] += 1
+
+        if "tool_registry" in tables:
+            registry = sa_table("tool_registry", column("id", String), column("allowed_roles", JSON))
+            for row in conn.execute(select(registry.c.id, registry.c.allowed_roles)).all():
+                roles = _json_value(row.allowed_roles)
+                if not isinstance(roles, list):
+                    continue
+                new_roles, n = _drop_retired_role(roles)
+                if not n:
+                    continue
+                conn.execute(update(registry).where(registry.c.id == row.id)
+                             .values(allowed_roles=new_roles or [_SUPER_ROLE]))
+                counts["tool_registry"] += 1
+
+        if "app_settings" in tables:
+            store = sa_table("app_settings", column("key", String), column("value", JSON))
+            for row in conn.execute(select(store.c.key, store.c.value)).all():
+                new_value, n = _drop_retired_role(_json_value(row.value))
+                if n:
+                    conn.execute(update(store).where(store.c.key == row.key).values(value=new_value))
+                    counts["settings"] += 1
+
+        if "approvals" in tables:
+            result = conn.execute(
+                text("UPDATE approvals SET approval_type = :new "
+                     "WHERE approval_type = :old AND status = 'pending'"),
+                {"new": _RETIRED_APPROVAL_SUCCESSOR, "old": _RETIRED_APPROVAL_TYPE},
+            )
+            counts["approvals"] = result.rowcount or 0
+
+    if any(counts.values()):
+        logger.info(
+            "Migration: removed the Finance Admin role from %d role mapping(s), %d tool "
+            "registry row(s) and %d setting(s); moved %d pending approval(s) to Application Admins",
+            counts["role_mappings"], counts["tool_registry"], counts["settings"], counts["approvals"],
+        )
+    return counts
+
+
 def run_startup_migrations(engine: Engine) -> None:
     """Apply in-place schema renames. Safe to call on every startup."""
     try:
@@ -525,6 +612,10 @@ def run_startup_migrations(engine: Engine) -> None:
         rename_platform_admin_role(engine)
     except Exception as e:  # noqa: BLE001 - never block startup on a migration
         logger.warning("Role rename migration failed (continuing): %s", e)
+    try:
+        remove_finance_admin_role(engine)
+    except Exception as e:  # noqa: BLE001 - never block startup on a migration
+        logger.warning("Finance Admin removal failed (continuing): %s", e)
     try:
         delete_retired_tool_rows(engine)
     except Exception as e:  # noqa: BLE001 - never block startup on a migration

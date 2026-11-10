@@ -58,15 +58,6 @@ export interface ToolResultEvent {
     result_hidden?: boolean;
 }
 
-export interface PendingPollEvent {
-    type: 'pending_poll';
-    kind: string;
-    ids: Record<string, unknown>;
-    friendly_label: string;
-    tool_call_id: string;
-    tool_name: string;
-}
-
 export interface ReasoningEvent {
     type: 'reasoning';
     text: string;
@@ -105,7 +96,6 @@ export type AgentEvent =
     | StatusEvent
     | ToolCallEvent
     | ToolResultEvent
-    | PendingPollEvent
     | ReasoningEvent
     | MessageEvent
     | RouteEvent
@@ -127,8 +117,8 @@ export interface AgentChatToolCall {
 
 export interface AgentChatMessage {
     id: string;
-    /** 'user' | 'agent' | 'tool' — 'tool' is used to replay a resolved
-     *  pending-poll back to the runner as a synthetic tool message. */
+    /** 'user' | 'agent' | 'tool' — 'tool' replays a settled tool call
+     *  back to the runner as a synthetic tool message. */
     type: 'user' | 'agent' | 'tool';
     content: string;
     /** ISO timestamp. */
@@ -319,7 +309,6 @@ function parseFrame(frame: string): AgentEvent | null {
         case 'status':
         case 'tool_call':
         case 'tool_result':
-        case 'pending_poll':
         case 'reasoning':
         case 'message':
         case 'route':
@@ -329,53 +318,4 @@ function parseFrame(frame: string): AgentEvent | null {
         default:
             return { type: 'unknown', raw: parsed };
     }
-}
-
-// ─── Genie poll endpoint helpers ─────────────────────────────────────
-
-export type GeniePollStatus = 'running' | 'complete' | 'failed';
-
-export interface GeniePollRequest {
-    /**
-     * Optional Genie Space ID echoed from the pending_poll event. Empty /
-     * absent means general Databricks Genie (the new "Databricks One"
-     * chat) — searches across the caller's accessible UC data + spaces.
-     */
-    space_id?: string;
-    conversation_id: string;
-    message_id: string;
-    question?: string;
-}
-
-export interface GeniePollResponse {
-    status: GeniePollStatus;
-    result?: Record<string, unknown> | null;
-    // In-progress enriched snapshot (same shape as `result`) sent while
-    // `status === 'running'`. Genie re-sends the full answer each poll and it
-    // can change non-additively, so render it by REPLACING, not appending.
-    partial?: Record<string, unknown> | null;
-    error?: string | null;
-    attempt_after_ms?: number | null;
-}
-
-export async function pollGenieResponse(
-    body: GeniePollRequest,
-    options: { signal?: AbortSignal } = {},
-): Promise<GeniePollResponse> {
-    const response = await fetch(`${API_BASE_URL}/agent/poll/genie`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            ...(useUserStore.getState().isDevMode &&
-            useUserStore.getState().activeRoleOverride
-                ? { 'X-Dev-Role-Override': useUserStore.getState().activeRoleOverride as string }
-                : {}),
-        },
-        body: JSON.stringify(body),
-        signal: options.signal,
-    });
-    if (!response.ok) {
-        throw await httpError(response, 'The data agent could not be reached');
-    }
-    return response.json();
 }

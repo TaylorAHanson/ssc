@@ -78,7 +78,7 @@ def test_section_layout():
     assert [(s["title"], s["groups"]) for s in ss.SECTIONS] == [
         ("General", ["Appearance", ss.FEATURES_GROUP, ss.ROLE_MAPPINGS_GROUP, ss.ROLE_PERMISSIONS_GROUP,
                      "Notifications"]),
-        ("Discover & Analyze", ["Agent", "Data Catalog", ss.LEGACY_DASHBOARDS_GROUP]),
+        ("Discover & Request", ["Agent", "Data Catalog", ss.LEGACY_DASHBOARDS_GROUP]),
         ("Requests & Approvals", ["Approvals", "Group Management (LMWS)", "App Code Review"]),
         ("Learn & Share", ["Links & Embedded Apps", "Calendar", ss.TRAINING_GROUP]),
         ("Watch Tower", ["OmniGuard", "Target Workspaces", "Data Certification", "Metadata Manager",
@@ -231,6 +231,7 @@ def test_load_overrides_skips_retired_rows(live_config, caplog):
         _Row("yaml:web_search.algolia.api_key", "secret"),
         _Row("yaml:links.genie_full_experience_url", "https://example.com/genie"),
         _Row("yaml:tools.ask_your_data.default_genie_space_id", "abc"),
+        _Row("features.ask_your_data", True),
         _Row("features.skills", False),
     ])
     with caplog.at_level(logging.INFO, logger=ss.logger.name):
@@ -240,7 +241,8 @@ def test_load_overrides_skips_retired_rows(live_config, caplog):
     assert live_config["features"]["skills"] is False
     assert "self_service" not in live_config["features"]
     assert "self_service_center" not in live_config
-    assert live_config["links"]["genie_full_experience_url"] == DEFAULT_CONFIG["links"]["genie_full_experience_url"]
+    assert "genie_full_experience_url" not in live_config["links"]
+    assert "ask_your_data" not in live_config["features"]
     retired_logs = [r for r in caplog.records if "retired" in r.getMessage()]
     assert len(retired_logs) == 1
     assert retired_logs[0].levelno == logging.INFO

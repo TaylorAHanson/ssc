@@ -2,9 +2,8 @@
  * `ChatView` — reusable streaming chat surface.
  *
  * Owns:
- *   * messages state (user / agent / tool / pending pills),
+ *   * messages state (user / agent / tool pills),
  *   * SSE event loop (calls `streamAgentConversation`),
- *   * pending-poll lifecycle (Genie),
  *   * "Thinking" disclosure for `reasoning` events,
  *   * (optional) integrated mode picker beneath the input,
  *   * (optional) form-routing CTA driven by the `route` SSE event.
@@ -16,8 +15,8 @@
  *   * route navigation or prefill persistence (caller handles those
  *     in `onRoute`).
  *
- * Used by both the "Ask Your Data" tab and the Self Service / Home
- * surface — same component, different mode + welcome content.
+ * Used by the agent page and the in-page workflow authoring assistant —
+ * same component, different mode + welcome content.
  */
 import { ChevronDown, Download, ExternalLink, Send, Sparkles, Square } from 'lucide-react';
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
@@ -30,7 +29,6 @@ import {
     type AgentChatMessage,
     type AgentEvent,
 } from '../../lib/agentStream';
-import { usePendingPoll } from '../../hooks/usePendingPoll';
 import { getSessionId } from '../../lib/chatPersistence';
 import { useBrandingStore } from '../../stores/brandingStore';
 import { useChatSession } from '../../stores/chatSessionStore';
@@ -39,11 +37,10 @@ import { downloadTranscript } from './transcript';
 import { NextStepSuggestions, PromptChip } from './PromptChip';
 import { sanitizeSuggestions, splitSuggestions } from './suggestions';
 import { ToolCallPill } from './ToolCallPill';
-import { GenieDetailsPanel } from './GenieDetailsPanel';
 import { ToolRawOutputPanel } from './ToolRawOutputPanel';
 import { ChartPanel } from './ChartPanel';
 import { VegaLiteChart } from './VegaLiteChart';
-import { chartCandidate, datasetFromGenieResult, findLastDataset } from './toolChart';
+import { chartCandidate, findLastDataset } from './toolChart';
 import { SqlResultPanel } from './SqlResultPanel';
 import { asSqlResult } from './sqlResult';
 import { renderMarkdownSafe } from '../../lib/markdown';
@@ -182,7 +179,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
     },
     ref,
 ) {
-    // The message log, streaming flags, pending poll, route CTA, AND the
+    // The message log, streaming flags, route CTA, AND the
     // non-reactive "internals" (AbortController, event-gate clock, tool-name /
     // tool-arg maps, dedup signature) all live in a store keyed by `storageKey`
     // — NOT in this component. That's what lets an in-flight turn survive in-app
@@ -198,27 +195,15 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
         setIsStreaming,
         statusLabel,
         setStatusLabel,
-        pendingPoll,
-        setPendingPoll,
         routeCta,
         setRouteCta,
         resetSession,
-        getPendingPoll,
         internals,
     } = useChatSession(sessionKey, storageKey);
 
     const [draft, setDraft] = useState('');
     const [showThinking, setShowThinking] = useState(false);
     const [showModeDropdown, setShowModeDropdown] = useState(false);
-    // When true, feed Genie's answer back through the agent for a final
-    // summarization turn instead of surfacing its ``final_answer`` verbatim.
-    // Defaults off (verbatim) — see configuration.yaml `genie_summarize_answer`.
-    const genieSummarizeAnswer = useBrandingStore(
-        (s) => s.features?.genie_summarize_answer === true,
-    );
-    // How long to keep polling Genie before surfacing a timeout. Configurable
-    // via tools.ask_your_data.poll_timeout_seconds (not a Databricks limit).
-    const geniePollTimeoutSeconds = useBrandingStore((s) => s.geniePollTimeoutSeconds);
     const nextStepsEnabled = useBrandingStore((s) => s.features?.next_step_suggestions !== false);
     const inputRef = useRef<HTMLTextAreaElement | null>(null);
     const messageListRef = useRef<HTMLDivElement | null>(null);
@@ -245,15 +230,14 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
     // update the counter would freeze at "0s" until some other state
     // change (a tool_result, a new pill, the next message) happened to
     // re-render the row. We mount the timer only while at least one
-    // pill is actively ``running``; pending-poll pills already have
-    // their own per-second tick from ``usePendingPoll``.
+    // pill is actively ``running``.
     const [nowMs, setNowMs] = useState(() => Date.now());
     const hasRunningPill = useMemo(
         () => messages.some((m) => m.kind === 'tool' && m.status === 'running'),
         [messages],
     );
     // Also ticks for the whole of a running turn, which drives the Stop nudge.
-    const clockRunning = hasRunningPill || isStreaming || !!pendingPoll;
+    const clockRunning = hasRunningPill || isStreaming;
     useEffect(() => {
         if (!clockRunning) return;
         const id = window.setInterval(() => setNowMs(Date.now()), 1000);
@@ -262,7 +246,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
 
     // Close the mode dropdown when the user clicks anywhere outside
     // it. Mirrors the same pattern Home.tsx uses so the affordance
-    // feels identical between Self Service and Ask Your Data.
+    // feels identical everywhere the chat appears.
     useEffect(() => {
         if (!showModeDropdown) return;
         const onClick = (e: MouseEvent) => {
@@ -277,100 +261,9 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
         return () => document.removeEventListener('mousedown', onClick);
     }, [showModeDropdown]);
 
-    // Drive Genie polling whenever an active pending_poll exists.
-    const pollState = usePendingPoll(pendingPoll, {
-        timeoutMs: geniePollTimeoutSeconds * 1000,
-        onSettled: (final, settledEvent) => {
-            // Identify which pill this resolution belongs to using the
-            // *originating* pollEvent — `pendingPoll` from closure may
-            // have already advanced to a newer turn (which would cause
-            // us to silently mark the wrong pill, or none at all).
-            const settledToolCallId = settledEvent.tool_call_id;
-            const isCurrent =
-                getPendingPoll()?.tool_call_id === settledToolCallId;
-
-            // Reflect the final state in the matching tool pill.
-            setMessages((prev) =>
-                prev.map((m) => {
-                    if (m.kind !== 'tool' || !m.poll) return m;
-                    if (m.poll.tool_call_id !== settledToolCallId) return m;
-                    if (final.status === 'complete') {
-                        return {
-                            ...m,
-                            status: 'success',
-                            completedAt: Date.now(),
-                            pollResolution: 'complete',
-                            // Persist the structured payload so the
-                            // GenieDetailsPanel can render SQL, rows,
-                            // chart, and the deep link below the pill.
-                            genieResult:
-                                final.result && typeof final.result === 'object'
-                                    ? (final.result as Record<string, unknown>)
-                                    : undefined,
-                        };
-                    }
-                    return {
-                        ...m,
-                        status: 'error',
-                        completedAt: Date.now(),
-                        errorMessage: final.error ?? final.status,
-                        pollResolution:
-                            final.status === 'cancelled' || final.status === 'timeout'
-                                ? final.status
-                                : 'failed',
-                    };
-                }),
-            );
-
-            // Anything below this line drives the *current* turn's
-            // lifecycle (resume / error message / streaming flag /
-            // pendingPoll reset). If this settle is for a stale poll
-            // that's been superseded by a newer one, we only want to
-            // update the visual state above and otherwise stay out of
-            // the way — the new poll owns those concerns now.
-            if (!isCurrent) return;
-
-            if (final.status === 'complete') {
-                // Resume the agent loop so the LLM can summarize.
-                void resumeAfterPoll(final.result);
-            } else if (final.status === 'failed' || final.status === 'timeout') {
-                // Surface the failure as an agent message and end the turn.
-                setMessages((prev) => [
-                    ...prev,
-                    {
-                        kind: 'agent',
-                        id: `${Date.now()}-pollerr`,
-                        timestamp: new Date().toISOString(),
-                        content: final.error
-                            ? `<em>I couldn't get an answer from Genie. ${escapeHtml(final.error)}</em>`
-                            : '<em>I couldn\u2019t get an answer from Genie this time.</em>',
-                    },
-                ]);
-                setIsStreaming(false);
-                setStatusLabel(null);
-            } else {
-                if (final.status === 'cancelled') {
-                    setMessages((prev) => [
-                        ...prev,
-                        {
-                            kind: 'agent',
-                            id: `${Date.now()}-pollstop`,
-                            timestamp: new Date().toISOString(),
-                            content: '<em>Stopped.</em>',
-                        },
-                    ]);
-                }
-                setIsStreaming(false);
-                setStatusLabel(null);
-            }
-            setPendingPoll(null);
-        },
-    });
-
     // Walk our display messages and translate them into the wire
-    // format the streaming endpoint expects. Tool pills become
-    // synthetic `tool` messages once their poll has resolved so the
-    // LLM can see the answer.
+    // format the streaming endpoint expects. Settled tool pills become
+    // synthetic `tool` messages so the LLM can see what it looked up.
     //
     // Chat completion APIs require every ``role: 'tool'`` message to
     // be preceded by an ``assistant`` message whose ``tool_calls``
@@ -384,11 +277,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
     // 'tool_calls'".
     //
     // ``extras`` are appended verbatim *after* the messages-derived
-    // prefix and may carry their own assistant + tool pair (the
-    // resume-after-poll path does this so the just-resolved Genie
-    // answer is included even if React hasn't flushed the success
-    // update yet). We dedupe against extras' ``tool_call_id``s so a
-    // raced flush doesn't produce duplicates.
+    // prefix; we dedupe against their ``tool_call_id``s.
     // Serialize a completed synchronous tool's payload into the ``tool``
     // message content we replay on later turns. Capped so a large listing
     // (e.g. a wide ``get_table_list``) can't dominate the context window;
@@ -445,64 +334,14 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                     timestamp: m.timestamp,
                     ...(m.suggestions?.length ? { suggestions: m.suggestions } : {}),
                 });
-            } else if (m.kind === 'tool' && m.poll && m.pollResolution === 'complete') {
-                if (skipToolCallIds.has(m.toolCallId)) continue;
-                const completedAt = new Date(m.completedAt ?? Date.now()).toISOString();
-                // Synthetic assistant turn carrying the original
-                // ``tool_calls`` block so the linkage is intact.
-                out.push({
-                    id: `${m.id}-tc`,
-                    type: 'agent',
-                    content: '',
-                    timestamp: completedAt,
-                    tool_calls: [
-                        {
-                            id: m.toolCallId,
-                            type: 'function',
-                            function: {
-                                name: m.toolName,
-                                arguments: JSON.stringify(m.toolArguments ?? {}),
-                            },
-                        },
-                    ],
-                });
-                // Replay the resolved Genie answer as a tool message. When the
-                // result carried tabular data, append a compact column summary
-                // so the agent knows what it can chart on a later turn (the
-                // default Genie path never feeds the rows through the LLM).
-                const ds = m.genieResult ? datasetFromGenieResult(m.genieResult) : undefined;
-                const schemaNote = ds
-                    ? ` [Result columns: ${ds.columns.join(', ')} (${ds.rows.length} rows).` +
-                      ' To visualize, call render_chart with these exact column names.]'
-                    : '';
-                // Without its conversation id the agent cannot continue the same Genie
-                // conversation, so every follow-up would start over with no context.
-                const genieConversationId =
-                    m.genieResult && typeof m.genieResult.conversation_id === 'string'
-                        ? m.genieResult.conversation_id
-                        : '';
-                const followUpNote = genieConversationId
-                    ? ` [Genie conversation_id: ${genieConversationId}. For a follow-up to this answer, pass it as conversation_id to ask_your_data.]`
-                    : '';
-                out.push({
-                    id: m.id,
-                    type: 'tool',
-                    content: (m.detail ?? `Genie answered "${m.label}"`) + schemaNote + followUpNote,
-                    timestamp: completedAt,
-                    tool_call_id: m.toolCallId,
-                    name: m.toolName,
-                });
             } else if (
                 m.kind === 'tool' &&
-                !m.poll &&
                 (m.status === 'success' || m.status === 'error')
             ) {
-                // Round-trip completed *synchronous* tool calls (metadata
-                // listings, search, find_owner, workflow execution, …) so
-                // the model remembers what it already looked up. Without
-                // this, only pending-poll (Genie) results survived across
-                // turns and the agent re-ran the same tool (e.g.
-                // ``get_table_list``) on every follow-up message.
+                // Round-trip completed tool calls (metadata listings, search,
+                // find_owner, workflow execution, …) so the model remembers
+                // what it already looked up instead of re-running the same
+                // tool (e.g. ``get_table_list``) on every follow-up message.
                 if (skipToolCallIds.has(m.toolCallId)) continue;
                 const completedAt = new Date(m.completedAt ?? Date.now()).toISOString();
                 out.push({
@@ -538,13 +377,6 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
         userText: string,
         opts: {
             isContinuation?: boolean;
-            /**
-             * Extra wire messages appended to the history *after* the
-             * messages-derived prefix. Used by the post-poll
-             * continuation to send the synthetic
-             * ``assistant.tool_calls`` + ``tool`` pair carrying the
-             * resolved Genie answer.
-             */
             toolMessages?: AgentChatMessage[];
         } = {},
     ) => {
@@ -567,15 +399,14 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
         internals.turnChart = null;
         // Stale form-route CTAs from a prior turn shouldn't survive a
         // new question — the agent may pick a different form, or no
-        // form at all. The continuation path skips this clear so the
-        // CTA persists across the synthetic post-poll turn.
+        // form at all. A continuation keeps it.
         if (!opts.isContinuation) {
             setRouteCta(null);
         }
 
         // For a normal turn we add a user bubble and stream into a
-        // fresh agent slot. For a continuation (post-poll) the user
-        // turn is implicit — we just stream the agent reply.
+        // fresh agent slot. For a continuation the user turn is
+        // implicit — we just stream the agent reply.
         const userMsgId = `${Date.now()}-u`;
         if (!opts.isContinuation) {
             setMessages((prev) => [
@@ -610,8 +441,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
             // while a synchronous tool pill is still 'running', it would spin
             // forever — the matching `tool_result` event never arrives. Flip any
             // still-running pills to 'error' so the spinner stops and the failure
-            // is visible. ('pending' Genie poll pills are owned by the poll hook,
-            // so we leave those alone.)
+            // is visible.
             const failRunningTools = (note: string) =>
                 setMessages((prev) =>
                     prev.map((m) =>
@@ -653,15 +483,8 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                 ]);
             }
         } finally {
-            // Don't clear streaming state if a pending poll is still
-            // running; the poll's onSettled will own that. Read the
-            // store (not the closure) so we see the latest state — the
-            // closure value is stale once a continuation turn fires
-            // after `setPendingPoll(null)`.
-            if (!getPendingPoll()) {
-                setIsStreaming(false);
-                setStatusLabel(null);
-            }
+            setIsStreaming(false);
+            setStatusLabel(null);
         }
     };
 
@@ -745,8 +568,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                 // follow-up message — the user reported "everything
                 // pops in at once" before this. With the floor in
                 // place even fast tools render at least one
-                // perceivable "running" frame, mirroring how Genie's
-                // pending-poll pill behaves.
+                // perceivable "running" frame.
                 const MIN_RUNNING_MS = 600;
                 const settle = () =>
                     setMessages((prev) => {
@@ -800,27 +622,6 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                     setTimeout(settle, delay);
                     return prev;
                 });
-                break;
-            }
-            case 'pending_poll': {
-                // Mark the matching tool entry as pending and start
-                // the poll loop. The earlier 'tool_call' put it in
-                // 'running' state; we transition to 'pending' so the
-                // pill renders with an elapsed counter from the
-                // poll hook.
-                setMessages((prev) =>
-                    prev.map((m) => {
-                        if (m.kind !== 'tool' || m.toolCallId !== event.tool_call_id) return m;
-                        return {
-                            ...m,
-                            status: 'pending',
-                            poll: event,
-                            label: event.friendly_label,
-                        };
-                    }),
-                );
-                setPendingPoll(event);
-                setStatusLabel(event.friendly_label);
                 break;
             }
             case 'reasoning': {
@@ -951,125 +752,29 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
         }
     };
 
-    const resumeAfterPoll = async (result: Record<string, unknown> | null) => {
-        if (!pendingPoll) return;
-
-        // Short-circuit when Genie produced a self-contained answer.
-        // The managed-MCP Genie endpoint ships its full answer
-        // (markdown with headings, bullets, inline tables) on the
-        // ``final_answer`` field. The LLM "summarization" turn we
-        // would otherwise run on top of it adds latency, costs
-        // tokens, and frequently rephrases Genie's polished output
-        // into something less precise. Surfacing the markdown
-        // directly in the agent bubble gives the user verbatim
-        // fidelity and keeps the UX snappy. Future turns still see
-        // this in conversation history (we push it as a normal
-        // ``agent`` message), so the LLM has full context if the
-        // user asks a follow-up.
-        const finalAnswer =
-            result && typeof result === 'object' && typeof result.final_answer === 'string'
-                ? (result.final_answer as string).trim()
-                : '';
-        // ``features.genie_summarize_answer`` (default false) lets an operator
-        // force the LLM summarization turn instead of surfacing Genie's answer
-        // verbatim. When it's off (the default) we short-circuit below.
-        if (finalAnswer && !genieSummarizeAnswer) {
-            // Store the raw markdown — the agent message renderer
-            // will run it through `renderMarkdownSafe` at view time.
-            // Keeping the storage format consistent with LLM-authored
-            // messages means the conversation log is always markdown
-            // and we never have to detect "is this already HTML?".
-            setMessages((prev) => [
-                ...prev,
-                {
-                    kind: 'agent',
-                    id: `${Date.now()}-m-genie`,
-                    content: finalAnswer,
-                    timestamp: new Date().toISOString(),
-                },
-            ]);
-            setStatusLabel(null);
-            setIsStreaming(false);
-            setPendingPoll(null);
-            return;
-        }
-
-        // Build the synthetic ``assistant.tool_calls`` + ``tool``
-        // message pair carrying the resolved Genie answer back to the
-        // LLM. We send BOTH messages because the streaming endpoint's
-        // upstream model serving API rejects orphan tool messages
-        // ("messages with role 'tool' must be a response to a
-        // preceding message with 'tool_calls'"). The assistant turn
-        // is reconstructed from the ``tool_call`` event we captured
-        // at the start of the original turn — its ``arguments`` are
-        // pulled from the matching tool display message.
-
-        // The tool display message carrying the original arguments.
-        // React may not have flushed the success-status update yet by
-        // the time we run, but the arguments were stored back when
-        // the ``tool_call`` SSE event arrived, so they're already on
-        // the message regardless of its current status.
-        const matchingTool = messages.find(
-            (m): m is Extract<DisplayMessage, { kind: 'tool' }> =>
-                m.kind === 'tool' && m.toolCallId === pendingPoll.tool_call_id,
-        );
-        const toolArgs = matchingTool?.toolArguments ?? {};
-
-        const completedAt = new Date().toISOString();
-        const baseId = `${Date.now()}`;
-        const assistantToolCall: AgentChatMessage = {
-            id: `${baseId}-tc`,
-            type: 'agent',
-            content: '',
-            timestamp: completedAt,
-            tool_calls: [
-                {
-                    id: pendingPoll.tool_call_id,
-                    type: 'function',
-                    function: {
-                        name: pendingPoll.tool_name,
-                        arguments: JSON.stringify(toolArgs),
-                    },
-                },
-            ],
-        };
-        const toolMessage: AgentChatMessage = {
-            id: `${baseId}-tool`,
-            type: 'tool',
-            content: stringifyResult(result),
-            timestamp: completedAt,
-            tool_call_id: pendingPoll.tool_call_id,
-            name: pendingPoll.tool_name,
-        };
-        await submitTurn('', {
-            isContinuation: true,
-            toolMessages: [assistantToolCall, toolMessage],
-        });
-    };
-
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         const text = draft.trim();
-        if (!text || isStreaming || pendingPoll) return;
+        if (!text || isStreaming) return;
         setDraft('');
         await submitTurn(text);
     };
 
     const lastMessage = messages[messages.length - 1];
     const nextSteps =
-        nextStepsEnabled && !isStreaming && !pendingPoll && lastMessage?.kind === 'agent'
+        nextStepsEnabled && !isStreaming && lastMessage?.kind === 'agent'
             ? (lastMessage.suggestions ?? [])
             : [];
 
     const handleNextStep = (text: string) => {
-        if (isStreaming || pendingPoll) return;
+        if (isStreaming) return;
         // The chip unmounts as soon as the turn starts; keep keyboard focus in the chat.
         inputRef.current?.focus();
         void submitTurn(text);
     };
 
     const handleSamplePrompt = (text: string) => {
-        if (isStreaming || pendingPoll) return;
+        if (isStreaming) return;
         setDraft('');
         void submitTurn(text);
     };
@@ -1084,7 +789,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
     useImperativeHandle(ref, () => ({
         submitQuery: (text: string) => {
             const trimmed = text.trim();
-            if (!trimmed || isStreaming || pendingPoll) return;
+            if (!trimmed || isStreaming) return;
             setDraft('');
             void submitTurn(trimmed);
         },
@@ -1092,11 +797,10 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
 
     const handleStop = () => {
         internals.abortController?.abort();
-        if (pendingPoll) pollState.cancel();
         setStatusLabel(null);
     };
 
-    const isBusy = isStreaming || !!pendingPoll;
+    const isBusy = isStreaming;
     // Nudge toward Stop when a turn runs long or fans out into many steps.
     const turnStats = useMemo(() => {
         let lastUser = -1;
@@ -1122,12 +826,6 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
         resetSession();
         setDraft('');
     };
-
-    // Live elapsed string for the active pending poll, if any.
-    const pollElapsedLabel = useMemo(() => {
-        if (pollState.status !== 'running') return undefined;
-        return formatElapsed(pollState.elapsedMs);
-    }, [pollState.elapsedMs, pollState.status]);
 
     const hasReasoning = useMemo(
         () => messages.some((m) => m.kind === 'reasoning'),
@@ -1222,7 +920,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                                         key={q}
                                         text={q}
                                         onSelect={handleSamplePrompt}
-                                        disabled={isStreaming || !!pendingPoll}
+                                        disabled={isStreaming}
                                     />
                                 ))}
                             </div>
@@ -1246,7 +944,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                                     key={q}
                                     text={q}
                                     onSelect={handleSamplePrompt}
-                                    disabled={isStreaming || !!pendingPoll}
+                                    disabled={isStreaming}
                                 />
                             ))}
                         </div>
@@ -1292,32 +990,9 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                         compact. The most recent step is always shown;
                         earlier steps reveal on demand. */}
                     <div ref={messageListRef} className="flex-1 overflow-y-auto space-y-4 pr-2 custom-scrollbar">
-                        {renderMessages(messages, nowMs, pollElapsedLabel, pendingPoll?.tool_call_id)}
+                        {renderMessages(messages, nowMs)}
 
                         <NextStepSuggestions suggestions={nextSteps} onSelect={handleNextStep} />
-
-                        {/* Live Genie progress as it works. Genie keeps its
-                            final answer empty until the end and streams its
-                            working steps instead, so we show a compact, muted
-                            "what it's doing now" feed (replaced each poll — the
-                            step list revises non-additively). It's superseded by
-                            the real answer once the poll settles. */}
-                        {pollState.status === 'running' && pollState.partialAnswer && (
-                            <div className="flex justify-start animate-in fade-in duration-200">
-                                <div className="max-w-[80%] rounded-2xl px-4 py-3 bg-gray-50/70 border border-gray-200/50">
-                                    <div className="flex items-center gap-1.5 mb-1.5 text-[11px] font-medium text-gray-500">
-                                        <span className="relative flex h-1.5 w-1.5">
-                                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
-                                            <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-blue-500" />
-                                        </span>
-                                        Genie is working…
-                                    </div>
-                                    <div className="text-xs leading-relaxed text-gray-500 whitespace-pre-line">
-                                        {pollState.partialAnswer}
-                                    </div>
-                                </div>
-                            </div>
-                        )}
 
                         {hasReasoning && (
                             <div className="self-start">
@@ -1386,7 +1061,7 @@ export const ChatView = forwardRef<ChatViewHandle, ChatViewProps>(function ChatV
                                     if (e.key === 'Enter' && !e.shiftKey) {
                                         e.preventDefault();
                                         const form = e.currentTarget.closest('form');
-                                        if (form && !isStreaming && !pendingPoll) {
+                                        if (form && !isStreaming) {
                                             form.requestSubmit();
                                         }
                                     }
@@ -1489,21 +1164,10 @@ function ChartBlock({ chart }: { chart: ChatChart }) {
 function MessageRow({
     msg,
     nowMs,
-    pollElapsedLabel,
-    activePollToolCallId,
 }: {
     msg: DisplayMessage;
     /** Current time from the parent's per-second clock. */
     nowMs: number;
-    pollElapsedLabel?: string;
-    /**
-     * `tool_call_id` of the pending poll that owns the live elapsed
-     * timer. We only attach `pollElapsedLabel` to the pill whose poll
-     * matches — otherwise a stale pill still in `pending` (because
-     * its onSettled never reached it) would incorrectly inherit the
-     * new turn's clock.
-     */
-    activePollToolCallId?: string;
 }) {
     if (msg.kind === 'user') {
         return (
@@ -1515,9 +1179,7 @@ function MessageRow({
         );
     }
     if (msg.kind === 'agent') {
-        // Agent messages are stored as markdown (Genie's `final_answer`
-        // ships as markdown; the LLM is now prompted to produce
-        // markdown too). We render to HTML at view time via
+        // Agent messages are stored as markdown. We render to HTML at view time via
         // `renderMarkdownSafe` so the `prose` class can style
         // headings, tables, code blocks, etc. consistently. Legacy
         // persisted HTML content passes through marked unchanged.
@@ -1543,48 +1205,23 @@ function MessageRow({
         );
     }
     if (msg.kind === 'tool') {
-        const isLivePending =
-            msg.status === 'pending' &&
-            !!activePollToolCallId &&
-            msg.poll?.tool_call_id === activePollToolCallId;
         const elapsed =
-            isLivePending && pollElapsedLabel
-                ? pollElapsedLabel
-                : msg.status === 'running' && msg.startedAt
-                    ? formatElapsed(nowMs - msg.startedAt)
-                    : msg.status === 'pending' && msg.startedAt
-                        ? // Stale pending pill (its poll was superseded
-                          // before settling) — show its own frozen-ish
-                          // elapsed instead of the new turn's clock.
-                          formatElapsed(nowMs - msg.startedAt)
-                        : (msg.status === 'success' || msg.status === 'error') &&
-                            msg.startedAt && msg.completedAt
-                            ? // Settled pill — keep the total runtime
-                              // visible so the user can see "this tool
-                              // took 8s" at a glance even after it's
-                              // resolved. Without this the counter
-                              // disappeared the moment the pill turned
-                              // green.
-                              formatElapsed(msg.completedAt - msg.startedAt)
-                            : undefined;
-        // Only Genie tool calls carry a structured payload worth
-        // surfacing in a panel today. Other tools (catalog lookups,
-        // etc.) are short-lived and their detail string suffices.
-        const isGenie =
-            msg.toolName === 'ask_your_data' ||
-            msg.toolName?.startsWith('genie') ||
-            !!msg.genieResult;
+            msg.status === 'running' && msg.startedAt
+                ? formatElapsed(nowMs - msg.startedAt)
+                : (msg.status === 'success' || msg.status === 'error') &&
+                    msg.startedAt && msg.completedAt
+                    ? // Settled pill — keep the total runtime visible so the
+                      // user can see "this tool took 8s" at a glance.
+                      formatElapsed(msg.completedAt - msg.startedAt)
+                    : undefined;
         // Synchronous tools: surface the raw result in a collapsible
         // expander so SAs can verify exactly what data the agent saw.
-        // Skip for Genie — its dedicated panel renders SQL, results,
-        // and a chart and the raw payload would be redundant. Skip
-        // when there's nothing to show (errors that didn't return a
+        // Skip when there's nothing to show (errors that didn't return a
         // body, in-flight pills, etc.).
         const chart = msg.chart;
         const hasChart = !!chart && (!!chart.dataset || !!chart.spec);
         const sqlResult = msg.status === 'success' ? asSqlResult(msg.toolResult) : null;
         const showRawOutput =
-            !isGenie &&
             !hasChart &&
             !sqlResult &&
             (msg.status === 'success' || msg.status === 'error') &&
@@ -1599,14 +1236,6 @@ function MessageRow({
                     errorMessage={msg.errorMessage}
                     elapsedLabel={elapsed}
                 />
-                {isGenie && msg.pollResolution === 'complete' && (
-                    // Wider than the message bubble (80%) — SQL and
-                    // result tables read much better with full chat-
-                    // column width.
-                    <div className="w-full">
-                        <GenieDetailsPanel result={msg.genieResult} />
-                    </div>
-                )}
                 {hasChart && chart && (
                     <div className="w-full mt-2">
                         <ChartBlock chart={chart} />
@@ -1635,8 +1264,6 @@ function MessageRow({
 function renderMessages(
     messages: DisplayMessage[],
     nowMs: number,
-    pollElapsedLabel?: string,
-    activePollToolCallId?: string,
 ): React.ReactNode {
     const out: React.ReactNode[] = [];
     let i = 0;
@@ -1651,8 +1278,6 @@ function renderMessages(
                     key={`group-${group[0].id}`}
                     items={group}
                     nowMs={nowMs}
-                    pollElapsedLabel={pollElapsedLabel}
-                    activePollToolCallId={activePollToolCallId}
                 />,
             );
             continue;
@@ -1662,8 +1287,6 @@ function renderMessages(
                 key={m.id}
                 msg={m}
                 nowMs={nowMs}
-                pollElapsedLabel={pollElapsedLabel}
-                activePollToolCallId={activePollToolCallId}
             />,
         );
         i++;
@@ -1674,19 +1297,15 @@ function renderMessages(
 /**
  * Renders a run of consecutive tool calls. By default only the most
  * recent pill is visible; a small toggle reveals the earlier steps.
- * If a step is currently `running` (or `pending`) we keep it visible
+ * If a step is currently `running` we keep it visible
  * regardless so the user can see the live activity.
  */
 function ToolCallGroup({
     items,
     nowMs,
-    pollElapsedLabel,
-    activePollToolCallId,
 }: {
     items: Extract<DisplayMessage, { kind: 'tool' }>[];
     nowMs: number;
-    pollElapsedLabel?: string;
-    activePollToolCallId?: string;
 }) {
     const [expanded, setExpanded] = useState(false);
 
@@ -1695,8 +1314,6 @@ function ToolCallGroup({
             <MessageRow
                 msg={items[0]}
                 nowMs={nowMs}
-                pollElapsedLabel={pollElapsedLabel}
-                activePollToolCallId={activePollToolCallId}
             />
         );
     }
@@ -1706,7 +1323,7 @@ function ToolCallGroup({
     // If something in the earlier batch is still mid-flight, keep it
     // visible — hiding an in-progress spinner is confusing.
     const hasRunningEarlier = earlier.some(
-        (m) => m.status === 'running' || m.status === 'pending',
+        (m) => m.status === 'running',
     );
     const showEarlier = expanded || hasRunningEarlier;
 
@@ -1718,15 +1335,11 @@ function ToolCallGroup({
                         key={m.id}
                         msg={m}
                         nowMs={nowMs}
-                        pollElapsedLabel={pollElapsedLabel}
-                        activePollToolCallId={activePollToolCallId}
                     />
                 ))}
             <MessageRow
                 msg={last}
                 nowMs={nowMs}
-                pollElapsedLabel={pollElapsedLabel}
-                activePollToolCallId={activePollToolCallId}
             />
             {!hasRunningEarlier && (
                 <button
@@ -1895,15 +1508,6 @@ function collapseSelfDuplication(raw: string): string {
     return raw;
 }
 
-function stringifyResult(result: Record<string, unknown> | null): string {
-    if (result === null || result === undefined) return '<no result>';
-    try {
-        return JSON.stringify(result, null, 2);
-    } catch {
-        return String(result);
-    }
-}
-
 /** Default label for the route CTA when the parent doesn't override. */
 function defaultRouteLabel(path: string): string {
     if (!path) return 'Continue to form';
@@ -1935,8 +1539,7 @@ interface ModePickerProps {
 }
 
 /**
- * Compact mode picker rendered beneath the input bar. Shared by the
- * Self Service / Governance / FinOps surfaces and the Ask Your Data
+ * Compact mode picker rendered beneath the input bar, shared by every chat
  * surface so users see a single, consistent affordance for switching
  * agents — there's no longer a separate per-page implementation.
  */

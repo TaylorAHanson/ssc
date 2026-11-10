@@ -278,8 +278,8 @@ def test_bulk_approve_route_is_reachable(committing_db):
     ("governance_admin", "Governance Admin", "Governance Admin", True),
     ("governance_admin", "Governance Admin", "Application Admin", False),
     ("governance_admin", "Governance Admin", "Super Admin", True),
-    ("finance_admin", "Finance Admin", "Finance Admin", True),
-    ("finance_admin", "Finance Admin", "Ops Admin", False),
+    ("security_admin", "Security Admin", "Security Admin", True),
+    ("security_admin", "Security Admin", "Ops Admin", False),
     ("data_owner", None, "Application Admin", False),
     ("data_owner", None, "Super Admin", True),
 ])

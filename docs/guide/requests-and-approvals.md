@@ -6,7 +6,8 @@ example from a data owner or an Application Admin, or a **task** that a person
 completes by hand. This page covers both sides: following your own requests,
 and acting on the ones assigned to you.
 
-Both happen on one page, opened from **Requests** in the sidebar. When
+Both happen on one page, opened from **My Requests & Approvals** in the
+sidebar. When
 something is waiting for you, the sidebar entry shows a count and opens on
 **Needs my approval**; otherwise it opens on **My requests**. The page has
 these tabs:
@@ -74,7 +75,7 @@ refresh button at the top right to update it straight away.
 ## Approve or reject a request
 
 If you're an approver, requests waiting for you appear under **Needs my
-approval**. **Requests** in the sidebar and your initials at the bottom of the
+approval**. **My Requests & Approvals** in the sidebar and your initials at the bottom of the
 sidebar both show how many there are. The list opens on **Waiting**, oldest first, so the request that has been
 blocked longest is at the top. **Handled** shows the ones you've already dealt
 with, and **All** shows both. Search and the **Workflow** filter work the same

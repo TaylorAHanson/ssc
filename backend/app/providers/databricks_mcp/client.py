@@ -1,30 +1,18 @@
 """
 Client for Databricks Managed MCP servers.
 
-Databricks exposes Genie (and friends) over the standard MCP
-streamable-HTTP transport: workspace-wide Genie through Unity Gateway at
-``/ai-gateway/mcp-services/system.ai.genie_one_mcp``, everything else at
-``/api/2.0/mcp/<server>/<resource>``. We authenticate using OBO (the
-user's forwarded access token), so each session inherits the caller's
-Unity Catalog permissions.
-
-The Genie server is **asynchronous**: ``genie_ask`` returns a query
-handle, and the caller polls ``genie_poll_response`` to drain the
-answer. That two-step shape is what makes the agent's pending-poll
-envelope necessary - the chat doesn't block waiting for Genie.
+Databricks exposes managed MCP servers (SQL, external connections) over the
+standard MCP streamable-HTTP transport at ``/api/2.0/mcp/<server>/<resource>``.
+We authenticate using OBO (the user's forwarded access token), so each
+session inherits the caller's Unity Catalog permissions.
 """
 from __future__ import annotations
 
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Awaitable, Callable, Dict, Optional, Tuple
+from typing import Any, AsyncIterator, Dict, Optional, Tuple
 from urllib.parse import quote
-
-# Progress-notification callback shape used by the MCP SDK's ``call_tool``.
-# The server may emit zero or more of these mid-call (progress, total,
-# message); Genie's support is exactly what we're probing for here.
-ProgressCallback = Callable[[float, Optional[float], Optional[str]], Awaitable[None]]
 
 from app.core.config import settings
 
@@ -68,49 +56,6 @@ def _normalize_host(raw: Optional[str]) -> str:
     return f"https://{cleaned}"
 
 
-GENIE_ONE_MCP = "system.ai.genie_one_mcp"
-
-
-def build_genie_mcp_url(
-    space_id: Optional[str] = None,
-    host: Optional[str] = None,
-    workspace_id: Optional[str] = None,
-) -> str:
-    """Build the MCP URL for Databricks Genie.
-
-    Databricks exposes two related Genie MCP servers with the same tools:
-
-    * Genie One (``system.ai.genie_one_mcp``) - workspace-wide Genie, the
-      general-purpose chat in Databricks One. Searches across the caller's
-      accessible Unity Catalog data *and* any Genie Spaces they're
-      entitled to. This is the default and is correct for the "Ask Your
-      Data" tab. It is served through Unity Gateway at
-      ``/ai-gateway/mcp-services/system.ai.genie_one_mcp?o=<workspace id>``,
-      needs the ``ai-gateway`` OAuth scope, and callers need ``EXECUTE`` on
-      the MCP. (The Beta ``/api/2.0/mcp/genie`` stops working 2026-11-30.)
-    * Genie Agent (``/api/2.0/mcp/genie/{genie_space_id}``) - scoped to a
-      single curated Genie Space. Use this when the caller wants answers
-      locked to a specific space's curated tables/metrics.
-
-    Pass ``space_id`` only when you want the space-scoped server.
-    ``workspace_id`` defaults to ``DATABRICKS_WORKSPACE_ID`` (set by the
-    Databricks Apps runtime); without one the ``o`` parameter is left off,
-    which the workspace host already implies.
-    Raises ``ValueError`` if no host is configured.
-    """
-    base = _normalize_host(host or settings.DATABRICKS_HOST or settings.DATABRICKS_WORKSPACE_URL)
-    if not base:
-        raise ValueError(
-            "Databricks host is not configured. Set DATABRICKS_HOST or "
-            "DATABRICKS_WORKSPACE_URL before invoking the Genie MCP tool."
-        )
-    if space_id:
-        return f"{base}/api/2.0/mcp/genie/{space_id}"
-    url = f"{base}/ai-gateway/mcp-services/{GENIE_ONE_MCP}"
-    workspace = str(workspace_id or os.environ.get("DATABRICKS_WORKSPACE_ID") or "").strip()
-    return f"{url}?o={workspace}" if workspace.isdigit() else url
-
-
 def _http_status(exc: BaseException) -> Optional[int]:
     """The HTTP status behind a failed MCP call, looking through exception groups and causes."""
     pending: list[Optional[BaseException]] = [exc]
@@ -126,26 +71,6 @@ def _http_status(exc: BaseException) -> Optional[int]:
         pending.extend(getattr(current, "exceptions", None) or ())
         pending.extend((current.__cause__, current.__context__))
     return None
-
-
-def describe_genie_failure(
-    exc: BaseException, space_id: Optional[str] = None, prefix: str = "Failed to contact Genie"
-) -> str:
-    """A user-facing message for a Genie MCP call that raised; names the missing access on a 401/403."""
-    status = _http_status(exc)
-    if status in (401, 403):
-        if space_id:
-            needed = f"access to Genie space {space_id} and its tables"
-        else:
-            needed = (
-                f"EXECUTE on {GENIE_ONE_MCP} (plus USE CATALOG on system and USE SCHEMA on "
-                "system.ai) and the app's ai-gateway scope"
-            )
-        return (
-            f"Genie refused the request (HTTP {status}). Asking Genie needs {needed}. "
-            "Ask a workspace admin to grant it, then sign in to the app again."
-        )
-    return f"{prefix}: {exc}"
 
 
 def build_dbsql_mcp_url(host: Optional[str] = None) -> str:
@@ -364,123 +289,6 @@ async def open_mcp_session(
             yield session
 
 
-async def call_genie_tool(
-    tool_name: str,
-    arguments: Dict[str, Any],
-    obo_token: Optional[str] = None,
-    space_id: Optional[str] = None,
-    host: Optional[str] = None,
-    progress_callback: Optional["ProgressCallback"] = None,
-) -> Dict[str, Any]:
-    """Invoke a single tool on the Databricks Genie MCP server.
-
-    Convenience wrapper for the common case of "open a session, call one
-    tool, close the session". When ``space_id`` is omitted (the default
-    for the "Ask Your Data" tab), this hits the general Databricks Genie
-    server which searches across the user's accessible UC data + Genie
-    Spaces. Pass ``space_id`` to pin to a specific curated space.
-
-    ``obo_token`` is preferred. When absent, we fall back to a service
-    principal OAuth token via :func:`resolve_genie_bearer_token` (handy
-    for local dev where the ``X-Forwarded-Access-Token`` header isn't
-    present). If neither is available the call raises ``RuntimeError``
-    with a user-actionable message.
-
-    Returns a normalized dict with ``content`` (joined text from the
-    response parts), ``structured`` (the structured payload if the
-    server emitted one), ``is_error`` (``True`` when the MCP server
-    reported an error), and ``auth_source`` (``"obo"`` / ``"sp"`` so
-    callers can warn the user when the SP fallback was used).
-    """
-    bearer_token, source = resolve_genie_bearer_token(obo_token)
-    if not bearer_token:
-        if _running_in_databricks_apps():
-            raise GenieAuthUnavailableError(
-                "No OBO token was forwarded for the Databricks Genie call. "
-                "The Databricks Apps platform should inject "
-                "X-Forwarded-Access-Token automatically — if it's missing, "
-                "the bundle's user_api_scopes likely doesn't include the "
-                "ai-gateway (workspace Genie) or genie (Genie space) scope, "
-                "or the user hasn't re-authorized the app since that scope "
-                "was added. (SP fallback is "
-                "intentionally disabled inside Databricks Apps so Genie "
-                "always runs under the user's identity.)"
-            )
-        if _is_local_environment():
-            raise GenieAuthUnavailableError(
-                "No authentication available for Databricks Genie. In local dev, "
-                "set DATABRICKS_CLIENT_ID / DATABRICKS_CLIENT_SECRET (the SP must "
-                "have access to Genie in this workspace) or paste a user token "
-                "into MOCK_USER_TOKEN."
-            )
-        raise GenieAuthUnavailableError(
-            "No OBO token was forwarded for the Databricks Genie call, and "
-            f"ENVIRONMENT={settings.ENVIRONMENT!r} is not a local/dev "
-            "environment, so the SP fallback is disabled. Either set "
-            "ENVIRONMENT to a local-flavored value (development / dev / "
-            "local / test / testing) for off-platform dev, or run the app "
-            "inside Databricks Apps so the X-Forwarded-Access-Token header "
-            "is forwarded."
-        )
-
-    url = build_genie_mcp_url(space_id, host=host)
-    logger.info(
-        "Calling Genie MCP tool %s on %s (auth=%s, args keys=%s)",
-        tool_name,
-        url,
-        source,
-        list(arguments.keys()),
-    )
-    async with open_mcp_session(url=url, bearer_token=bearer_token) as session:
-        # ``progress_callback`` is supported by mcp>=1.x ``call_tool``. We pass
-        # it through so callers can observe any progress notifications Genie
-        # emits mid-call (our probe for whether Genie "streams"). Guard against
-        # older SDKs that don't accept the kwarg.
-        if progress_callback is not None:
-            try:
-                result = await session.call_tool(
-                    tool_name, arguments=arguments, progress_callback=progress_callback
-                )
-            except TypeError:
-                logger.warning(
-                    "Genie MCP: installed mcp SDK does not support progress_callback; "
-                    "falling back to a plain call_tool (no progress notifications)."
-                )
-                result = await session.call_tool(tool_name, arguments=arguments)
-        else:
-            result = await session.call_tool(tool_name, arguments=arguments)
-
-    text_parts: list[str] = []
-    structured: Optional[Dict[str, Any]] = None
-    for part in getattr(result, "content", []) or []:
-        text = getattr(part, "text", None)
-        if isinstance(text, str):
-            text_parts.append(text)
-    structured_attr = getattr(result, "structuredContent", None)
-    if isinstance(structured_attr, dict):
-        structured = structured_attr
-
-    content = "\n".join(t for t in text_parts if t).strip()
-
-    # Boundary-level visibility into what the MCP transport actually returned.
-    # This fires for both genie_ask and genie_poll_response and is the cheapest
-    # way to see the response shape in a customer environment.
-    logger.info(
-        "Genie MCP %s returned: is_error=%s content_len=%d structured_keys=%s",
-        tool_name,
-        bool(getattr(result, "isError", False)),
-        len(content),
-        sorted(structured.keys()) if isinstance(structured, dict) else "none",
-    )
-
-    return {
-        "content": content,
-        "structured": structured,
-        "is_error": bool(getattr(result, "isError", False)),
-        "auth_source": source,
-    }
-
-
 async def call_dbsql_tool(
     tool_name: str,
     arguments: Dict[str, Any],
@@ -489,11 +297,10 @@ async def call_dbsql_tool(
 ) -> Dict[str, Any]:
     """Invoke a single tool on the Databricks SQL (DBSQL) Managed MCP server.
 
-    Mirrors :func:`call_genie_tool` but targets ``/api/2.0/mcp/sql`` and tailors
-    the no-auth error to the ``sql`` OAuth scope. ``obo_token`` is preferred so
-    the query runs under the user's Unity Catalog permissions; the SP fallback is
-    only permitted in true local dev (same policy as Genie, via
-    :func:`resolve_genie_bearer_token`).
+    Targets ``/api/2.0/mcp/sql`` and tailors the no-auth error to the ``sql``
+    OAuth scope. ``obo_token`` is preferred so the query runs under the user's
+    Unity Catalog permissions; the SP fallback is only permitted in true local
+    dev (via :func:`resolve_genie_bearer_token`).
 
     Returns a normalized dict with ``content`` (joined text), ``structured`` (the
     structured payload if present), ``is_error``, and ``auth_source``.
@@ -555,15 +362,10 @@ async def call_dbsql_tool(
 
 
 __all__ = [
-    "GENIE_ONE_MCP",
-    "build_genie_mcp_url",
     "build_dbsql_mcp_url",
     "build_external_mcp_url",
-    "describe_genie_failure",
     "open_mcp_session",
-    "call_genie_tool",
     "call_dbsql_tool",
     "resolve_genie_bearer_token",
     "GenieAuthUnavailableError",
-    "ProgressCallback",
 ]

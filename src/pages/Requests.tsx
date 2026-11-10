@@ -33,7 +33,7 @@ const PAGE_SIZE = 100;
 // 'platform_admin' is the old name of application_admin.
 const APPROVER_ROLES = new Set([
   'super_admin', 'application_admin', 'platform_admin', 'data_owner', 'manager', 'governance_admin',
-  'security_admin', 'finance_admin', 'security',
+  'security_admin', 'security',
 ]);
 
 const APPROVAL_STATUS_OPTIONS: { value: ApprovalStatusFilter; label: string }[] = [

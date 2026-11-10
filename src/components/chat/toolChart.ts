@@ -1,12 +1,12 @@
 /**
  * Detects chart-renderable content in an arbitrary agent tool result so
- * the chat can render a chart below *any* tool pill — not just Genie.
+ * the chat can render a chart below any tool pill.
  *
  * Two producers feed this:
  *   1. The ``render_chart`` agent tool, which emits a compact
  *      ``chart_directive`` (mark + field encodings) meant to be bound to
  *      the conversation's most recent dataset (so "graph that as a line"
- *      reuses the rows Genie already returned).
+ *      reuses the rows ``run_sql`` already returned).
  *   2. Any tool that returns tabular data (``columns``/``rows`` or an
  *      array of record objects) or an inline Vega-Lite spec.
  */
@@ -16,7 +16,6 @@ import {
     type ChartMark,
     type Dataset,
 } from '../../lib/charting';
-import { parseGenieResult } from './parseGenieResult';
 
 export interface ToolChart {
     /** Explicit dataset carried by the tool result (if any). */
@@ -105,8 +104,6 @@ export function chartCandidate(
  * structural so ChatView's richer ``DisplayMessage`` satisfies it directly.
  */
 export interface ToolMessageLike {
-    /** Resolved Genie poll payload (carries Genie's rows). */
-    genieResult?: Record<string, unknown>;
     /** Raw result of a synchronous tool (e.g. run_sql's columns/rows). */
     toolResult?: unknown;
     /** A chart this message already resolved (cheapest source of its dataset). */
@@ -116,9 +113,8 @@ export interface ToolMessageLike {
 /**
  * Pull the most recent chartable dataset out of earlier chat messages.
  *
- * Walks newest-first and accepts a dataset from ANY data-producing tool —
- * Genie answers *and* synchronous tools like ``run_sql`` — so "graph that as a
- * line" re-graphs whatever the latest data answer was, regardless of source.
+ * Walks newest-first and accepts a dataset from any data-producing tool, so
+ * "graph that as a line" re-graphs whatever the latest data answer was.
  */
 export function findLastDataset(
     tools: Array<ToolMessageLike | undefined>,
@@ -138,25 +134,10 @@ export function datasetFromToolMessage(
     // Prefer an already-resolved chart dataset — it's exactly what rendered.
     const resolved = m.chart?.dataset;
     if (resolved && resolved.columns.length && resolved.rows.length) return resolved;
-    // Genie answers carry their data in genieResult.
-    const fromGenie = datasetFromGenieResult(m.genieResult);
-    if (fromGenie) return fromGenie;
-    // Any other tool (run_sql, etc.) carries tabular data on its raw result.
+    // A data tool (run_sql, etc.) carries tabular data on its raw result.
     const parsed = parseToolChart(m.toolResult);
     if (parsed?.dataset) return parsed.dataset;
     return undefined;
-}
-
-/** Build a ``Dataset`` from a Genie poll result's tabular preview. */
-export function datasetFromGenieResult(
-    result: Record<string, unknown> | undefined,
-): Dataset | undefined {
-    if (!result) return undefined;
-    const parsed = parseGenieResult(result);
-    if (!parsed.preview) return undefined;
-    const rows = parsed.preview.allRows ?? parsed.preview.rows;
-    if (!parsed.preview.columns.length || !rows.length) return undefined;
-    return { columns: parsed.preview.columns, rows };
 }
 
 function _encodingFromDirective(d: Record<string, unknown>): Partial<ChartEncoding> {

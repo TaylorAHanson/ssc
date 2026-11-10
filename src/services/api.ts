@@ -446,7 +446,7 @@ export async function getBranding(): Promise<{
   databricks_workspace_url?: string;
   support_contact?: { name?: string; email?: string; notes?: string };
   embedded_apps?: EmbeddedAppConfig[];
-  genie_full_experience_url?: string;
+  genie_one_url?: string;
   features?: Record<string, boolean>;
   tools?: Record<string, boolean>;
   ui?: {
@@ -3072,6 +3072,33 @@ async function pinError(response: Response, action: string): Promise<Error> {
   return new Error(`Failed to ${action}: ${response.statusText}`);
 }
 
+export interface MyWorkspace {
+  name: string;
+  environments: string[];
+  /** The caller's groups that hold a rule on this workspace. */
+  groups: string[];
+  privileges: string[];
+  is_admin: boolean;
+  /** Empty when the workspace's address isn't known. */
+  host: string;
+  lakehouse_url: string;
+  genie_one_url: string;
+}
+
+export interface MyWorkspaceList {
+  workspaces: MyWorkspace[];
+  genie_one_url: string;
+  access_rules_enabled: boolean;
+  groups_known: boolean;
+}
+
+/** The workspaces the current user's groups hold in the Access Rules. */
+export async function listMyWorkspaces(): Promise<MyWorkspaceList> {
+  const response = await fetch(`${API_BASE_URL}/workspaces/mine`, { headers: getHeaders() });
+  if (!response.ok) throw await pinError(response, 'load your workspaces');
+  return response.json();
+}
+
 /** The current user's pins, newest first. */
 export async function listPins(): Promise<PinnedAssetList> {
   const response = await fetch(`${API_BASE_URL}/pins`, { headers: getHeaders() });
@@ -4420,6 +4447,7 @@ export const api = {
   putChatSession,
   deleteChatSession,
   deleteChatSessions,
+  listMyWorkspaces,
   listPins,
   pinAsset,
   unpinAsset,

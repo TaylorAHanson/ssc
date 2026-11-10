@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowRight, WandSparkles, X } from 'lucide-react';
 import { Button } from '../ui/button';
+import { useBrandingStore } from '../../stores/brandingStore';
 
 const NEW_REQUEST_BANNER_DISMISSED_KEY = 'requests.newRequestBanner.dismissed';
 
@@ -13,7 +14,8 @@ const NEW_REQUEST_BANNER_DISMISSED_KEY = 'requests.newRequestBanner.dismissed';
  */
 export function NewRequestBanner() {
   const navigate = useNavigate();
-  const agentLabel = 'Ask Anything';
+  const brandShortName = useBrandingStore((s) => s.brandShortName);
+  const agentLabel = `${brandShortName} Agent`;
 
   const [dismissed, setDismissed] = useState(
     () => localStorage.getItem(NEW_REQUEST_BANNER_DISMISSED_KEY) === '1'

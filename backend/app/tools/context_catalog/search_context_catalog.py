@@ -58,8 +58,8 @@ def search_context_catalog(query: str, domain_slug: Optional[str] = None) -> Dic
                     "recovery ladder: (1) derive keywords from the query (e.g. "
                     "'cancel-pushout data' -> 'cancel', 'pushout') and use get_table_list / "
                     "get_schema_list / get_catalog_list (call get_target_workspaces first "
-                    "for a target_host) to surface matching assets; (2) offer to pull the "
-                    "actual data with ask_your_data (Genie) if their intent is analytical; "
+                    "for a target_host) to surface matching assets; (2) if their intent is "
+                    "analytical, point them to Genie One with the tables you found; "
                     "(3) only then ask a focused clarifying question, made concrete with "
                     "anything you found. Never fabricate internal policy."
                 )

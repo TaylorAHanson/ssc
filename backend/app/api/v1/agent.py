@@ -379,7 +379,7 @@ async def _build_runner_and_history(
 
     # Two chat surfaces, gated dynamically by the Tool Registry. The unified
     # self-service ("EDH") chat and the workflow-authoring studio each expose a
-    # distinct, admin-controlled toolset so e.g. ``ask_your_data`` never appears
+    # distinct, admin-controlled toolset so e.g. ``run_sql`` never appears
     # while authoring and ``preview_workflow_spec`` never appears in EDH. Authoring
     # mode is requested by the in-page assistant via ``context.mode: "authoring"``.
     requested_mode = ((request.context or {}).get("mode") or "").strip().lower()

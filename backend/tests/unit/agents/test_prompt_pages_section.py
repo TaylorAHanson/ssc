@@ -1,10 +1,9 @@
-"""What the assistant's prompt says about tools, training, community links and Genie.
+"""What the assistant's prompt says about tools, training and community links.
 
-The prompt used to restate every tool's schema, dump the training and community-link
-content, and describe ``ask_your_data``. The model already gets tool definitions
-natively, the content is fetched with ``get_learning_resources``, and the Genie tool
-carries its own warning. These tests keep that out of the prompt, and keep the page
-guidance honest about which pages are switched on.
+The prompt used to restate every tool's schema and dump the training and
+community-link content. The model already gets tool definitions natively and the
+content is fetched with ``get_learning_resources``. These tests keep that out of the
+prompt, and keep the page guidance honest about which pages are switched on.
 """
 from __future__ import annotations
 
@@ -58,14 +57,6 @@ def test_runtime_prompt_no_longer_dumps_content_files(monkeypatch):
     assert "Community Resources & Content" not in prompt
     assert "```json" not in prompt
     assert not hasattr(prompts, "_get_cached_content_section")
-
-
-def test_runtime_prompt_does_not_mention_the_genie_tool(monkeypatch):
-    """It is just a tool: its own description carries the slowness warning."""
-    _tabs(monkeypatch, training=True, community_links=True)
-    prompt = prompts.get_agent_prompt(tools_override=[])
-    assert "ask_your_data" not in prompt
-    assert "Asking Genie" not in prompt
 
 
 # -------------------------------------------------------- page guidance

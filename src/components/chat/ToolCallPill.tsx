@@ -11,7 +11,7 @@
 import { Check, AlertCircle, Loader2, Wrench } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
-export type ToolCallStatus = 'running' | 'success' | 'error' | 'pending';
+export type ToolCallStatus = 'running' | 'success' | 'error';
 
 export interface ToolCallPillProps {
     label: string;
@@ -26,7 +26,7 @@ export interface ToolCallPillProps {
 
 export function ToolCallPill({ label, status, detail, elapsedLabel, errorMessage }: ToolCallPillProps) {
     const Icon =
-        status === 'running' || status === 'pending'
+        status === 'running'
             ? Loader2
             : status === 'success'
                 ? Check
@@ -41,7 +41,7 @@ export function ToolCallPill({ label, status, detail, elapsedLabel, errorMessage
                     // max-w/min-w-0 so the inline detail can truncate without
                     // pushing the chip wider than the chat column.
                     'inline-flex items-center gap-2 self-start rounded-full px-3 py-1 text-xs font-medium border max-w-full min-w-0',
-                    status === 'running' || status === 'pending'
+                    status === 'running'
                         ? 'bg-blue-50 text-blue-700 border-blue-200'
                         : status === 'success'
                             ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
@@ -53,7 +53,7 @@ export function ToolCallPill({ label, status, detail, elapsedLabel, errorMessage
                 <Icon
                     className={cn(
                         'w-3.5 h-3.5 shrink-0',
-                        (status === 'running' || status === 'pending') && 'animate-spin',
+                        (status === 'running') && 'animate-spin',
                     )}
                 />
                 <span className="shrink-0">{label}</span>

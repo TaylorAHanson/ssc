@@ -7,7 +7,6 @@ from app.agents.events import (
     DoneEvent,
     ErrorEvent,
     MessageEvent,
-    PendingPollEvent,
     ReasoningEvent,
     RouteEvent,
     StatusEvent,
@@ -28,29 +27,15 @@ def test_status_event_serialize_roundtrip():
 
 
 def test_tool_call_event_omits_optional_fields_when_unset():
-    ev = ToolCallEvent(id="abc", name="ask_your_data", friendly_label="Asking Genie...")
+    ev = ToolCallEvent(id="abc", name="find_owner", friendly_label="Finding the owner...")
     frame = serialize_sse(ev)
     parsed = parse_sse_frame(frame)
     assert parsed is not None
     assert parsed["type"] == "tool_call"
     assert parsed["id"] == "abc"
-    assert parsed["friendly_label"] == "Asking Genie..."
+    assert parsed["friendly_label"] == "Finding the owner..."
     # exclude_none is set, so args_summary should be absent.
     assert "args_summary" not in parsed
-
-
-def test_pending_poll_event_carries_ids_dict():
-    ev = PendingPollEvent(
-        kind="genie",
-        ids={"space_id": "abc", "conversation_id": "c1", "message_id": "m1"},
-        friendly_label="Asking Genie...",
-        tool_call_id="tc-1",
-        tool_name="ask_your_data",
-    )
-    frame = serialize_sse(ev)
-    parsed = parse_sse_frame(frame)
-    assert parsed["kind"] == "genie"
-    assert parsed["ids"]["space_id"] == "abc"
 
 
 def test_tool_result_event_records_failure():

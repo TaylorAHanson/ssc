@@ -108,5 +108,5 @@ cases:
       offering a few concrete options and recommending one. It doesn't run
       queries or list the whole catalog before knowing what they're after.
     max_tool_calls: 3
-    forbid_tools: [run_sql, ask_your_data, render_chart]
+    forbid_tools: [run_sql, render_chart]
     answer_matches: ["\\?"]
