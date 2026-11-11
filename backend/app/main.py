@@ -30,6 +30,10 @@ async def lifespan(app: FastAPI):
     """Start background tasks and initialize DB."""
     logger.info("Application starting up...")
 
+    import asyncio
+    from app.workers.poller import set_main_loop
+    set_main_loop(asyncio.get_running_loop())
+
     # Initialize MLflow tracing (no-op unless MLFLOW_TRACING_ENABLED).
     try:
         from app.agents.tracing import init_tracing

@@ -21,6 +21,10 @@ Format rules (the app parses this file, so keep to them):
 - **Card links are part of the card.** The **Lakehouse** and **Genie One** links now split the bottom edge of each card, half each, instead of sitting on top as two separate buttons. A long list of groups shows the first three and how many more, and hovering over the count lists the rest.
 - **More workspaces get working links.** A workspace's links were greyed out unless its name in the access rules matched its Databricks name exactly, so `controltower_ws_dev` never matched `controltower-ws-dev`. Names now match ignoring case, spaces, hyphens and underscores, and a workspace's web address counts as one of its names. For a name that still doesn't match, an admin can add its address under **Admin → Settings → Access Rules → Workspace addresses**, and a greyed-out link now says so.
 
+### Fixed
+
+- **Context Catalog AI reviews start again.** Starting a review (for one document, a domain or the whole catalog) failed with a server error, and the documents stayed queued without being reviewed. Reviews now start straight away and run in the background as before. Documents stuck by the failed attempts show as interrupted once you start any review; start their review again to get a result.
+
 ## 3.0.0 — 2026-11-10
 
 ### Changed

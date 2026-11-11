@@ -55,16 +55,52 @@ async def _in_job_context(name: str, coro) -> Any:
         return await coro
 
 
-def _spawn_background(coro, name: str = "background") -> asyncio.Task:
-    """Start a detached upkeep task, holding a strong reference until it ends.
+# The server's event loop, recorded at startup so a sync endpoint (which FastAPI
+# runs in a worker thread, with no loop of its own) can still start a job on it.
+_main_loop: Optional[asyncio.AbstractEventLoop] = None
 
-    ``name`` tags every line the task logs (``path: job:<name>`` plus a run id), so
-    one run's lines can be picked out of the rest.
-    """
+
+def set_main_loop(loop: asyncio.AbstractEventLoop) -> None:
+    global _main_loop
+    _main_loop = loop
+
+
+def _start_task(coro, name: str) -> asyncio.Task:
     task = asyncio.create_task(_in_job_context(name, coro), name=f"job-{name}")
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
     return task
+
+
+def _spawn_background(coro, name: str = "background") -> Optional[asyncio.Task]:
+    """Start a detached upkeep task, holding a strong reference until it ends.
+
+    ``name`` tags every line the task logs (``path: job:<name>`` plus a run id), so
+    one run's lines can be picked out of the rest.
+
+    Safe to call from any thread. Off the event loop the task is handed to the
+    server's loop and ``None`` is returned; with no server loop (a script or a
+    test) it runs on its own loop in a daemon thread.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+    else:
+        return _start_task(coro, name)
+
+    loop = _main_loop
+    if loop is not None and loop.is_running() and not loop.is_closed():
+        loop.call_soon_threadsafe(_start_task, coro, name)
+        return None
+
+    import threading
+
+    logger.info("No server event loop; running background job %s on its own thread", name)
+    threading.Thread(
+        target=asyncio.run, args=(_in_job_context(name, coro),), name=f"job-{name}", daemon=True,
+    ).start()
+    return None
 
 
 # The last metadata reconciler problem logged, so a repeating one is reported once.
