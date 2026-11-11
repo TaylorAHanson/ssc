@@ -38,6 +38,7 @@ def _settings(monkeypatch):
     ])
     monkeypatch.setattr(settings, "RBAC_WS_SHEET_PATTERN", "WS_Securables_RBAC_{suffix}")
     monkeypatch.setattr(settings, "RBAC_SYSTEM_GROUPS", ["account users", "users"])
+    monkeypatch.setattr(settings, "RBAC_WORKSPACE_ADDRESSES", [])
     monkeypatch.setattr("app.core.workspaces.get_target_workspace_info", lambda enrich=True: [])
 
 
@@ -141,6 +142,7 @@ def test_endpoint_lists_the_callers_workspaces(db, monkeypatch):
     body = api.list_my_workspaces(db=db, current_user=_user("g_analysts"))
     assert [w["name"] for w in body["workspaces"]] == ["ws-sales"]
     assert body["access_rules_enabled"] is True and body["groups_known"] is True
+    assert body["default_environment"] == "prd"
 
 
 def test_endpoint_only_built_in_groups_still_counts_as_known(db, monkeypatch):
@@ -159,3 +161,39 @@ def test_endpoint_reports_when_access_rules_are_off(db, monkeypatch):
     seed(db, workspace="ws-sales", principals="g_analysts")
     body = api.list_my_workspaces(db=db, current_user=_user("g_analysts"))
     assert body["workspaces"] == [] and body["access_rules_enabled"] is False
+
+
+def test_names_match_ignoring_case_and_separators(db):
+    seed(db, workspace="ControlTower_WS_Dev", principals="g_analysts")
+    cache(db, "controltower-ws-dev", "https://adb-111.azuredatabricks.net")
+    [ws] = my_workspaces.workspaces_for(db, ["g_analysts"])
+    assert ws["host"] == "https://adb-111.azuredatabricks.net"
+
+
+def test_a_workspace_url_subdomain_counts_as_its_name(db):
+    seed(db, workspace="fevm_sales", principals="g_analysts")
+    cache(db, "Sales (production)", "https://fevm-sales.cloud.databricks.com")
+    [ws] = my_workspaces.workspaces_for(db, ["g_analysts"])
+    assert ws["host"] == "https://fevm-sales.cloud.databricks.com"
+
+
+def test_admin_addresses_win_over_the_workspace_list(db, monkeypatch):
+    monkeypatch.setattr(settings, "RBAC_WORKSPACE_ADDRESSES", [
+        {"name": "controltower_ws_dev", "url": "ct-dev.cloud.databricks.com/"},
+    ])
+    seed(db, workspace="controltower_ws_dev", principals="g_analysts")
+    cache(db, "controltower_ws_dev", "https://somewhere-else.cloud.databricks.com")
+    [ws] = my_workspaces.workspaces_for(db, ["g_analysts"])
+    assert ws["genie_one_url"] == "https://ct-dev.cloud.databricks.com/one"
+
+
+def test_environment_options_start_on_production(monkeypatch):
+    monkeypatch.setattr(settings, "RBAC_ENVIRONMENTS", [
+        {"key": "dev", "aliases": "development"},
+        {"key": "live", "aliases": "prod, production"},
+    ])
+    opts = my_workspaces.environment_options()
+    assert [e["key"] for e in opts["environments"]] == ["dev", "live"]
+    assert opts["default_environment"] == "live"
+    monkeypatch.setattr(settings, "RBAC_ENVIRONMENTS", [{"key": "dev"}])
+    assert my_workspaces.environment_options()["default_environment"] == ""

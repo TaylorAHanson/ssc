@@ -1073,6 +1073,19 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
                       "workspace_name", "owner", "principal_type", "principal_name", "privilege"]},
          {"key": "header", "label": "Header text", "type": "string", "required": True},
      ]},
+    {"group": "Access Rules", "section": "Workspaces page", "key": "RBAC_WORKSPACE_ADDRESSES",
+     "label": "Workspace addresses", "type": "collection", "unique": "name", "add_label": "Add workspace",
+     "help": "The address of a workspace whose WorkspaceName in the access rules doesn't match its name in "
+             "Databricks. The Workspaces page links each workspace by matching its name to the account's "
+             "workspace list and the target workspaces, ignoring case, spaces, hyphens and underscores; a "
+             "workspace it can't match is shown with its links greyed out until it is listed here. Takes "
+             "effect on the next page load.",
+     "columns": [
+         {"key": "name", "label": "WorkspaceName", "type": "string", "required": True,
+          "placeholder": "controltower_ws_dev"},
+         {"key": "url", "label": "Address", "type": "string", "required": True,
+          "placeholder": "https://adb-1234567890123456.7.azuredatabricks.net"},
+     ]},
     {"group": "Access Rules", "section": "Import", "key": "RBAC_IMPORT_REMOVE_DUPLICATES",
      "label": "Remove duplicate rows on import", "type": "bool",
      "help": "On (default) = a row identical to an earlier row on the same sheet isn't imported; the preview "

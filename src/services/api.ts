@@ -3087,6 +3087,10 @@ export interface MyWorkspace {
 
 export interface MyWorkspaceList {
   workspaces: MyWorkspace[];
+  /** The Access Rules environments, for the page's filter. */
+  environments: { key: string; label: string }[];
+  /** The production environment's key, or empty when none is configured. */
+  default_environment: string;
   genie_one_url: string;
   access_rules_enabled: boolean;
   groups_known: boolean;

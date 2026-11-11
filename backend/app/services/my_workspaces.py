@@ -4,12 +4,16 @@ The Databricks workspaces a person can use, read from the Access Rules.
 A workspace counts when one of the person's groups holds a ``workspace`` or
 ``workspace entitlement`` rule on it. Built-in groups everyone is in
 (``RBAC_SYSTEM_GROUPS``) never count, as in ``find_access``. Each workspace's
-address comes from the cached account workspace list, falling back to the
-configured target workspaces; a workspace with neither is still listed, without
+address comes from the admin's ``RBAC_WORKSPACE_ADDRESSES``, then the cached
+account workspace list, then the configured target workspaces, matching names
+loosely (case, spaces, hyphens and underscores ignored, and a workspace's URL
+subdomain counts as a name). A workspace with no match is still listed, without
 links.
 """
 import logging
+import re
 from typing import Any, Dict, Iterable, List, Optional
+from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
 
@@ -23,6 +27,16 @@ _RULE_LIMIT = 1000
 
 def _fold(value: Any) -> str:
     return " ".join(str(value or "").strip().lower().split())
+
+
+def _name_key(value: Any) -> str:
+    """A workspace name with case, spaces, hyphens and underscores ignored."""
+    return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
+
+
+def _subdomain(url: str) -> str:
+    host = urlparse(url).hostname or ""
+    return host.split(".", 1)[0]
 
 
 def user_groups(entitlements: Iterable[str], email: Optional[str]) -> List[str]:
@@ -45,25 +59,51 @@ def _normalize_host(raw: Optional[str]) -> str:
 
 
 def _hosts_by_name(db: Session) -> Dict[str, str]:
-    """Workspace name -> address, from the target workspaces then the account cache (which wins)."""
+    """Name key -> address. Later sources overwrite earlier ones, so the admin's list wins."""
     hosts: Dict[str, str] = {}
+
+    def add(name: Any, url: Any, *, with_subdomain: bool = False) -> None:
+        host = _normalize_host(url)
+        if not host:
+            return
+        if with_subdomain and _name_key(_subdomain(host)):
+            hosts[_name_key(_subdomain(host))] = host
+        if _name_key(name):
+            hosts[_name_key(name)] = host
+
     try:
         from app.core.workspaces import get_target_workspace_info
 
         for ws in get_target_workspace_info(enrich=False):
-            if ws.name and ws.host:
-                hosts[_fold(ws.name)] = _normalize_host(ws.host)
+            add(ws.name, ws.host, with_subdomain=True)
     except Exception as e:  # noqa: BLE001 - a missing address only drops the links
         logger.warning("Could not read the target workspaces for workspace links: %s", e)
     try:
         from app.db.workspace_cache import CachedWorkspaceModel
 
         for name, url in db.query(CachedWorkspaceModel.workspace_name, CachedWorkspaceModel.workspace_url).all():
-            if name and url:
-                hosts[_fold(name)] = _normalize_host(url)
+            add(name, url, with_subdomain=True)
     except Exception as e:  # noqa: BLE001
         logger.warning("Could not read the cached workspace list for workspace links: %s", e)
+    for row in settings.RBAC_WORKSPACE_ADDRESSES or []:
+        if isinstance(row, dict):
+            add(row.get("name"), row.get("url"))
     return hosts
+
+
+def environment_options() -> Dict[str, Any]:
+    """The Access Rules environments for the page's filter, and the production one to start on."""
+    options: List[Dict[str, str]] = []
+    default = ""
+    for env in settings.RBAC_ENVIRONMENTS or []:
+        key = str((env or {}).get("key") or "").strip()
+        if not key:
+            continue
+        options.append({"key": key, "label": key.upper()})
+        spellings = {_fold(key), *(_fold(a) for a in str(env.get("aliases") or "").split(","))}
+        if not default and spellings & {"prd", "prod", "production"}:
+            default = key
+    return {"environments": options, "default_environment": default}
 
 
 def workspaces_for(db: Session, groups: List[str]) -> List[Dict[str, Any]]:
@@ -98,7 +138,7 @@ def workspaces_for(db: Session, groups: List[str]) -> List[Dict[str, Any]]:
     hosts = _hosts_by_name(db) if found else {}
     out: List[Dict[str, Any]] = []
     for key, entry in sorted(found.items()):
-        host = hosts.get(key, "")
+        host = hosts.get(_name_key(entry["name"]), "")
         out.append({
             **entry,
             "is_admin": any(_fold(p) == "admin" for p in entry["privileges"]),
@@ -106,4 +146,10 @@ def workspaces_for(db: Session, groups: List[str]) -> List[Dict[str, Any]]:
             "lakehouse_url": host,
             "genie_one_url": f"{host}/one" if host else "",
         })
+    missing = [w["name"] for w in out if not w["host"]]
+    if missing:
+        logger.info(
+            "Workspaces page: no address for %s; add them under Access Rules -> Workspace addresses",
+            ", ".join(missing),
+        )
     return out

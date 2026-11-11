@@ -283,6 +283,15 @@ uses:
   which group to join, because everyone is already in it.
 - **Header aliases**, for a renamed workbook column, **Remove duplicate rows
   on import** (on by default), and **Allow reset and re-import**.
+- **Workspace addresses**, for the [Workspaces page](../workspaces.md). The
+  page lists the workspaces people's groups hold here and links each one by
+  matching its **WorkspaceName** to the account's workspace list, ignoring
+  case, spaces, hyphens and underscores. A name it still can't match, for
+  example a short name used only in the workbook, shows with its links greyed
+  out. Add a row with that WorkspaceName and the workspace's address to fix it.
+  The environment filter on that page lists the **Environments** above and
+  starts on the one whose key or aliases include `prd`, `prod` or
+  `production`.
 
 Export paths can be a Unity Catalog volume (`/Volumes/...`) or a workspace
 folder. {{brand_name}}'s service principal needs write access to each one.

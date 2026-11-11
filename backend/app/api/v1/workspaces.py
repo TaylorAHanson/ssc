@@ -28,11 +28,14 @@ def list_my_workspaces(
 ) -> Any:
     """The caller's workspaces, each with links to open it and its Genie One.
 
+    ``environments`` and ``default_environment`` drive the page's environment
+    filter, which starts on production when one is configured.
+
     ``access_rules_enabled`` is false when the Access Rules feature is off, and
     ``groups_known`` is false when the caller's groups weren't available, so the
     page can say why the list is empty instead of showing a bare "none".
     """
-    base = {"genie_one_url": genie_one_url()}
+    base = {"genie_one_url": genie_one_url(), **my_workspaces.environment_options()}
     if not is_feature_enabled("rbac"):
         return {**base, "workspaces": [], "access_rules_enabled": False, "groups_known": True}
     me = (current_user.email or "").strip().lower()

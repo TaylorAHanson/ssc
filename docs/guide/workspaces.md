@@ -30,11 +30,20 @@ your organization's access rules. Each card shows:
 
 - the workspace's name and environment, and **Admin** if one of your groups
   administers it;
-- the groups that give you access;
-- **Open Lakehouse**, which opens the workspace itself, for writing SQL or
-  Python, building pipelines and jobs, or publishing dashboards;
-- **Open Genie One**, which opens Genie One in that workspace.
+- the groups that give you access (the first three, then how many more; hover
+  over the count to see the rest);
+- **Lakehouse** along the bottom, which opens the workspace itself, for
+  writing SQL or Python, building pipelines and jobs, or publishing
+  dashboards;
+- **Genie One** beside it, which opens Genie One in that workspace.
 
-If a workspace's address isn't known yet, its buttons are greyed out. If no
-workspaces are listed, none of your groups has workspace access in the access
-rules. Ask the {{brand_short_name}} Agent to help you request it.
+The page starts on your production workspaces. Use the environment buttons
+above the cards to switch, or **All** to see every one; each button shows how
+many of your workspaces it holds. Type in the search box to find a workspace
+by its name or by one of your groups. The page's address keeps both choices,
+so you can bookmark or share a filtered view.
+
+If a workspace's address isn't known yet, its links are greyed out; ask your
+{{brand_name}} admin to add it. If no workspaces are listed, none of your
+groups has workspace access in the access rules. Ask the
+{{brand_short_name}} Agent to help you request it.

@@ -13,6 +13,14 @@ Format rules (the app parses this file, so keep to them):
   before), and what the reader will notice or should do now.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
 
+## 3.1.0 — 2026-11-11
+
+### Workspaces
+
+- **Filter workspaces by environment, and search them.** With development and production workspaces side by side, the list was long and it was easy to open the wrong one. The **Workspaces** page now starts on your production workspaces, with buttons above the cards to switch environment or show **All**, each with a count. A search box finds a workspace by its name or by one of your groups, and the page's address keeps both choices so a filtered view can be bookmarked.
+- **Card links are part of the card.** The **Lakehouse** and **Genie One** links now split the bottom edge of each card, half each, instead of sitting on top as two separate buttons. A long list of groups shows the first three and how many more, and hovering over the count lists the rest.
+- **More workspaces get working links.** A workspace's links were greyed out unless its name in the access rules matched its Databricks name exactly, so `controltower_ws_dev` never matched `controltower-ws-dev`. Names now match ignoring case, spaces, hyphens and underscores, and a workspace's web address counts as one of its names. For a name that still doesn't match, an admin can add its address under **Admin → Settings → Access Rules → Workspace addresses**, and a greyed-out link now says so.
+
 ## 3.0.0 — 2026-11-10
 
 ### Changed
