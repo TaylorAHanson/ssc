@@ -4,8 +4,8 @@ The Databricks workspaces a person can use, read from the Access Rules.
 A workspace counts when one of the person's groups holds a ``workspace`` or
 ``workspace entitlement`` rule on it. Built-in groups everyone is in
 (``RBAC_SYSTEM_GROUPS``) never count, as in ``find_access``. Each workspace's
-address comes from the admin's ``RBAC_WORKSPACE_ADDRESSES``, then the cached
-account workspace list, then the configured target workspaces, matching names
+address comes from the cached account workspace list (synced from
+``system.access.workspaces_latest``) or the configured target workspaces, matching names
 loosely (case, spaces, hyphens and underscores ignored, and a workspace's URL
 subdomain counts as a name). A workspace with no match is still listed, without
 links.
@@ -59,7 +59,7 @@ def _normalize_host(raw: Optional[str]) -> str:
 
 
 def _hosts_by_name(db: Session) -> Dict[str, str]:
-    """Name key -> address. Later sources overwrite earlier ones, so the admin's list wins."""
+    """Name key -> address. The account workspace list overwrites the target workspaces."""
     hosts: Dict[str, str] = {}
 
     def add(name: Any, url: Any, *, with_subdomain: bool = False) -> None:
@@ -85,9 +85,6 @@ def _hosts_by_name(db: Session) -> Dict[str, str]:
             add(name, url, with_subdomain=True)
     except Exception as e:  # noqa: BLE001
         logger.warning("Could not read the cached workspace list for workspace links: %s", e)
-    for row in settings.RBAC_WORKSPACE_ADDRESSES or []:
-        if isinstance(row, dict):
-            add(row.get("name"), row.get("url"))
     return hosts
 
 
@@ -149,7 +146,8 @@ def workspaces_for(db: Session, groups: List[str]) -> List[Dict[str, Any]]:
     missing = [w["name"] for w in out if not w["host"]]
     if missing:
         logger.info(
-            "Workspaces page: no address for %s; add them under Access Rules -> Workspace addresses",
-            ", ".join(missing),
+            "Workspaces page: no address for %s; no match among %d workspace names from the account "
+            "workspace list and the target workspaces (0 means the workspace sync hasn't run)",
+            ", ".join(missing), len(hosts),
         )
     return out

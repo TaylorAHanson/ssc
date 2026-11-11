@@ -692,9 +692,6 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "naming_rules": [],
         # Extra header spellings: [{"field": "<canonical field>", "header": "<header text>"}]
         "header_aliases": [],
-        # Links for the Workspaces page when a rule's WorkspaceName doesn't match
-        # the workspace's Databricks name: [{"name": "<WorkspaceName>", "url": "<address>"}]
-        "workspace_addresses": [],
     },
 
     # Metadata Manager (Admin -> Settings -> Metadata Manager; ADR-0006). Desired

@@ -38,7 +38,6 @@ def _settings(monkeypatch):
     ])
     monkeypatch.setattr(settings, "RBAC_WS_SHEET_PATTERN", "WS_Securables_RBAC_{suffix}")
     monkeypatch.setattr(settings, "RBAC_SYSTEM_GROUPS", ["account users", "users"])
-    monkeypatch.setattr(settings, "RBAC_WORKSPACE_ADDRESSES", [])
     monkeypatch.setattr("app.core.workspaces.get_target_workspace_info", lambda enrich=True: [])
 
 
@@ -175,16 +174,6 @@ def test_a_workspace_url_subdomain_counts_as_its_name(db):
     cache(db, "Sales (production)", "https://fevm-sales.cloud.databricks.com")
     [ws] = my_workspaces.workspaces_for(db, ["g_analysts"])
     assert ws["host"] == "https://fevm-sales.cloud.databricks.com"
-
-
-def test_admin_addresses_win_over_the_workspace_list(db, monkeypatch):
-    monkeypatch.setattr(settings, "RBAC_WORKSPACE_ADDRESSES", [
-        {"name": "controltower_ws_dev", "url": "ct-dev.cloud.databricks.com/"},
-    ])
-    seed(db, workspace="controltower_ws_dev", principals="g_analysts")
-    cache(db, "controltower_ws_dev", "https://somewhere-else.cloud.databricks.com")
-    [ws] = my_workspaces.workspaces_for(db, ["g_analysts"])
-    assert ws["genie_one_url"] == "https://ct-dev.cloud.databricks.com/one"
 
 
 def test_environment_options_start_on_production(monkeypatch):

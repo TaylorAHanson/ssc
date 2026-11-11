@@ -894,8 +894,6 @@ class Settings(BaseSettings):
     RBAC_DEFAULT_OWNER: str = _rbac.get("default_owner", "")
     RBAC_NAMING_RULES: List[dict] = copy.deepcopy(_rbac.get("naming_rules", []))
     RBAC_HEADER_ALIASES: List[dict] = copy.deepcopy(_rbac.get("header_aliases", []))
-    RBAC_WORKSPACE_ADDRESSES: List[dict] = copy.deepcopy(_rbac.get("workspace_addresses", []))
-
     # Metadata Manager (Admin -> Settings -> Metadata Manager; ADR-0006). Defaults
     # and their rationale live in default_config.py.
     METADATA_RECONCILE_MODE: str = _metadata.get("reconcile_mode", "plan")

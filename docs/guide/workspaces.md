@@ -43,7 +43,10 @@ many of your workspaces it holds. Type in the search box to find a workspace
 by its name or by one of your groups. The page's address keeps both choices,
 so you can bookmark or share a filtered view.
 
-If a workspace's address isn't known yet, its links are greyed out; ask your
-{{brand_name}} admin to add it. If no workspaces are listed, none of your
+Each workspace's links come from your Databricks account's list of
+workspaces, which {{brand_name}} refreshes every few hours. If a workspace's
+links are greyed out, its name in the access rules doesn't match any
+workspace in that list; ask your {{brand_name}} admin to check the
+WorkspaceName. If no workspaces are listed, none of your
 groups has workspace access in the access rules. Ask the
 {{brand_short_name}} Agent to help you request it.

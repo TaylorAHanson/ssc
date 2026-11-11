@@ -23,7 +23,7 @@ function FooterLink({ href, label, ariaLabel, icon, primary }: {
     return (
       <span
         className={`${base} text-gray-400 cursor-not-allowed`}
-        title="This workspace's address isn't known yet. An admin can add it under Admin → Settings → Access Rules → Workspace addresses."
+        title="This workspace's address isn't known yet. It isn't in the account's workspace list under this name."
       >
         {icon}
         {label}
