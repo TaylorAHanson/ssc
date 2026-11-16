@@ -41,6 +41,16 @@ def _no_live_access_policy_reads(monkeypatch):
     monkeypatch.setattr(settings, "METADATA_ABAC_CHECK", False)
 
 
+@pytest.fixture(autouse=True)
+def _no_live_embeddings():
+    """Semantic Context Catalog search is "not configured" unless a test installs a fake: never the network."""
+    from app.services import embeddings
+
+    embeddings.set_embedder_factory(embeddings.offline)
+    yield
+    embeddings.set_embedder_factory(embeddings.offline)
+
+
 def pytest_addoption(parser):
     parser.addoption(
         "--mode", action="store", default="mock", help="Test mode: mock or real"

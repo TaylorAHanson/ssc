@@ -13,6 +13,31 @@ Format rules (the app parses this file, so keep to them):
   before), and what the reader will notice or should do now.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
 
+## 3.2.0 — 2026-11-16
+
+### Home
+
+- **The home screen now says what the assistant is for, and what it can do.** An empty chat box was open-ended: people either didn't know what to ask or asked for data analysis, which this assistant doesn't do. Under the greeting a short line now says it handles requests, access and platform questions (and points to Genie One for analysis when your administrator has set it up), and a quiet list of **What I can help with** sits under the box. Click an item to start that conversation, or to open the page that covers it, such as **My Requests & Approvals**.
+- **You can hide the list.** Once you know your way around, **Hide** removes it, and a small **What I can help with?** link brings it back. The choice is remembered for you in this browser, so it doesn't hide the list for anyone else who uses the same browser.
+
+### Discover
+
+- **The owner of an asset is now a person or team, not a service principal ID.** The details panel showed whatever Unity Catalog recorded as the owner, which is usually a long service principal ID. It now shows the business owner of the asset's subdomain, then of its domain, and only falls back to the ID when neither has one set in Databricks. A contract's team or an owner tag no longer takes priority over them. The same owner appears on cards, in search and next to a table's columns.
+- **There is one "Open in Catalog Explorer" link, beside the asset's name.** The details panel had the same link at the top and again in the footer. The footer copy is gone, so the buttons at the bottom are about the asset (view the contract, request access). Links for a specific server or table inside a data set are unchanged.
+- **Report a data issue from the details panel.** Next to **Pin** there is now **Report data issue** for tables, views, metric views and data sets. Describe what's wrong in a few words, optionally add detail, and the team is emailed and given a task to look into it. You can follow it under **Requests**. This is separate from sending feedback to the assistant, which is a note for the admins rather than a task for someone to complete. Administrators can change who's emailed and who gets the task by editing the data issue workflow in Workflow Studio.
+- **Edit the description and tags where they're managed.** If you can use the Metadata Manager, **Edit** appears beside **Description** and **Tags** on a table, view or metric view and opens that object there, where changes are reviewed and recorded. You no longer need to find the object again by hand. It doesn't appear if you can't open the Metadata Manager, or if your administrator has turned it off.
+- **Filter search results to certified data.** **Certified Only** used to appear only inside a domain, so a search from the Discover start page couldn't be narrowed. It now sits beside **Clear search** on the results, and uses the same setting as the one inside a domain.
+
+### Assistant
+
+- **The assistant asks what happened before it passes feedback on, and shows you what it will send.** Feedback sent from chat could be filed on the spot: a remark like "this app sucks" was recorded as a report with nothing in it for anyone to act on. Now it acknowledges the remark and asks what went wrong. Once you've said, it shows what it would send and files it only after you say yes. If you ask it to log something and give the details in the same message, that message is your yes, so it files it straight away. A report with too little to act on is turned back to the assistant to ask you for more.
+
+### Context Catalog
+
+- **The assistant now finds guidance by meaning, not just by words.** Search over the Context Catalog matched only the words a question happened to share with a document, so "how expensive can tools get" missed a document about purchase approval limits. The assistant now also compares what a question means with what each passage says, and combines both kinds of match, so a differently worded question finds the right guidance and an exact term still finds the passage that contains it. In **Test retrieval**, each result says whether it matched by words, by meaning or both.
+- **Search falls back to words on its own.** Matching by meaning needs a PostgreSQL database with vector search (the pgvector extension) enabled, and a reachable embedding model. When either is missing, or the model is slow or down, the assistant uses word search exactly as before instead of failing, and pauses its calls to a failing model for 30 seconds so chat stays fast. The line under the **Test retrieval** box says whether search is using words only or words and meaning, how many passages are processed, and why it's words only when it is.
+- **New settings under Admin → Settings → Context Catalog → Search.** You can turn semantic search off, and choose the embedding model (`system.ai.gte-large-en` by default, called through the AI Gateway; it must return 1024-dimension vectors and the app's service principal must be allowed to use it). Documents are processed in the background after you save them, and only the passages you changed are processed again. Changing the model reprocesses the whole catalog while search keeps working by words.
+
 ## 3.1.0 — 2026-11-11
 
 ### Workspaces

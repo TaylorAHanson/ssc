@@ -9,7 +9,7 @@ first** — it is the source of truth for how the pieces fit together.
 - **Venv:** `backend/venv`. Activate it before running anything Python —
   dependencies are **not** globally installed. `./dev.sh` creates the venv and
   `pip install -r backend/requirements.txt` for you.
-- **Run:** `./dev.sh` from repo root (serves on `:8000`). `./dev.sh --debug` runs
+- **Run:** `./dev.sh` from repo root (serves on `:8000`, or the next free port). `./dev.sh --debug` runs
   under `debugpy` (attach via the "Attach to Backend" VS Code config).
 - **Tests:** `cd backend && source venv/bin/activate && pytest`. Run a subset with
   `pytest tests/test_sentinel_multiworkspace.py -q`. Config is `backend/pytest.ini`;

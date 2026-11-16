@@ -21,6 +21,7 @@ A target workspace that has no dedicated SP configured falls back to the **App S
 - **Reads secrets** from Databricks secret scopes — most importantly the target-workspace SP scope (`TARGET_WORKSPACE_SP_SECRET_SCOPE`), plus any email (SES) / GitHub scopes. This is how it hands the right credentials to each target workspace.
 - **Hosts the warehouse and metastore access** used by governance discovery — but note that the discovery *identity* is the governance SP (§2), not the App SP. The data-asset cache sync, data-contract discovery, ODCS metadata drafting, and tag-manager discovery all authenticate as the certification workspace's SP against the **home** host and warehouse. The App SP only performs them when `SENTINEL_DATA_CERT_WORKSPACE` is blank and the governance provider falls back to it.
 - **Calls the model-serving endpoint** (`MODEL_SERVING_AGENT_LLM_ENDPOINT`) for the assistant and ODCS contract drafting.
+- **Calls the embedding model** (`CONTEXT_CATALOG_EMBEDDING_MODEL`, set per environment with the `embedding_endpoint` bundle variable) through the AI Gateway to index Context Catalog passages and embed questions for semantic search. If it is refused, search quietly uses words only and the Context Catalog says why.
 - **Reads/writes app state** in its Lakebase (Postgres) database.
 - **Writes the Access Rules CSV export** to each configured export path (`RBAC_ENVIRONMENTS[].export_path` and `RBAC_METASTORE_EXPORT_PATH`), and lists workspace groups to check that the three access rule approver groups exist. It never runs a `GRANT` for access rules: the external Terraform pipeline applies the exported files.
 - **Is the Sentinel's fallback identity** for the home workspace and for any target workspace with no dedicated SP. Certification (tag writes, DQ-history reads, RBAC grants reads) actually runs as the **data-certification workspace SP** (§2); the App SP only performs it when `SENTINEL_DATA_CERT_WORKSPACE` is blank and it falls back to itself.
@@ -39,6 +40,12 @@ GRANT CAN USE ON WAREHOUSE <DATABRICKS_WAREHOUSE_ID> TO `<app-sp>`;
 
 -- Serve the assistant / draft ODCS
 GRANT CAN QUERY ON SERVING ENDPOINT <MODEL_SERVING_AGENT_LLM_ENDPOINT> TO `<app-sp>`;
+
+-- Embed Context Catalog passages and questions (semantic search) with a `system.ai.*` model through
+-- the AI Gateway. There is no grant line to copy here: access to `system.ai` models is governed by your
+-- workspace's Unity Catalog model services, and the app SP could call them in the build workspace without
+-- a grant we could identify. Check the Context Catalog status line after deploy; a refusal is shown there.
+-- (A bare serving-endpoint name, for a custom endpoint, needs: GRANT CAN QUERY ON SERVING ENDPOINT <name>.)
 ```
 
 Unity Catalog (per governed catalog in the home metastore) — the App SP needs **no** UC grants in the recommended setup, because governance discovery runs as the certification SP (§2). Grant `BROWSE` only if you have **no** dedicated certification SP (`SENTINEL_DATA_CERT_WORKSPACE` blank), so discovery falls back to the App SP:
@@ -161,6 +168,7 @@ GRANT SELECT ON TABLE system.access.table_lineage TO `<cert-sp>`;
 | `CAN VIEW` (or workspace admin) | Lakeview dashboards in the home workspace | ‡° | ✓†° | Resolve those dashboard ids to names and links. A dashboard the SP can't list is shown by id, with no link |
 | `CAN USE` | SQL warehouse | ✓ | ✓ | Runs each SP's SQL. The cert SP needs `CAN USE` on the **home** warehouse too, since governance discovery runs there |
 | `CAN QUERY` | model-serving endpoint | ✓ | — | Assistant + ODCS drafting (app only) |
+| Use of a `system.ai.*` model | embedding model (`CONTEXT_CATALOG_EMBEDDING_MODEL`), via the AI Gateway | ✓ | — | Context Catalog semantic search (app only); without it search uses words only. `CAN QUERY` instead, if the setting names a custom serving endpoint |
 | `READ` | target-SP secret scope | ✓ | — | App loads each target SP's credentials |
 | Workspace admin | target workspace | ✓ (home) | ✓ | Scan/remediate jobs, clusters, apps, warehouses, …; turn approved previews on/off |
 | `READ VOLUME`, `WRITE VOLUME` (+ `USE CATALOG`, `USE SCHEMA`) | each Access Rules export volume | ✓§ | — | Write the Access Rules CSVs the Terraform pipeline reads |

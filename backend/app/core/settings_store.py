@@ -807,6 +807,22 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "help": "On = a workflow with a failing or never-run enabled case cannot be published. Off (default) = the "
              "publish confirmation warns instead, since the judge is non-deterministic."},
 
+    # --- Context Catalog: search (app/services/context_search_index.py) ---
+    {"group": "Context Catalog", "section": "Search", "key": "CONTEXT_CATALOG_SEMANTIC_SEARCH",
+     "label": "Semantic search", "type": "bool",
+     "help": "On (default) = the assistant finds passages by meaning as well as by words, so a question phrased "
+             "differently from the document still matches. Needs a PostgreSQL database with the pgvector "
+             "extension; without it, or if the embedding model is unreachable, search quietly uses words only. "
+             "Off = words only."},
+    {"group": "Context Catalog", "section": "Search", "key": "CONTEXT_CATALOG_EMBEDDING_MODEL",
+     "label": "Embedding model", "type": "string", "placeholder": "system.ai.gte-large-en",
+     "help": "The model that turns passages and questions into vectors, called through the AI Gateway. Use a "
+             "Unity Catalog model reference such as system.ai.gte-large-en, system.ai.bge-large-en or "
+             "system.ai.qwen3-embedding-0-6b; it must return 1024-dimension vectors, and the app's service "
+             "principal must be allowed to use it. A bare serving-endpoint name (a custom endpoint) is called "
+             "directly instead. The older databricks-* endpoint names are being retired. Changing the model "
+             "re-embeds the whole catalog in the background; words-only search keeps working meanwhile."},
+
     # --- Context Catalog: document freshness ------------------------------
     {"group": "Context Catalog", "section": "Document freshness", "key": "CONTEXT_CATALOG_STALE_AFTER_DAYS",
      "label": "Stale after (days)", "type": "int", "min": 1,

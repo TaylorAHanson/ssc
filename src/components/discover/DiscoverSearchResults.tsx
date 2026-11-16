@@ -2,6 +2,7 @@ import { Database, TrendingUp, X } from 'lucide-react';
 import type { DataAsset } from '../../services/api';
 import { MetricViewCard } from './MetricViewCard';
 import { AssetCard } from './AssetCard';
+import { CertifiedOnlyToggle } from './CertifiedOnlyToggle';
 import { Pagination } from './Pagination';
 import { usePagination } from './usePagination';
 import { domainPaths } from '../../lib/discoverDomains';
@@ -17,6 +18,8 @@ interface DiscoverSearchResultsProps {
   onClear: () => void;
   /** Legacy dashboard names matching the search, per metric view. */
   replacesFor?: (metricViewId: string) => string[];
+  showCertifiedOnly?: boolean;
+  onToggleCertifiedOnly?: () => void;
 }
 
 // Cards per page: 4 rows of the 3-column grid, same as the domain view.
@@ -40,6 +43,8 @@ export function DiscoverSearchResults({
   onOpenAsset,
   onClear,
   replacesFor,
+  showCertifiedOnly = false,
+  onToggleCertifiedOnly,
 }: DiscoverSearchResultsProps) {
   const mvPages = usePagination(metricViews, PAGE_SIZE, `metrics|${term}|${metricViews.length}`);
   const assetPages = usePagination(assets, PAGE_SIZE, `assets|${term}|${assets.length}`);
@@ -51,19 +56,22 @@ export function DiscoverSearchResults({
         <p className="text-sm text-slate-600">
           {plural(total, 'result')} for <span className="font-semibold text-slate-900">“{term}”</span>
         </p>
-        <button
-          type="button"
-          onClick={onClear}
-          className="inline-flex items-center gap-1 text-xs font-semibold text-slate-500 hover:text-slate-800 cursor-pointer"
-        >
-          <X className="w-3.5 h-3.5" /> Clear search and browse domains
-        </button>
+        <div className="flex items-center gap-3">
+          {onToggleCertifiedOnly && <CertifiedOnlyToggle active={showCertifiedOnly} onToggle={onToggleCertifiedOnly} />}
+          <button
+            type="button"
+            onClick={onClear}
+            className="inline-flex items-center gap-1 text-xs font-semibold text-slate-500 hover:text-slate-800 cursor-pointer"
+          >
+            <X className="w-3.5 h-3.5" /> Clear search and browse domains
+          </button>
+        </div>
       </div>
 
       {total === 0 && (
         <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-600">
-          Nothing in the catalog matches “{term}”. Try another word, press <strong>Ask AI</strong>, or clear the
-          search to browse by domain.
+          Nothing in the catalog matches “{term}”{showCertifiedOnly ? ' among certified assets' : ''}. Try another word,
+          {showCertifiedOnly ? ' turn off Certified Only,' : ''} press <strong>Ask AI</strong>, or clear the search to browse by domain.
         </div>
       )}
 

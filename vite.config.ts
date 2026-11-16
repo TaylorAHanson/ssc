@@ -9,7 +9,9 @@ const buildTimestamp = Date.now();
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
-  const apiBaseUrl = mode === 'production' ? '/api/v1' : 'http://localhost:8000/api/v1';
+  // ./dev.sh moves the backend off 8000 when something else holds it, and says so here.
+  const backendPort = /^\d+$/.test(process.env.DEV_BACKEND_PORT ?? '') ? process.env.DEV_BACKEND_PORT : '8000';
+  const apiBaseUrl = mode === 'production' ? '/api/v1' : `http://localhost:${backendPort}/api/v1`;
 
   return {
     plugins: [react()],

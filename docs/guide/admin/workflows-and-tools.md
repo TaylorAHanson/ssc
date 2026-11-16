@@ -18,6 +18,12 @@ request. A workflow has two parts:
 Each published workflow becomes something the assistant can do. People can
 then ask for it in chat.
 
+The **data issue** workflow is what **Report data issue** in Discover starts:
+it emails the data governance group, then waits as a manual task for someone to
+look into the problem. Edit it here to change who is emailed (add a recipient
+to the email step), who gets the task, or how many days it has. The report text
+and the data's owner are filled in for you.
+
 ### Create or edit a workflow
 
 - **Build with assistant** lets you describe the workflow in plain language.
@@ -103,6 +109,32 @@ approver.
 - Use the **Test retrieval** box to search the catalog the way the assistant
   would, to check it finds the right passage.
 - **Export** and **Import** move the catalog between environments.
+
+### How search works
+
+The assistant finds passages by **words** and by **meaning**. A question like
+"how expensive can tools get" finds a document about purchase approval limits
+even though they share no words, and a search for an exact term still finds the
+passage that contains it. Results from both are combined, and each result in
+**Test retrieval** says whether it matched by keyword, by meaning or both.
+
+- **A new or edited document is searchable by words at once.** Searching by
+  meaning follows within about half a minute, once the document's passages have
+  been processed. Only the passages you changed are processed again.
+- **If searching by meaning isn't available, nothing breaks.** The assistant
+  falls back to words only, the way search worked before. That happens when the
+  database doesn't support it (a local SQLite database, or a Postgres database
+  without the `vector` extension), when the embedding model can't be reached,
+  or when you switch it off.
+- **See which mode you're in.** The line under the **Test retrieval** box says
+  whether search uses words only or words and meaning, and how many passages
+  have been processed. When it's words only, it says why. It also shows the
+  embedding model's last error, if there was one.
+- **Change it** under **Admin → Settings → Context Catalog → Search**: turn
+  semantic search on or off and choose the embedding model. The model must
+  return 1024-dimension vectors, and the app's service principal must be
+  allowed to use it. Changing the model reprocesses the whole catalog in
+  the background while search keeps working by words.
 
 ### Keeping documents current
 

@@ -16,6 +16,7 @@ import { AgentWelcome } from '../components/chat/AgentWelcome';
 import { api } from '../services/api';
 import { useUserStore } from '../stores/userStore';
 import { useBrandingStore } from '../stores/brandingStore';
+import { LandingGuide } from '../components/chat/LandingGuide';
 import { CatalogRails } from '../components/discover/CatalogRails';
 import { prefetchCatalog } from '../lib/catalogCache';
 import { buildDiscoverLink } from '../lib/discoverLinks';
@@ -77,6 +78,25 @@ export function Home() {
     const brandShortName = useBrandingStore((s) => s.brandShortName);
     const brandLogoUrl = useBrandingStore((s) => s.brandLogoUrl);
     const enhancedLandingPage = useBrandingStore((s) => s.features.enhanced_landing_page === true);
+    const genieOneUrl = useBrandingStore((s) => s.genieOneUrl);
+    const trainingOn = useBrandingStore((s) => s.uiTabs?.training !== false);
+    const requestsOn = useBrandingStore((s) => s.uiTabs?.my_requests !== false || s.uiTabs?.pending_approvals !== false);
+
+    // What this assistant is for, so nobody has to find out by asking it to analyze data.
+    const scopeNote = (
+        <>
+            I handle requests, access and platform questions, not data analysis.
+            {genieOneUrl && (
+                <>
+                    {' '}For analysis, use{' '}
+                    <a href={genieOneUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                        Genie One
+                    </a>
+                    .
+                </>
+            )}
+        </>
+    );
 
     // Pre-prompting: once we know who the user is, fetch a few personalized
     // starting prompts. Cached per session+persona so it's a single call per
@@ -170,18 +190,23 @@ export function Home() {
                             <Sparkles className="w-5 h-5 text-primary" />
                             How can I help you today?
                         </p>
+                        <p className="mt-1.5 text-sm text-gray-500">{scopeNote}</p>
                     </>
                 ) : (
-                    <h2 className="flex items-center justify-center gap-2 text-xl font-semibold text-gray-900">
-                        <Sparkles className="w-6 h-6 text-primary" />
-                        How can I help you today?
-                    </h2>
+                    <>
+                        <h2 className="flex items-center justify-center gap-2 text-xl font-semibold text-gray-900">
+                            <Sparkles className="w-6 h-6 text-primary" />
+                            How can I help you today?
+                        </h2>
+                        <p className="mt-1.5 text-sm text-gray-500">{scopeNote}</p>
+                    </>
                 )}
             </div>
         </div>
     ) : (
         <AgentWelcome
             title="How can I help you today?"
+            description={scopeNote}
             icon={<Sparkles className="w-7 h-7 text-primary" />}
         />
     );
@@ -217,14 +242,23 @@ export function Home() {
                     onRoute={handleRoute}
                     formCtaLabelFor={getButtonLabel}
                     emptyStateExtras={
-                        homeCatalogEnabled ? (
-                            <div className="max-w-5xl mx-auto w-full px-1 pb-6">
-                                <CatalogRails
-                                    onViewDetails={(ref) => navigate(buildDiscoverLink({ asset: ref.id }))}
-                                    onBrowseAll={() => navigate(buildDiscoverLink())}
-                                />
-                            </div>
-                        ) : null
+                        <>
+                            <LandingGuide
+                                user={currentUser?.email ?? ''}
+                                trainingOn={trainingOn}
+                                requestsOn={requestsOn}
+                                onAsk={(prompt) => chatRef.current?.submitQuery(prompt)}
+                                onOpen={navigate}
+                            />
+                            {homeCatalogEnabled && (
+                                <div className="max-w-5xl mx-auto w-full px-1 pb-6">
+                                    <CatalogRails
+                                        onViewDetails={(ref) => navigate(buildDiscoverLink({ asset: ref.id }))}
+                                        onBrowseAll={() => navigate(buildDiscoverLink())}
+                                    />
+                                </div>
+                            )}
+                        </>
                     }
                 />
             </div>

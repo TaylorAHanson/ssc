@@ -60,7 +60,7 @@ def test_a_token_missing_a_scope_is_not_reported_as_the_user_lacking_access():
     assert _classify_uc_error("User does not have SELECT on Table 'main.hr.salaries'") == "permission_denied"
 
 
-def test_table_details_run_as_the_user(user_client):
+def test_table_details_run_as_the_user(user_client, db_session):
     client, uc = user_client
     client.tables.get.return_value = SimpleNamespace(
         columns=[SimpleNamespace(name="id", type_text="bigint", comment=None, nullable=False, position=0)],
@@ -69,12 +69,34 @@ def test_table_details_run_as_the_user(user_client):
     )
     client.entity_tag_assignments.list.return_value = [SimpleNamespace(tag_key="tier", tag_value="gold")]
 
-    out = get_databricks_table_details("main.sales.orders", _req("tok-2"))
+    out = get_databricks_table_details("main.sales.orders", _req("tok-2"), db=db_session)
 
     uc.assert_called_once_with("tok-2")
     client.tables.get.assert_called_once_with(full_name="main.sales.orders")
     assert out["columns"][0]["name"] == "id" and out["tags"] == {"tier": "gold"}
+    assert out["owner"] == "o"  # no domain names an owner, so the table's own shows
     assert out["error"] is None
+
+
+def test_table_details_show_the_domains_business_owner(user_client, db_session):
+    from app.db.data_asset import DataAssetModel
+    from tests.factories.discover_domain_factory import add_domain
+
+    client, _ = user_client
+    client.tables.get.return_value = SimpleNamespace(
+        columns=[], table_type=None, comment=None, data_source_format=None,
+        owner="3f1c9a7e-sp-uuid", created_at=1, updated_at=2,
+    )
+    client.entity_tag_assignments.list.return_value = []
+    add_domain(db_session, "sales", business_owners=[{"id": 1, "name": "Dana Domain"}])
+    # The domain tag sits on the schema, not the table: it comes from the cached scope tags.
+    db_session.add(DataAssetModel(id="main.sales.orders", catalog="main", schema="sales", table_name="orders",
+                                  type="MANAGED", tags=[], scope_tag_keys={"catalog": [], "schema": ["sales"], "column": []}))
+    db_session.flush()
+
+    out = get_databricks_table_details("main.sales.orders", _req(), db=db_session)
+
+    assert out["owner"] == "Dana Domain"
 
 
 def test_table_details_permission_error_is_the_users_own(user_client):

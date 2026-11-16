@@ -24,7 +24,7 @@ export interface AgentWelcomeProps {
     /** Short title, e.g. the agent / page name. */
     title: string;
     /** One-line description of what the agent does. Omit to reclaim space. */
-    description?: string;
+    description?: ReactNode;
     /**
      * Optional example questions, rendered as non-clickable emphasized
      * lines. Each hints at a capability bucket via its `label`. Omit when a

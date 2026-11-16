@@ -279,6 +279,24 @@ def get_database_url() -> str:
             "missing). Not falling back to SQLite; the next connection attempt retries."
         )
 
+    # Local dev (./dev.sh sets LOCAL_POSTGRES): a bundled Postgres so local runs the same engine as
+    # production, and pgvector-backed semantic search works. Any problem keeps the SQLite fallback.
+    from app.db import localpg
+
+    if localpg.enabled():
+        try:
+            local_url = localpg.local_uri()
+        except Exception as e:  # noqa: BLE001 - a broken local server must not stop the app from starting
+            local_url = None
+            logger.warning("Bundled local Postgres failed to start (%s: %s); using SQLite.", type(e).__name__, e)
+        if local_url:
+            _log_conn_summary("Bundled local PostgreSQL (backend/.pgdata)")
+            return local_url
+        logger.warning(
+            "LOCAL_POSTGRES is set but pixeltable-pgserver isn't installed; using SQLite (semantic "
+            "search off). Install it with: pip install -r backend/requirements-dev.txt"
+        )
+
     # Fallback to SQLite
     base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     
@@ -386,7 +404,13 @@ def get_engine():
                 token expires after a few hours/days.
                 """
                 # Only fetch a fresh token if we are using Databricks OAuth
-                # (i.e. we didn't provide a hardcoded DATABASE_PASSWORD or DATABASE_URL)
+                # (i.e. we didn't provide a hardcoded DATABASE_PASSWORD or DATABASE_URL).
+                # The bundled local Postgres has no OAuth: skip, or every new connection
+                # would call the Databricks API (DATABRICKS_HOST is usually set locally).
+                from app.db import localpg
+
+                if localpg.is_active():
+                    return
                 if not settings.DATABASE_PASSWORD and not settings.DATABASE_URL:
                     fresh_token = get_lakebase_token()
                     if fresh_token:

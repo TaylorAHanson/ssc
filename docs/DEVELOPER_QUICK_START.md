@@ -11,7 +11,7 @@ cd backend
 cp .env.example .env
 ```
 Edit `.env` and configure the following key sections:
-- **Database**: Defaults to local SQLite (`app_hub`) if `DATABASE_URL` is empty.
+- **Database**: `./dev.sh` runs a bundled local PostgreSQL (with pgvector) kept in `backend/.pgdata`, installed from `backend/requirements-dev.txt` on first run, so local uses the same engine as production and Context Catalog semantic search works. Run `./dev.sh --sqlite` to use the SQLite file `backend/app_hub.db` instead; catalog search is then words-only. A real database (`DATABASE_URL`, or Lakebase settings) always wins. Switching databases starts with an empty one: data assets re-sync, and Context Catalog documents can move with **Export** / **Import** in the Context Catalog.
 - **Databricks**: Required for real infrastructure operations.
 - **Mock User**: Set `MOCK_USER_EMAIL` in `backend/.env` to simulate a logged-in user locally. To exercise admin-only features (e.g. workflow authoring), use the **dev role switcher** in the sidebar (non-production only) — it sends `X-Dev-Role-Override` (e.g. `Super Admin`; the old name `Platform Admin` is read as Application Admin).
 - **Governance & Observability (optional)**: all default to a safe local posture, so you don't need to set them to run locally.
@@ -24,7 +24,8 @@ On startup the backend logs the active governance posture, LLM routing (gateway 
 ### Run the app
 - `./dev.sh` will start both the backend and frontend servers.
 - You do not need to publish the app to Databricks to run it locally, with full functionality.
-- You can access the app at `http://localhost:5173` or the API at `http://localhost:8000`. 
+- You can access the app at `http://localhost:5173` or the API at `http://localhost:8000`. If either port is taken (by an earlier `./dev.sh` or another app), `./dev.sh` uses the next free one and prints the addresses it chose; it never stops what is already running. To start the search elsewhere, set `BACKEND_PORT`, `FRONTEND_PORT` or `DEBUG_PORT`, e.g. `BACKEND_PORT=9000 ./dev.sh`.
+- Two copies share `backend.log` and `frontend.log`: the newer one starts them afresh, so the older copy's output no longer lands in the files you see.
 - All logs are written to `backend.log` and `frontend.log` in the root directory.
 
 ### Use tools
@@ -110,7 +111,7 @@ To debug the running application:
    ```bash
    ./dev.sh --debug
    ```
-   This starts the backend with `debugpy` listening on port `5678`.
+   This starts the backend with `debugpy` listening on port `5678` (or the next free port, which `./dev.sh` prints; point the attach configuration at it).
 
 2. In VS Code, run the **"Attach to Backend"** launch configuration. This can be done by:
    - Opening the Run and Debug view (Cmd+Shift+D or click the bug icon in the sidebar)

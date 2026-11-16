@@ -148,13 +148,16 @@ def _report(settings, host: str, has_auth: bool) -> None:
     agent_ep = (getattr(settings, 'AI_GATEWAY_ENDPOINT', '') or getattr(settings, 'MODEL_SERVING_AGENT_LLM_ENDPOINT', '') or '').strip()
     _say(f"  {_status(bool(agent_ep))} Agent LLM endpoint   {agent_ep or '(unset - the chat agent will not respond)'}")
 
-    # Local dev defaults to SQLite; only note Postgres if partially configured.
+    # ./dev.sh runs against a bundled Postgres (LOCAL_POSTGRES=1) unless --sqlite; a configured
+    # Lakebase/Postgres wins over both.
     db_url = (getattr(settings, 'DATABASE_URL', '') or '').strip()
     db_pw = (getattr(settings, 'DATABASE_PASSWORD', '') or '').strip()
     if db_url or db_pw:
         _say("  [OK] Database            Lakebase/Postgres configured")
+    elif (os.environ.get("LOCAL_POSTGRES") or "").strip().lower() in ("1", "true", "yes", "on"):
+        _say("  [OK] Database            bundled local Postgres (backend/.pgdata); semantic catalog search on")
     else:
-        _say("  [OK] Database            SQLite (local default: backend/app_hub.db)")
+        _say("  [OK] Database            SQLite (backend/app_hub.db); catalog search uses words only")
 
     if not host or not has_auth:
         _say("")

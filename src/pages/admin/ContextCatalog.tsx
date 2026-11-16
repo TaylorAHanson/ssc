@@ -36,6 +36,7 @@ import type {
   ContextReviewProgress,
   ContextReviewSummary,
   ContextSearchResult,
+  ContextSearchStatus,
 } from '../../services/api';
 import { ImportContextCatalogModal } from '../../components/admin/ImportContextCatalogModal';
 import { ContextStalenessPanel } from '../../components/admin/ContextStalenessPanel';
@@ -173,6 +174,8 @@ export function ContextCatalog() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<ContextSearchResult[] | null>(null);
   const [isSearching, setIsSearching] = useState(false);
+  // Words-only or words + meaning, and indexing progress. Best-effort: absent when it can't be loaded.
+  const [searchStatus, setSearchStatus] = useState<ContextSearchStatus | null>(null);
 
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [showImport, setShowImport] = useState(false);
@@ -699,7 +702,26 @@ export function ContextCatalog() {
     } finally {
       setIsSearching(false);
     }
+    // Searching is when people wonder whether meaning-based search is on, so refresh its status too.
+    refreshSearchStatus();
   };
+
+  const refreshSearchStatus = () => {
+    api.getContextSearchStatus().then(setSearchStatus).catch(() => setSearchStatus(null));
+  };
+
+  useEffect(() => {
+    refreshSearchStatus();
+  }, []);
+
+  const searchStatusLine = (s: ContextSearchStatus): string => {
+    if (!s.semantic) return `Search uses words only. ${s.reason ?? ''}`.trim();
+    const progress = s.total === 0 ? '' : s.pending > 0 ? ` · ${s.indexed} of ${s.total} passages indexed` : ` · all ${s.total} passages indexed`;
+    return `Search uses words and meaning (${s.model})${progress}`;
+  };
+
+  const matchLabel = (m?: ContextSearchResult['match']): string =>
+    m === 'both' ? 'words + meaning' : m === 'semantic' ? 'meaning' : 'words';
 
   // -------------------------------------------------------------------- render
 
@@ -791,6 +813,13 @@ export function ContextCatalog() {
             )}
           </div>
 
+          {searchStatus && (
+            <p className="mt-2 text-xs text-gray-500">
+              {searchStatusLine(searchStatus)}
+              {searchStatus.lastError && <span className="text-amber-700"> · {searchStatus.lastError}</span>}
+            </p>
+          )}
+
           {searchResults !== null && (
             <div className="mt-4 space-y-2">
               {searchResults.length === 0 ? (
@@ -801,7 +830,7 @@ export function ContextCatalog() {
                     <div className="flex items-center justify-between text-xs text-gray-500 mb-1">
                       <span className="font-semibold text-gray-700">{r.document_title}</span>
                       <span>
-                        {r.domain_name} · score {r.score}
+                        {r.domain_name} · matched by {matchLabel(r.match)} · score {r.score}
                       </span>
                     </div>
                     <p className="text-sm text-gray-700 whitespace-pre-wrap line-clamp-4">{r.content}</p>

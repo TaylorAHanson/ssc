@@ -1,23 +1,24 @@
 from typing import Dict, List, Optional
 import asyncio
 import hashlib
+import html
 import logging
 import re
 import time
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from app.db.session import get_db
 from app.db.data_asset import DataAssetModel
 from app.workers.tasks.sync_data_assets import is_metric_view
 from app.api.deps import get_current_user
-from app.services.data_asset_owner import resolve_data_asset_owner
 from app.services.discover_domains import (
     OTHER_DOMAIN,
     OTHER_LABEL,
     Domain,
     load_domain_index,
     membership_fields,
+    resolve_discover_owner,
     workspace_entity_memberships,
 )
 from app.services.discover_visibility import (
@@ -127,7 +128,7 @@ def list_data_assets(
             "table_name": asset.table_name,
             "type": asset.type,
             "description": asset.description,
-            "owner": resolve_data_asset_owner(asset.owner, asset.tags),
+            "owner": resolve_discover_owner(asset.owner, asset.tags, membership, index),
             **membership_fields(membership),
             "tags": asset.tags if asset.tags else [],
             "certified": asset.certified,
@@ -144,6 +145,86 @@ def list_data_assets(
         })
         
     return result
+
+
+class ReportDataIssue(BaseModel):
+    # Stripped before the length checks, so a summary of spaces is refused rather than filed blank.
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    asset_id: str
+    summary: str = Field(..., min_length=3, max_length=300)
+    details: Optional[str] = Field(default=None, max_length=4000)
+
+
+# The workflow a data-issue report starts: an email, then a manual task for whoever picks it up.
+# It is data (workflows/graphs/catalog/data_issue_report.json), so admins can edit who is told and who
+# investigates; this endpoint only supplies what it needs.
+DATA_ISSUE_WORKFLOW = "data_issue_report"
+
+
+def _data_issue_email(name: str, owner: str, reporter: str, reporter_email: str,
+                      summary: str, details: Optional[str]) -> str:
+    """The notification body. Everything the user typed is escaped: the email is sent as HTML."""
+    e = html.escape
+    parts = [
+        f"<p><b>{e(reporter)}</b> ({e(reporter_email)}) reported a problem with <b>{e(name)}</b>.</p>",
+        f"<p><b>What's wrong:</b> {e(summary)}</p>",
+    ]
+    if details and details.strip():
+        parts.append(f"<p><b>Details:</b><br>{e(details.strip()).replace(chr(10), '<br>')}</p>")
+    parts.append(f"<p><b>Data owner:</b> {e(owner)}</p>")
+    return "".join(parts)
+
+
+@router.post("/report-issue", status_code=201)
+def report_data_issue(
+    body: ReportDataIssue,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Report a problem with a data asset: starts the data-issue workflow as the signed-in user."""
+    from app.models.request import RequestCreate
+    from app.services.request_service import RequestService
+
+    asset = db.query(DataAssetModel).filter(DataAssetModel.id == body.asset_id).first()
+    if asset is None or load_visibility(db).is_hidden_id(asset.id):
+        raise HTTPException(status_code=404, detail="Data asset not found")
+
+    index = load_domain_index(db)
+    owner = resolve_discover_owner(asset.owner, asset.tags, index.for_asset(asset), index) or "Not known"
+    name = asset.id if asset.id.count(".") == 2 else asset.table_name
+    reporter = current_user.full_name or current_user.email
+    summary = body.summary.strip()
+    details = (body.details or "").strip() or None
+
+    try:
+        created = RequestService.create_request(db, RequestCreate(
+            type=DATA_ISSUE_WORKFLOW,
+            title=f"Data issue: {name}",
+            requester_email=current_user.email,
+            metadata={
+                "asset": name,
+                "asset_type": asset.type,
+                "owner": owner,
+                "summary": summary,
+                "details": details,
+                # Leading underscore: kept for the workflow, hidden from the approver's parameter list.
+                "_asset_id": asset.id,
+                "_email_subject": f"Data issue reported: {name}",
+                "_email_body": _data_issue_email(name, owner, reporter, current_user.email, summary, details),
+                "requested_by": reporter,
+                "requested_by_email": current_user.email,
+            },
+        ))
+    except ValueError as e:
+        # The workflow was retired or never published in this environment.
+        logger.warning("Data issue report not filed: %s", e)
+        raise HTTPException(
+            status_code=503,
+            detail="Reporting a data issue isn't set up here yet. Ask an admin to publish the data issue workflow.",
+        )
+    logger.info("Data issue reported", extra={"data": {"request_id": created.id, "asset": name}})
+    return {"request_id": created.id, "status": created.status, "asset": name, "owner": owner}
 
 
 def _domain_summary(d: Domain) -> dict:
@@ -290,7 +371,7 @@ def list_metric_views(
             "table_name": a.table_name,
             "type": "METRIC_VIEW",
             "description": a.description,
-            "owner": resolve_data_asset_owner(a.owner, a.tags),
+            "owner": resolve_discover_owner(a.owner, a.tags, membership, index),
             **membership_fields(membership),
             "tags": a.tags or [],
             "certified": bool(a.certified),
@@ -813,8 +894,12 @@ def get_databricks_table_details(table_name: str, req: Request, db: Session = De
         if vis.active and has_hidden_tag(tags, vis.keys):
             return {**base_response, **_hidden_table_error(table_name)}
 
+        # Same owner the asset list shows: its subdomain's or domain's business owner, else the table's own.
         raw_owner = getattr(info, "owner", None)
-        resolved_owner = resolve_data_asset_owner(raw_owner, tags)
+        cached = db.query(DataAssetModel).filter(DataAssetModel.id == table_name).first()
+        index = load_domain_index(db)
+        membership = index.for_tags(tags, getattr(cached, "scope_tag_keys", None))
+        resolved_owner = resolve_discover_owner(raw_owner, tags, membership, index)
 
         return {
             **base_response,

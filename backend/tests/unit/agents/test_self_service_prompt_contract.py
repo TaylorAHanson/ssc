@@ -216,3 +216,19 @@ def test_feedback_does_not_send_anyone_to_a_page_an_admin_turned_off():
     flat = _feedback_text({"feedback": False})
     assert "/admin/feedback" not in flat
     assert "switched off here" in flat
+
+
+def test_feedback_asks_what_happened_first_and_nothing_is_sent_unconfirmed():
+    with patch("app.core.feature_flags.is_feature_enabled", return_value=True):
+        flat = " ".join(prompts._get_feedback_section().split())
+    # A bare remark ("this app sucks") is not a report: ask, don't file or draft.
+    assert "If all the user has said is how they feel" in flat and "this app sucks" in flat
+    assert "do NOT call `submit_feedback` for the remark" in flat
+    assert "Ask what happened before you draft anything" in flat
+    # The assistant shows the draft itself and sends once; a user who asked with details has already said yes.
+    assert "Show the draft yourself, then send it once" in flat
+    assert "call `submit_feedback` once with `confirmed=true`" in flat
+    assert "Two cases need no second question" in flat and "said yes to your offer to report a problem" in flat
+    assert "needs_details" in flat
+    # That rule comes before the sentence that tells the assistant to use the tool.
+    assert flat.index("If all the user has said is how they feel") < flat.index("use the `submit_feedback` tool")

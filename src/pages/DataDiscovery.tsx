@@ -1,12 +1,12 @@
 import { useState, useEffect, useMemo, useRef, useDeferredValue, useCallback, type ReactNode } from 'react';
-import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { 
   ShieldCheck, Table as TableIcon, Info, X,
   Tag, FileText, Loader2,
   BookOpen, Calendar, GitBranch, AlertCircle, ChevronDown, ChevronUp,
   Link as LinkIcon, ArrowDownToLine, ArrowUpFromLine, Lock, Columns3,
   Key, ExternalLink, Network, Activity, Sparkles,
-  Users, Server, Eye, MessageSquare, Search
+  Users, Server, Eye, MessageSquare, Search, Flag, Pencil
 } from 'lucide-react';
 import { parseCatalogQuery, rankByQuery, scoreFields, type SearchFields } from '../lib/catalogSearch';
 import { api, OTHER_DOMAIN } from '../services/api';
@@ -64,6 +64,9 @@ import { SidePanel } from '../components/discover/SidePanel';
 import { DataPreview } from '../components/discover/DataPreview';
 import { DiscoverSearch } from '../components/discover/DiscoverSearch';
 import { errorMessage } from '../lib/errors';
+import { useCanEditMetadata } from '../lib/useCanEditMetadata';
+import { objectPath } from '../components/admin/metadata/paths';
+import { ReportIssueModal } from '../components/discover/ReportIssueModal';
 
 const INLINE_AGENT_STORAGE_KEY = 'discover_inline_agent';
 
@@ -820,6 +823,8 @@ export function DataDiscovery() {
             onOpenAsset={(asset) => openAsset(asset.id)}
             onClear={() => setSearchTerm('')}
             replacesFor={legacyNamesMatching}
+            showCertifiedOnly={showCertifiedOnly}
+            onToggleCertifiedOnly={() => setShowCertifiedOnly(!showCertifiedOnly)}
           />
         ) : discoveryStage === 'start' ? (
           <DomainStartView
@@ -945,6 +950,24 @@ function DetailsModal({
 }: DetailsModalProps) {
   const isDataset = asset.type === 'dataset' || asset.type === 'data_product';
   const isTableLike = ['managed', 'external', 'view'].includes(String(asset.type).toLowerCase());
+  const isMetricView = String(asset.type).toLowerCase() === 'metric_view';
+  // "Edit" on the description and tags opens this object in the Metadata Manager, where they are changed.
+  const canEditMetadata = useCanEditMetadata();
+  const metadataEditPath = canEditMetadata && (isTableLike || isMetricView) && asset.catalog && asset.schema_name && asset.table_name
+    ? objectPath(`${asset.catalog}.${asset.schema_name}.${asset.table_name}`)
+    : null;
+  const editLink = metadataEditPath ? (
+    <Link
+      to={metadataEditPath}
+      className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+      title="Edit in the Metadata Manager"
+    >
+      <Pencil className="w-3 h-3" /> Edit
+    </Link>
+  ) : null;
+  // Problems can be reported on anything the catalog stores (not on live-read dashboards or apps).
+  const canReportIssue = isTableLike || isMetricView || isDataset;
+  const [reportOpen, setReportOpen] = useState(false);
   // Day-to-day support contact an admin set under Settings; shown on every asset.
   const supportContact = useBrandingStore((s) => s.supportContact);
   const hasSupportContact = Boolean(supportContact.name || supportContact.email || supportContact.notes);
@@ -965,11 +988,6 @@ function DetailsModal({
   const authoritativeDefinitions: OdcsAuthoritativeDefinition[] = parsed && Array.isArray(parsed.authoritativeDefinitions)
     ? parsed.authoritativeDefinitions
     : [];
-
-  // Owner derivation: prefer asset.owner, then contract author/creator role
-  const contractOwner = team.find((t) => /owner|steward/i.test(String(t?.role || '')))?.username
-    || parsed?.dataProductOwner
-    || null;
 
   // Type display string
   const displayType = isDataset
@@ -1133,6 +1151,16 @@ function DetailsModal({
                 className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline cursor-pointer"
               />
               <PinButton asset={pinInputFromAsset(asset)} variant="labeled" />
+              {canReportIssue && (
+                <button
+                  type="button"
+                  onClick={() => setReportOpen(true)}
+                  className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline cursor-pointer"
+                  title="Tell the team something is wrong with this data"
+                >
+                  <Flag className="w-3.5 h-3.5" /> Report data issue
+                </button>
+              )}
             </div>
           </div>
           <button
@@ -1198,7 +1226,7 @@ function DetailsModal({
             <>
               {/* Description */}
               <section>
-                <SectionHeading icon={<BookOpen className="w-4 h-4" />} title="Description" />
+                <SectionHeading icon={<BookOpen className="w-4 h-4" />} title="Description" action={editLink} />
                 {(purpose || limitations || usage) ? (
                   <div className="space-y-3">
                     {purpose && (
@@ -1232,7 +1260,7 @@ function DetailsModal({
                 <SectionHeading icon={<ShieldCheck className="w-4 h-4" />} title="Governance" />
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <MetaRow label="Domain" value={parsed?.domain || domainPaths(asset).join(', ') || null} />
-                  <MetaRow label="Owner" value={contractOwner || asset.owner} />
+                  <MetaRow label="Owner" value={asset.owner} />
                   <MetaRow label="Type">
                     <span className="text-sm font-medium text-gray-900 bg-gray-100 px-2 py-0.5 rounded capitalize">{displayType}</span>
                   </MetaRow>
@@ -1295,11 +1323,12 @@ function DetailsModal({
               )}
 
               {/* Tags */}
-              {Array.isArray(asset.tags) && asset.tags.length > 0 && (
+              {((Array.isArray(asset.tags) && asset.tags.length > 0) || editLink) && (
                 <section>
-                  <SectionHeading icon={<Tag className="w-4 h-4" />} title="Tags" count={asset.tags.length} />
+                  <SectionHeading icon={<Tag className="w-4 h-4" />} title="Tags" count={asset.tags?.length || undefined} action={editLink} />
                   <div className="flex flex-wrap gap-2">
-                    {asset.tags.map((tag: string) => (
+                    {(asset.tags ?? []).length === 0 && <p className="text-sm text-gray-500">No tags yet.</p>}
+                    {(asset.tags ?? []).map((tag: string) => (
                       <span key={tag} className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-medium bg-blue-50 text-blue-700 border border-blue-100 font-mono">
                         {tag}
                       </span>
@@ -1593,16 +1622,6 @@ function DetailsModal({
           >
             Close
           </button>
-          {headerHref && (
-            <a
-              href={headerHref}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="px-4 py-2 border border-gray-300 bg-white rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors flex items-center gap-2"
-            >
-              <ExternalLink className="w-4 h-4" /> {headerLinkLabel}
-            </a>
-          )}
           {isDataset && contract?.yaml_content && (
             <button
               onClick={() => {
@@ -1636,6 +1655,12 @@ function DetailsModal({
           )}
         </div>
       </div>
+      {reportOpen && (
+        <ReportIssueModal
+          asset={{ id: asset.id, name: isDataset ? (parsed?.dataProduct || asset.table_name) : `${asset.catalog}.${asset.schema_name}.${asset.table_name}` }}
+          onClose={() => setReportOpen(false)}
+        />
+      )}
     </SidePanel>
   );
 }
@@ -1858,10 +1883,13 @@ function SectionHeading({
   icon,
   title,
   count,
+  action,
 }: {
   icon?: ReactNode;
   title: string;
   count?: number;
+  /** Shown at the right end of the heading, e.g. an Edit link. */
+  action?: ReactNode;
 }) {
   return (
     <h3 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-gray-700 mb-3">
@@ -1872,6 +1900,7 @@ function SectionHeading({
           {count}
         </span>
       )}
+      {action && <span className="ml-auto normal-case tracking-normal font-normal">{action}</span>}
     </h3>
   );
 }

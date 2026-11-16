@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from app.services.data_asset_owner import resolve_data_asset_owner
 from app.services.discover_visibility import (
     WORKSPACE_ENTITY_TYPES,
     scope_keys,
@@ -225,6 +226,21 @@ def workspace_entity_memberships(
 
 def membership_fields(m: Membership) -> Dict[str, List[str]]:
     return {"domains": list(m.domains), "subdomains": list(m.subdomains)}
+
+
+def resolve_discover_owner(owner: Optional[str], tags: Any, membership: Membership, index: DomainIndex) -> Optional[str]:
+    """Who to show as an asset's owner: its subdomain's business owner, else its domain's, else the
+    owner the asset itself carries (``resolve_data_asset_owner``: the data-owner tag, then the UC owner,
+    which is often a service principal's id).
+
+    A domain's owners are Discover's, set on the domain rather than on each table. An asset in several
+    domains takes the first (in tag-key order) that has a named business owner.
+    """
+    for key in (*membership.subdomains, *membership.domains):
+        domain = index.get(key)
+        if domain is not None and domain.business_owners:
+            return ", ".join(domain.business_owners)
+    return resolve_data_asset_owner(owner, tags)
 
 
 # ---------------------------------------------------------------------------

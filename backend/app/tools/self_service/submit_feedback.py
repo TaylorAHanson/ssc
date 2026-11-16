@@ -10,6 +10,7 @@ from the server side, so chat-sourced bug reports won't carry those (the web for
 does).
 """
 import logging
+import re
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
@@ -25,6 +26,54 @@ logger = logging.getLogger(__name__)
 # The same words from the same person inside this window are one report, not two.
 _DUPLICATE_WINDOW = timedelta(minutes=15)
 _MAX_TEXT = 8000  # matches FeedbackService's stored-text cap, so a long report still compares equal
+
+# A report with less than this in the user's own words says too little for anyone to act on
+# ("this app sucks"). The tool sends the assistant back to ask what happened before it drafts.
+# Naming the thing it is about (`about`) counts as enough on its own.
+MIN_DETAIL_WORDS = 5
+
+# The user's latest message has to ask for the report to go to the team, or agree to an offer to send it,
+# before it is filed. The model reports that it did ("confirmed"), and models do say so about a problem
+# the user only described, so the conversation is checked as well. Wording that isn't recognised sends the
+# assistant back to ask, which costs a question; filing something nobody asked for costs more.
+_ASKS_TO_SEND = re.compile(
+    r"\b(?:report|flag|log|file|submit|send|raise)\s+(?:it|this|that|these|them|a|an|the|my|our|some)\b"
+    r"|\bpass\s+(?:it|this|that)\s+on\b"
+    r"|\b(?:let|tell)\s+(?:the|your)?\s*(?:team|admins?)\b",
+    re.I,
+)
+_AGREES = re.compile(
+    r"\b(?:yes|yeah|yep|yup|sure|ok|okay|go ahead|go for it|do it|do that|please do|sounds good|absolutely)\b",
+    re.I,
+)
+_SHORT_REPLY_WORDS = 10  # an agreement is a short reply; "yes" inside a long description isn't one
+
+
+def _text_of(message: Dict[str, Any]) -> str:
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(str(p.get("text", "")) for p in content if isinstance(p, dict))
+    return ""
+
+
+def user_asked_to_send(history: Optional[list]) -> bool:
+    """Whether the user's latest message asks for this to be sent, or agrees to sending it.
+
+    With no conversation to read (the MCP server, a direct call) there is nothing to check against, so the
+    caller's own ``confirmed`` stands.
+    """
+    if history is None:
+        return True
+    latest = next(
+        (_text_of(m) for m in reversed(history) if isinstance(m, dict) and m.get("role") == "user"),
+        "",
+    )
+    if _ASKS_TO_SEND.search(latest):
+        return True
+    return len(latest.split()) <= _SHORT_REPLY_WORDS and bool(_AGREES.search(latest))
+
 
 # What a report is filed under when the caller doesn't say, or says something we
 # don't have a bucket for (e.g. "data issue"). Triage reads the description.
@@ -63,6 +112,13 @@ class SubmitFeedbackInput(BaseModel):
         default=None,
         description="For bugs only: 'low', 'medium', 'high', or 'critical'.",
     )
+    confirmed: bool = Field(
+        default=False,
+        description=(
+            "Set true ONLY when the user asked you to send it, or said yes after you showed them what it "
+            "says. Left false, nothing is sent and you just get a draft back."
+        ),
+    )
 
 
 def _normalize(feedback_type: Optional[str]) -> tuple[str, Optional[str]]:
@@ -94,9 +150,11 @@ def _compose_description(description: Optional[str], about: Optional[str], label
     description=(
         "Pass something on to the team for triage: feedback about the app, a feature request, a bug, "
         "or a problem with some data (stale, wrong, missing, broken). Use it for any report the user "
-        "wants someone to see, and only after they have asked you to pass it on or said yes to your "
-        "offer; a user who merely describes a problem hasn't asked yet, and a question about how "
-        "feedback works is not a report. It is not a provisioning request."
+        "wants someone to see. Nothing is sent unless you pass confirmed=true, which you do only after the "
+        "user has asked you to pass it on or said yes to your offer, with the details in their own words. A "
+        "user who merely describes a problem, or says how they feel about the app, hasn't asked yet; ask "
+        "what happened first and don't call this for the remark. A question about how feedback works is not "
+        "a report. It is not a provisioning request."
     ),
     args_schema=SubmitFeedbackInput,
     feature_flag="core",
@@ -108,11 +166,47 @@ def submit_feedback(
     description: Optional[str] = None,
     about: Optional[str] = None,
     severity: Optional[str] = None,
+    confirmed: bool = False,
+    conversation_history: Optional[list] = None,
     **kwargs,
 ) -> Dict[str, Any]:
     user_email = kwargs.get("_user_email")
     stored_type, label = _normalize(feedback_type)
     composed = _compose_description(description, about, label)
+
+    # Nothing is written until the report says something and the user has agreed to send it.
+    # These come back as results, not errors, so the assistant carries on the conversation. They carry
+    # `filed` and no `success` key: `success: false` is how a tool says it failed, which the executor
+    # audits and logs as a failed call, and asking the user a question isn't one.
+    if not (title or "").strip():
+        return {
+            "success": False,
+            "error": "title is required",
+            "note": "Tell the user what was missing or invalid and ask them to clarify.",
+        }
+    if not (about or "").strip() and len((description or "").split()) < MIN_DETAIL_WORDS:
+        return {
+            "filed": False,
+            "needs_details": True,
+            "note": (
+                "Nothing was sent: there isn't enough here for the team to act on. Ask the user what "
+                "happened, or what they would like to see changed, and wait for their answer. Don't "
+                "guess, and don't fill the details in yourself. Once they have answered, put their own "
+                "words in `description` and call this again."
+            ),
+        }
+    if not confirmed or not user_asked_to_send(conversation_history):
+        return {
+            "filed": False,
+            "needs_confirmation": True,
+            "draft": {"type": stored_type, "title": title.strip(), "description": composed},
+            "note": (
+                "Nothing was sent yet: the user hasn't asked for this to go to the team, or said yes to "
+                "your offer. Show them what it would say (the title and their own words) and ask "
+                "whether to send it. Only after they say yes, call submit_feedback again with the same "
+                "fields and confirmed=true."
+            ),
+        }
     db = next(get_db())
     try:
         # The same person sending the same words again a few minutes later is a repeat (the

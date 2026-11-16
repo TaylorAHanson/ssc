@@ -1,0 +1,23 @@
+{
+  "key": "data_issue_report",
+  "name": "data_issue_report",
+  "stages": [
+    {
+      "kind": "step",
+      "name": "notify",
+      "tool": "send_notification",
+      "args": {
+        "to_email": {"$var": {"path": "notify_email", "default": null}},
+        "subject": {"$var": {"path": "_email_subject", "default": "Data issue reported"}},
+        "body": {"$var": {"path": "_email_body", "default": ""}}
+      }
+    },
+    {
+      "kind": "gate",
+      "name": "investigate",
+      "type": "manual_task",
+      "instructions": "Look into the data issue described in this request. Open the asset and check what was reported, then reach the data owner (named in the request) and agree who fixes it. Reply to the person who reported it with what you found. Mark this task done once the issue is fixed, or once it has been handed to the team that owns the fix.",
+      "due_in_days": 5
+    }
+  ]
+}

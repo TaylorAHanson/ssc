@@ -29,7 +29,8 @@ execution model. Other useful docs: `DEVELOPER_QUICK_START.md`, `GOVERNANCE.md`,
 
 ## Running locally
 
-- **`./dev.sh`** starts backend (`:8000`) and frontend (`:5173`). It creates
+- **`./dev.sh`** starts backend (`:8000`) and frontend (`:5173`), or the next free
+  ports if those are taken (it prints them and never kills what holds them). It creates
   `backend/.env` from `.env.example` if missing, runs a local preflight that
   resolves Databricks creds from your CLI login, sets up the venv, installs deps,
   and tails to `backend.log` / `frontend.log`.
@@ -52,8 +53,12 @@ execution model. Other useful docs: `DEVELOPER_QUICK_START.md`, `GOVERNANCE.md`,
   startup error there means the app isn't actually running.
 - **Venv gotcha:** most Python libs are **not** globally installed. Activate
   `backend/venv` before running any `python`/`pytest`/scratch script.
-- **Local DB** is SQLite at `backend/app_hub.db` (query it directly if useful);
-  deployed uses Lakebase/Postgres.
+- **Local DB:** `./dev.sh` runs a bundled PostgreSQL with pgvector (data in
+  `backend/.pgdata`, from `backend/requirements-dev.txt`; see `backend/app/db/localpg.py`),
+  so local matches deployed Lakebase and Context Catalog semantic search works.
+  `./dev.sh --sqlite` uses SQLite at `backend/app_hub.db` instead (query it directly if
+  useful); search is then words-only. Unit tests use in-memory SQLite, plus the bundled
+  Postgres where a test needs pgvector (skipped if it isn't installed).
 - **Step output for approvers → `report_markdown`.** A workflow tool that returns
   `report_markdown` (+ `report_title`) has it shown on every later approval card
   (`step_report` fact → `GET /approvals` → `StepReportPanel`); no author config.

@@ -125,10 +125,17 @@ which of the groups you're already a member of.
 ### Report a problem with data
 
 If a table looks stale, wrong or broken, tell the assistant. It looks up the
-owner and offers to report the problem to the team, and it sends the report
-once you say yes. You can also say "report this" straight away. You don't need
-to pick a category. A repeat of the same report within a few minutes is
-recorded once.
+owner and offers to report the problem to the team. Before anything is sent it
+shows you what the report says and asks whether to send it, and it sends it
+once you say yes. If you say how you feel without saying what went wrong, such
+as "this app sucks", it asks what happened first instead of filing anything.
+You can also say "log this as a feature request: ..." with the details in the
+same message, and it files that straight away. You don't need to pick a
+category. A repeat of the same report within a few minutes is recorded once.
+
+For a problem with a particular table, you can also use **Report data issue**
+in the table's details in [Discover data](discover-data.md). That starts a
+request for the team to work on, rather than a note for the admins.
 
 A question about feedback, such as how it works or who reads it, is answered
 and not filed. Super, Application and Governance Admins read what has been sent in
@@ -211,6 +218,17 @@ Your conversation is saved, so it's still there when you come back, even on
 another device. To delete it, use **Clear my data** in the account menu.
 
 ## The home screen
+
+Under the greeting, a line says what the assistant is for: requests, access and
+platform questions, not data analysis. Where your administrator has set up Genie
+One, the line links to it for analysis.
+
+**What I can help with** lists the kinds of things you can ask for, such as
+getting access, setting something up, tracking requests, finding data and its
+owner, reporting a problem, and learning the platform. Click one to start that
+conversation, or to open the page that covers it. Select **Hide** to remove the
+list. The choice is saved for you in this browser, and **What I can help with?**
+brings it back.
 
 Before you start a conversation, the home screen may also show your data
 catalog:

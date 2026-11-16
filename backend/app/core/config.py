@@ -107,10 +107,19 @@ class Settings(BaseSettings):
     BRAND_COLOR_SUCCESS: str = _branding.get("success_color", os.getenv("BRAND_COLOR_SUCCESS", "#00A972"))
 
     # Context Catalog
-    # Curated knowledge base the agent retrieves from. Retrieval is lightweight
-    # keyword search over chunked document text (no vector DB).
+    # Curated knowledge base the agent retrieves from. Retrieval is keyword search
+    # over chunked document text, plus a semantic (embedding) leg when the database
+    # is Postgres with pgvector; without it search stays keyword-only
+    # (app/services/context_search_index.py).
     CONTEXT_CATALOG_CHUNK_SIZE: int = int(os.getenv("CONTEXT_CATALOG_CHUNK_SIZE", "1200"))
     CONTEXT_CATALOG_SEARCH_LIMIT: int = int(os.getenv("CONTEXT_CATALOG_SEARCH_LIMIT", "6"))
+    # Semantic search. The model is a Unity Catalog model reference called through the AI Gateway
+    # (system.ai.gte-large-en) or a serving-endpoint name called directly; it must return
+    # 1024-dimension vectors and the app must be allowed to use it. Both are editable in Admin -> Settings.
+    CONTEXT_CATALOG_SEMANTIC_SEARCH: bool = (
+        os.getenv("CONTEXT_CATALOG_SEMANTIC_SEARCH", "true").lower() == "true"
+    )
+    CONTEXT_CATALOG_EMBEDDING_MODEL: str = os.getenv("CONTEXT_CATALOG_EMBEDDING_MODEL", "system.ai.gte-large-en")
     CONTEXT_CATALOG_MAX_UPLOAD_MB: int = int(os.getenv("CONTEXT_CATALOG_MAX_UPLOAD_MB", "20"))
     # Optional UC Volume path for storing uploaded originals (docx/pdf/pptx).
     # When empty, originals are not persisted (only the extracted text is kept).
@@ -258,8 +267,21 @@ class Settings(BaseSettings):
             "http://127.0.0.1:5173",
         ])
     
+    # Origins added to CORS_ORIGINS without replacing it, comma-separated. ``./dev.sh`` sets this when it
+    # has to serve the frontend on a port other than 5173, so the browser's calls to the API still pass.
+    CORS_EXTRA_ORIGINS: str = Field(
+        default="",
+        description="Extra allowed CORS origins, comma-separated, added to CORS_ORIGINS",
+    )
+
     @property
     def cors_origins_list(self) -> List[str]:
+        """CORS_ORIGINS plus any CORS_EXTRA_ORIGINS, without repeats."""
+        origins = self._configured_cors_origins()
+        extras = [o.strip() for o in (self.CORS_EXTRA_ORIGINS or "").split(",") if o.strip()]
+        return origins + [o for o in extras if o not in origins]
+
+    def _configured_cors_origins(self) -> List[str]:
         """Get CORS_ORIGINS as a list."""
         try:
             parsed = json.loads(self.CORS_ORIGINS)

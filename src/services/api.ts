@@ -1798,6 +1798,31 @@ export async function getDataContracts(): Promise<DataContract[]> {
   return response.json();
 }
 
+export interface ReportDataIssueResult {
+  request_id: string;
+  status: string;
+  /** What the report was filed against, e.g. `catalog.schema.table`. */
+  asset: string;
+  /** Who the report names as the data's owner. */
+  owner: string;
+}
+
+/** Report a problem with a data asset: starts the data issue workflow (an email, then a task for the team). */
+export async function reportDataIssue(assetId: string, summary: string, details?: string): Promise<ReportDataIssueResult> {
+  const response = await fetch(`${API_BASE_URL}/data-assets/report-issue`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({ asset_id: assetId, summary, details: details || null }),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    // FastAPI validation errors come back as a list; show a plain sentence instead.
+    const detail = typeof error.detail === 'string' ? error.detail : 'Please describe the problem in a few words.';
+    throw new Error(detail || `Failed to report the issue: ${response.statusText}`);
+  }
+  return response.json();
+}
+
 export async function getContractHistory(datasetId: string): Promise<DataContract[]> {
   const url = new URL(`${API_BASE_URL}/data-contracts/${datasetId}`, window.location.origin);
   const response = await fetch(url.toString(), {
@@ -2438,6 +2463,31 @@ export interface ContextSearchResult {
   chunk_index: number;
   content: string;
   score: number;
+  /** How the passage was found: by its words, by its meaning, or both. */
+  match?: 'keyword' | 'semantic' | 'both';
+}
+
+/** Whether catalog search is using meaning as well as words, and how far indexing has got. */
+export interface ContextSearchStatus {
+  mode: 'semantic' | 'keyword';
+  semantic: boolean;
+  model: string | null;
+  indexed: number;
+  total: number;
+  pending: number;
+  /** Why search is words-only, when it is. */
+  reason: string | null;
+  /** The embedding endpoint's last failure, in words safe to show. */
+  lastError: string | null;
+}
+
+export async function getContextSearchStatus(): Promise<ContextSearchStatus> {
+  const response = await fetch(`${API_BASE_URL}/context/search/status`, { headers: getHeaders() });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to load search status: ${response.statusText}`);
+  }
+  return response.json();
 }
 
 export async function listContextDomains(): Promise<ContextDomain[]> {
@@ -4396,6 +4446,7 @@ export const api = {
   getMetricViewDefinitions,
   getDataContracts,
   getContractHistory,
+  reportDataIssue,
   getCertificationDetail,
   createDataContract,
   syncDataContracts,
@@ -4431,6 +4482,7 @@ export const api = {
   updateContextDocument,
   deleteContextDocument,
   searchContextCatalog,
+  getContextSearchStatus,
   exportContextCatalogBundle,
   importContextCatalogBundle,
   markContextDocumentReviewed,

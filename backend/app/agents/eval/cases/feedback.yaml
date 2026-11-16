@@ -67,6 +67,8 @@ cases:
     tool_limits: {submit_feedback: 1}
     expect_tool_args:
       - {tool: submit_feedback, arg: feedback_type, matches: "(?i)feature"}
+      # They asked and gave the details in one message, so that message is the yes.
+      - {tool: submit_feedback, arg: confirmed, matches: "(?i)true"}
     answer_matches: ["(?i)(admin\\s*(→|->|>|›|,\\s*then|and then)\\s*feedback|feedback (tab|page)|/admin/feedback)"]
 
   - id: fb-user-where
@@ -79,3 +81,39 @@ cases:
       can't open and does not file anything.
     forbid_tools: [submit_feedback, execute_workflow]
     answer_not_matches: ["(?i)/admin/feedback"]
+
+  # ------------------------------------------------ a remark is not a report
+  # Source: a user typed "this app sucks" and it was logged on the spot, with no
+  # question about what was wrong. Expectations describe INTENDED behavior: ask
+  # what happened, draft only from what they say, and send only on their yes.
+  - id: fb-vague-remark
+    name: A bare remark about the app is asked about, not filed
+    tags: [feedback, question]
+    question: This app sucks.
+    expected: >
+      Acknowledges the frustration in a sentence and asks what happened or what the
+      user would like to see changed. It does not file or draft a report from this
+      message, and does not claim to have passed anything on.
+    forbid_tools: [submit_feedback, execute_workflow]
+    answer_matches: ["\\?"]
+
+  - id: fb-remark-details-then-yes
+    name: Details are drafted and sent only after the user says yes
+    tags: [feedback]
+    turns:
+      - This app sucks.
+      - The Discover page takes about a minute to load, and the filters reset every time I go back.
+      - Yes, send it.
+    expected: >
+      After the first message it asks what is wrong and files nothing. After the user
+      gives details it shows what it would send (the Discover page slow to load, filters
+      resetting) and asks whether to send it, without sending yet. Only after
+      the user says yes does it send exactly one report, built from their own words,
+      and say it was passed on to the admins (in this simulated run, saying it was
+      prepared or not actually sent is equally acceptable). It does not invent
+      details, a severity, or an ID.
+    expect_tools: [submit_feedback]
+    tool_limits: {submit_feedback: 1}
+    expect_tool_args:
+      - {tool: submit_feedback, arg: confirmed, turn: 3, matches: "(?i)true"}
+      - {tool: submit_feedback, arg: description, matches: "(?i)(discover|minute|load|filter)"}

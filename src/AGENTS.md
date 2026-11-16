@@ -20,7 +20,8 @@ This is the admin/self-service UI that talks to the backend at
 ## How it talks to the backend
 
 - The API base URL is injected at build time as `VITE_API_BASE_URL`
-  (`vite.config.ts`): `http://localhost:8000/api/v1` in dev, `/api/v1` in prod.
+  (`vite.config.ts`): `http://localhost:8000/api/v1` in dev (the port follows `DEV_BACKEND_PORT`, which
+  `./dev.sh` sets when it has to move the backend), `/api/v1` in prod.
   **There is no dev proxy** — the frontend calls the backend port directly, so the
   backend must be running for the UI to work.
 - **All backend calls go through `src/services/api.ts`.** Add new endpoints there

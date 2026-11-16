@@ -1,7 +1,15 @@
 #!/bin/bash
 
 # Development script to run both frontend and backend concurrently
-# Usage: ./dev.sh [--debug]
+# Usage: ./dev.sh [--debug] [--sqlite]
+#   --debug   run the backend under debugpy (port 5678)
+#   --sqlite  use the local SQLite file instead of the bundled Postgres. Semantic Context
+#             Catalog search needs Postgres (pgvector), so with SQLite search uses words only.
+#
+# Ports: the backend starts at 8000, the frontend at 5173 (and the debugger at 5678). If one is
+# taken, by an earlier ./dev.sh or by anything else, the next free port is used instead. Nothing
+# already running is stopped. To start the search elsewhere, set BACKEND_PORT, FRONTEND_PORT or
+# DEBUG_PORT, for example: BACKEND_PORT=9000 ./dev.sh
 
 
 # Don't use set -e here because we want to handle errors manually
@@ -17,10 +25,15 @@ NC='\033[0m' # No Color
 
 # Parse arguments
 DEBUG_MODE=false
+USE_SQLITE=false
 for arg in "$@"; do
     if [ "$arg" == "--debug" ]; then
         DEBUG_MODE=true
         echo -e "${YELLOW}Debug mode enabled${NC}"
+    fi
+    if [ "$arg" == "--sqlite" ]; then
+        USE_SQLITE=true
+        echo -e "${YELLOW}SQLite mode: semantic Context Catalog search is off${NC}"
     fi
 done
 
@@ -50,28 +63,60 @@ echo -e "${CYAN}Cleaning up old log files...${NC}"
 rm -f backend.log frontend.log
 echo -e "${GREEN}✓ Log files cleared${NC}"
 
-# Check and kill processes on ports 8000 and 5173
-echo -e "${CYAN}Checking for processes on ports 8000 and 5173...${NC}"
-BACKEND_PORT_PID=$(lsof -ti:8000 2>/dev/null || true)
-FRONTEND_PORT_PID=$(lsof -ti:5173 2>/dev/null || true)
+# Pick free ports. Whatever already holds the usual ones (an earlier ./dev.sh, another app) is left
+# alone: each service starts at its usual port and moves up to the first one that is free.
+port_in_use() {
+    # Something is listening (any address, IPv4 or IPv6), or a connection to it succeeds.
+    lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1 && return 0
+    (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null && return 0
+    return 1
+}
 
-if [ ! -z "$BACKEND_PORT_PID" ]; then
-    echo -e "${YELLOW}Killing process on port 8000 (PID: $BACKEND_PORT_PID)...${NC}"
-    kill -9 $BACKEND_PORT_PID 2>/dev/null || true
-    sleep 1
-fi
+# find_free_port <start> [port to skip ...]: prints the first free port from <start>, up to 100 on.
+find_free_port() {
+    local port=$1 last=$(($1 + 100)) skip skipped
+    shift
+    while [ "$port" -lt "$last" ]; do
+        skipped=false
+        for skip in "$@"; do
+            [ "$port" = "$skip" ] && skipped=true
+        done
+        if [ "$skipped" = false ] && ! port_in_use "$port"; then
+            echo "$port"
+            return 0
+        fi
+        port=$((port + 1))
+    done
+    return 1
+}
 
-if [ ! -z "$FRONTEND_PORT_PID" ]; then
-    echo -e "${YELLOW}Killing process on port 5173 (PID: $FRONTEND_PORT_PID)...${NC}"
-    kill -9 $FRONTEND_PORT_PID 2>/dev/null || true
-    sleep 1
-fi
+# pick_port <label> <wanted>: the free port to use, noting when it isn't the wanted one.
+pick_port() {
+    local label=$1 wanted=$2 chosen
+    shift 2
+    chosen=$(find_free_port "$wanted" "$@")
+    if [ -z "$chosen" ]; then
+        echo -e "${RED}✗ No free port for the $label between $wanted and $((wanted + 99)).${NC}" >&2
+        return 1
+    fi
+    if [ "$chosen" != "$wanted" ]; then
+        echo -e "${YELLOW}Port $wanted is in use; the $label will use $chosen.${NC}" >&2
+    fi
+    echo "$chosen"
+}
 
-if [ ! -z "$BACKEND_PORT_PID" ] || [ ! -z "$FRONTEND_PORT_PID" ]; then
-    echo -e "${GREEN}✓ Ports cleared${NC}\n"
-else
-    echo -e "${GREEN}✓ Ports available${NC}\n"
+echo -e "${CYAN}Choosing ports...${NC}"
+BACKEND_PORT=$(pick_port "backend" "${BACKEND_PORT:-8000}") || exit 1
+FRONTEND_PORT=$(pick_port "frontend" "${FRONTEND_PORT:-5173}" "$BACKEND_PORT") || exit 1
+if [ "$DEBUG_MODE" = true ]; then
+    DEBUG_PORT=$(pick_port "debugger" "${DEBUG_PORT:-5678}" "$BACKEND_PORT" "$FRONTEND_PORT") || exit 1
 fi
+echo -e "${GREEN}✓ Backend :$BACKEND_PORT, frontend :$FRONTEND_PORT${NC}\n"
+
+# The frontend and backend learn each other's port from here. The frontend's address has to be in the
+# backend's CORS list (it already allows 5173), and the frontend has to be told where the backend is.
+export CORS_EXTRA_ORIGINS="http://localhost:$FRONTEND_PORT,http://127.0.0.1:$FRONTEND_PORT"
+export DEV_BACKEND_PORT="$BACKEND_PORT"
 
 # Check if backend/.env exists; bootstrap it from the template if not so a fresh
 # clone runs without a manual copy step (the preflight below then fills in your
@@ -287,6 +332,31 @@ else
 fi
 echo ""
 
+# Local database. By default run against a bundled PostgreSQL (with pgvector) kept in
+# backend/.pgdata, so local uses the same engine as production and semantic Context Catalog
+# search works. It comes from backend/requirements-dev.txt (not installed on the deployed
+# app). If it can't be installed, fall back to SQLite, where search uses words only.
+# `./dev.sh --sqlite` forces SQLite.
+if [ "$USE_SQLITE" = false ]; then
+    if ! $PYTHON_CMD -c "import pixeltable_pgserver" 2>/dev/null; then
+        echo -e "${YELLOW}Installing the bundled local Postgres (backend/requirements-dev.txt)...${NC}"
+        if [[ "$PYTHON_CMD" == backend/* ]]; then
+            PG_PYTHON_CMD="${PYTHON_CMD#backend/}"
+        else
+            PG_PYTHON_CMD="$PYTHON_CMD"
+        fi
+        (cd backend && $PG_PYTHON_CMD -m pip install -r requirements-dev.txt > /dev/null 2>&1)
+    fi
+    if $PYTHON_CMD -c "import pixeltable_pgserver" 2>/dev/null; then
+        export LOCAL_POSTGRES=1
+        echo -e "${GREEN}✓ Database: bundled local Postgres (backend/.pgdata)${NC}\n"
+    else
+        echo -e "${YELLOW}⚠ Could not install the bundled Postgres; using SQLite (semantic search off).${NC}\n"
+    fi
+else
+    echo -e "${GREEN}✓ Database: SQLite (backend/app_hub.db)${NC}\n"
+fi
+
 # Start backend (Python FastAPI)
 echo -e "${GREEN}→ Starting backend API...${NC}"
 cd backend
@@ -323,10 +393,10 @@ if [ -f "scripts/local_dev_preflight.py" ]; then
 fi
 
 if [ "$DEBUG_MODE" = true ]; then
-    echo -e "${GREEN}→ Starting backend API with debugger on port 5678...${NC}"
-    $LOCAL_PYTHON_CMD -m debugpy --listen 0.0.0.0:5678 -m uvicorn app.main:app --reload --port 8000 >> ../backend.log 2>&1 &
+    echo -e "${GREEN}→ Starting backend API with debugger on port $DEBUG_PORT...${NC}"
+    $LOCAL_PYTHON_CMD -m debugpy --listen 0.0.0.0:$DEBUG_PORT -m uvicorn app.main:app --reload --port "$BACKEND_PORT" >> ../backend.log 2>&1 &
 else
-    $LOCAL_UVICORN_CMD app.main:app --reload --port 8000 >> ../backend.log 2>&1 &
+    $LOCAL_UVICORN_CMD app.main:app --reload --port "$BACKEND_PORT" >> ../backend.log 2>&1 &
 fi
 BACKEND_PID=$!
 cd ..
@@ -371,7 +441,9 @@ echo ""
 echo -e "${GREEN}→ Starting frontend...${NC}"
 # Add timestamp to log file
 echo "=== Frontend started at $(date) ===" > frontend.log
-npm run dev >> frontend.log 2>&1 &
+# --strictPort: the port was chosen above, so fail loudly rather than let Vite quietly pick another
+# one the backend's CORS list doesn't know.
+npm run dev -- --port "$FRONTEND_PORT" --strictPort >> frontend.log 2>&1 &
 FRONTEND_PID=$!
 
 # Wait a moment for frontend to start
@@ -389,9 +461,12 @@ if ! kill -0 $FRONTEND_PID 2>/dev/null; then
 fi
 
 echo -e "\n${GREEN}✓ Development environment is running!${NC}\n"
-echo -e "${CYAN}Frontend:${NC}  ${BLUE}http://localhost:5173${NC}"
-echo -e "${CYAN}Backend API:${NC} ${BLUE}http://localhost:8000${NC}"
-echo -e "${CYAN}API Docs:${NC}   ${BLUE}http://localhost:8000/docs${NC}"
+echo -e "${CYAN}Frontend:${NC}  ${BLUE}http://localhost:$FRONTEND_PORT${NC}"
+echo -e "${CYAN}Backend API:${NC} ${BLUE}http://localhost:$BACKEND_PORT${NC}"
+echo -e "${CYAN}API Docs:${NC}   ${BLUE}http://localhost:$BACKEND_PORT/docs${NC}"
+if [ "$DEBUG_MODE" = true ]; then
+    echo -e "${CYAN}Debugger:${NC}   ${BLUE}port $DEBUG_PORT${NC} (attach with the VS Code \"Attach to Backend\" config)"
+fi
 echo -e "\n${YELLOW}Press Ctrl+C to stop all services${NC}\n"
 echo -e "${CYAN}────────────────────────────────────────────${NC}\n"
 echo -e "${CYAN}Logs are being written to:${NC}"

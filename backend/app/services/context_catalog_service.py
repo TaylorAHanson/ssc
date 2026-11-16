@@ -5,10 +5,13 @@ Holds the business logic for managing context domains/documents and for the
 lightweight keyword retrieval the agent uses. Kept separate from the API layer
 so the agent tools can reuse the exact same retrieval path.
 
-Retrieval is intentionally simple: documents are split into chunks on write,
-and a query is scored against chunks with case-insensitive term matching
-(portable across SQLite and Postgres). There is no vector index — the catalog
-is expected to stay small enough that keyword search is sufficient.
+Retrieval: documents are split into chunks on write. A query is scored against
+chunks with case-insensitive term matching (portable across SQLite and Postgres)
+and, where the database supports it, also compared by meaning against each
+chunk's embedding (app/services/context_search_index.py). The two ranked lists
+are fused with Reciprocal Rank Fusion. When the semantic leg is unavailable for
+any reason — SQLite, no pgvector, switched off, endpoint down — search returns
+the keyword results exactly as before.
 """
 import logging
 import re
@@ -26,6 +29,7 @@ from app.db.context_catalog import (
     ContextDocumentReviewModel,
     ContextDomainModel,
 )
+from app.services import context_search_index
 from app.services.context_catalog_staleness import freshness_fields, normalize_owner
 
 logger = logging.getLogger(__name__)
@@ -39,6 +43,12 @@ CONTEXT_BUNDLE_FORMAT = "selfservice.context_catalog/v1"
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+# Reciprocal Rank Fusion: a chunk scores RRF_WEIGHT * sum(1 / (RRF_K + rank)) over the lists it is in.
+# RRF needs no calibration between keyword scores and cosine distances. The weight only scales the result
+# so a chunk ranked first by both lists scores about 1.0.
+_RRF_K = 60
+_RRF_WEIGHT = 30.0
 
 
 def _slugify(value: str) -> str:
@@ -208,7 +218,11 @@ class ContextCatalogService:
                 domain_id=document.domain_id,
                 chunk_index=idx,
                 content=content,
+                # Keys the chunk's vector: an unchanged passage keeps its embedding across edits.
+                content_hash=context_search_index.content_hash(document.title, idx, content),
             ))
+        # Let the indexer look for new passages on its next poller cycle instead of waiting out its idle delay.
+        context_search_index.kick()
 
     @staticmethod
     def create_document(db: Session, *, domain_id: str, title: str,
@@ -304,9 +318,14 @@ class ContextCatalogService:
     @staticmethod
     def search(db: Session, query: str, *, domain_slug: Optional[str] = None,
                limit: Optional[int] = None, track_usage: bool = False) -> List[Dict[str, Any]]:
-        """Keyword search over published document chunks.
+        """Search published document chunks by words and, where available, by meaning.
 
-        Returns ranked chunks with enough metadata to cite the source.
+        Returns ranked chunks with enough metadata to cite the source. Each result
+        says how it matched (``match``: ``keyword``, ``semantic`` or ``both``).
+
+        The semantic leg (``context_search_index.semantic_hits``) is best-effort and
+        never raises: when it yields nothing, the keyword results are returned
+        exactly as keyword-only search always ranked them.
 
         When ``track_usage`` is True, the documents that appear in the returned
         results have their retrieval-usage counters bumped (best-effort). Pass
@@ -315,8 +334,6 @@ class ContextCatalogService:
         """
         limit = limit or settings.CONTEXT_CATALOG_SEARCH_LIMIT
         terms = _tokenize(query)
-        if not terms:
-            return []
 
         domain_ids: Optional[List[str]] = None
         if domain_slug:
@@ -325,6 +342,85 @@ class ContextCatalogService:
                 return []
             domain_ids = ContextCatalogService._descendant_ids(db, domain.id)
 
+        keyword = ContextCatalogService._keyword_hits(db, terms, domain_ids) if terms else []
+        cand = max(limit * 4, 24)
+        semantic = context_search_index.semantic_hits(db, query, domain_ids=domain_ids, cand=cand)
+        if not keyword and not semantic:
+            return []
+        if semantic:
+            results = ContextCatalogService._fuse(db, keyword[:cand], semantic, limit)
+        else:
+            results = keyword[:limit]
+
+        if track_usage and results:
+            ContextCatalogService._bump_retrieval_usage(
+                db, [r["document_id"] for r in results]
+            )
+
+        return results
+
+    @staticmethod
+    def _result(chunk: ContextChunkModel, document: ContextDocumentModel, domain: ContextDomainModel,
+                score: Any, match: str) -> Dict[str, Any]:
+        return {
+            "score": score,
+            "match": match,
+            "chunk_id": chunk.id,
+            "document_id": document.id,
+            "document_title": document.title,
+            "doc_type": document.doc_type,
+            "source_filename": document.source_filename,
+            "source_url": document.source_url,
+            "domain_id": domain.id,
+            "domain_name": domain.name,
+            "domain_slug": domain.slug,
+            "chunk_index": chunk.chunk_index,
+            "content": chunk.content,
+        }
+
+    @staticmethod
+    def _fuse(db: Session, keyword: List[Dict[str, Any]], semantic: List[tuple], limit: int) -> List[Dict[str, Any]]:
+        """Reciprocal Rank Fusion of the keyword list (best first) and the semantic list (nearest first)."""
+        fused: Dict[str, float] = {}
+        legs: Dict[str, set] = {}
+        by_id: Dict[str, Dict[str, Any]] = {}
+        for rank, hit in enumerate(keyword, start=1):
+            cid = hit["chunk_id"]
+            fused[cid] = fused.get(cid, 0.0) + 1.0 / (_RRF_K + rank)
+            legs.setdefault(cid, set()).add("keyword")
+            by_id[cid] = hit
+        for rank, (cid, _dist) in enumerate(semantic, start=1):
+            fused[cid] = fused.get(cid, 0.0) + 1.0 / (_RRF_K + rank)
+            legs.setdefault(cid, set()).add("semantic")
+        winners = sorted(fused, key=lambda cid: (-fused[cid], cid))[:limit]
+
+        missing = [cid for cid in winners if cid not in by_id]
+        if missing:
+            rows = (
+                db.query(ContextChunkModel, ContextDocumentModel, ContextDomainModel)
+                .join(ContextDocumentModel, ContextChunkModel.document_id == ContextDocumentModel.id)
+                .join(ContextDomainModel, ContextChunkModel.domain_id == ContextDomainModel.id)
+                .filter(ContextChunkModel.id.in_(missing))
+                .filter(ContextDocumentModel.status == "published")
+                .all()
+            )
+            for chunk, document, domain in rows:
+                by_id[chunk.id] = ContextCatalogService._result(chunk, document, domain, 0, "semantic")
+
+        results: List[Dict[str, Any]] = []
+        for cid in winners:
+            hit = by_id.get(cid)
+            if hit is None:  # the chunk or its document vanished between the two reads
+                continue
+            hit = dict(hit)
+            hit["score"] = round(_RRF_WEIGHT * fused[cid], 4)
+            hit["match"] = "both" if len(legs[cid]) == 2 else next(iter(legs[cid]))
+            results.append(hit)
+        return results
+
+    @staticmethod
+    def _keyword_hits(db: Session, terms: List[str], domain_ids: Optional[List[str]]) -> List[Dict[str, Any]]:
+        """Published chunks matching any term, best first (term counts, title hits, distinct terms)."""
         q = (
             db.query(ContextChunkModel, ContextDocumentModel, ContextDomainModel)
             .join(ContextDocumentModel, ContextChunkModel.document_id == ContextDocumentModel.id)
@@ -355,29 +451,10 @@ class ContextCatalogService:
                 continue
             # Reward chunks that match more distinct query terms.
             score += matched_terms * 2
-            scored.append({
-                "score": score,
-                "document_id": document.id,
-                "document_title": document.title,
-                "doc_type": document.doc_type,
-                "source_filename": document.source_filename,
-                "source_url": document.source_url,
-                "domain_id": domain.id,
-                "domain_name": domain.name,
-                "domain_slug": domain.slug,
-                "chunk_index": chunk.chunk_index,
-                "content": chunk.content,
-            })
+            scored.append(ContextCatalogService._result(chunk, document, domain, score, "keyword"))
 
         scored.sort(key=lambda r: r["score"], reverse=True)
-        results = scored[:limit]
-
-        if track_usage and results:
-            ContextCatalogService._bump_retrieval_usage(
-                db, [r["document_id"] for r in results]
-            )
-
-        return results
+        return scored
 
     @staticmethod
     def _bump_retrieval_usage(db: Session, document_ids: List[str]) -> None:

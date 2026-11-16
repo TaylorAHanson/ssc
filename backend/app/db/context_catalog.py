@@ -8,9 +8,12 @@ ingest. Documents are split into ``ContextChunkModel`` rows so the agent can
 retrieve only the relevant passages instead of injecting whole files into the
 prompt.
 
-Retrieval today is lightweight keyword/full-text matching over the chunk table
-(portable across SQLite locally and Lakebase/Postgres in prod). The schema
-leaves room to add vector embeddings later without a breaking change.
+Retrieval is keyword matching over the chunk table (portable across SQLite and
+Postgres), plus a semantic leg on Postgres with pgvector. Vectors live in
+``context_chunk_vectors``, keyed by (``ContextChunkModel.content_hash``, model). That
+table is deliberately NOT an ORM model: its ``vector`` column type doesn't exist on
+SQLite, and the extension may only appear after startup. It is created at runtime by
+``app/services/context_search_index.py``, which also fills it.
 """
 from datetime import datetime
 from typing import Optional
@@ -123,6 +126,10 @@ class ContextChunkModel(Base):
     domain_id: Mapped[str] = Column(String, nullable=False, index=True, comment="Denormalized owning domain id")
     chunk_index: Mapped[int] = Column(Integer, nullable=False, default=0, comment="Order of the chunk within the document")
     content: Mapped[str] = Column(Text, nullable=False, comment="Plain text/markdown content of the chunk")
+    content_hash: Mapped[Optional[str]] = Column(
+        String, nullable=True, index=True,
+        comment="sha256 of the text that gets embedded; keys the chunk's vector (context_chunk_vectors)",
+    )
     created_at: Mapped[datetime] = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 

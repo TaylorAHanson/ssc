@@ -150,6 +150,10 @@ to make by hand. Expand the row and follow the **What to do** instructions,
 then select **Mark done**. If you can't do it, select **Can't complete** and
 explain what blocked you, so the requester knows what happened.
 
+A report made with **Report data issue** in Discover works this way: the team
+is emailed, and the request then waits as a manual task, due in five days, for
+someone to look into the problem and mark it done.
+
 ## Out of office
 
 To have someone else cover your approvals while you're away, select **Out of

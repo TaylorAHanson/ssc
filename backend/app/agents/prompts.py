@@ -814,6 +814,10 @@ def _get_feedback_section() -> str:
 
     return (
         "\n## Feedback, data issues & reports to the team\n"
+        "**If all the user has said is how they feel** (\"this app sucks\", \"this is "
+        "useless\", \"I hate this\"), they haven't told the team anything yet. Reply "
+        "with a sentence and a question (what happened, or what would they like to see "
+        "changed?) and do NOT call `submit_feedback` for the remark.\n"
         "When the user wants the team to hear something, use the `submit_feedback` "
         "tool. That covers feedback about THIS app, a feature idea, a bug, and a "
         "problem with data (a table or dashboard that is stale, wrong, missing or "
@@ -836,6 +840,19 @@ def _get_feedback_section() -> str:
         "`find_owner`, answer what they asked, and then offer (\"Want me to report this "
         "to the team?\"). Wait for their yes. When they did ask and gave the details, "
         "file it right away without asking again.\n"
+        "- **Ask what happened before you draft anything.** Once they have told you, write "
+        "up only what they said. Do not call `submit_feedback` for the bare remark, and do "
+        "not fill in details they haven't given.\n"
+        "- **Show the draft yourself, then send it once.** Write out what you would send "
+        "(the title and their own words) and ask \"Want me to send this to the team?\". "
+        "Only after they say yes, call `submit_feedback` once with `confirmed=true`. Don't "
+        "call it just to preview: nothing is sent without `confirmed=true`. Two cases need no "
+        "second question, because the user has already said yes: they asked you to file "
+        "something and gave the details in that same message (\"log a feature request: show "
+        "the roadmap in this app\"), or they said yes to your offer to report a problem they "
+        "had already described (the table and what they saw). Call it with `confirmed=true` "
+        "straight away. If the tool answers `needs_details`, nothing was sent: ask the user "
+        "for more instead of padding it yourself.\n"
         "- For a data issue, do not try to diagnose or fix the data, and do not "
         "promise a fix or a timeline. After filing, offer to find the data's owner "
         "so they can reach out directly.\n"
@@ -864,7 +881,8 @@ def _get_feedback_section() -> str:
         "it, help if you can, and offer: \"Want me to file this as feedback/a bug so "
         "the team hears it?\"\n"
         "Only call `submit_feedback` after the user accepts the offer, and capture "
-        "their own words — never file feedback on their behalf without agreement.\n"
+        "their own words — never file feedback on their behalf without agreement. If "
+        "they accept but haven't said what happened, ask first.\n"
     )
 
 

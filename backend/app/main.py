@@ -63,7 +63,13 @@ async def lifespan(app: FastAPI):
         # Opt-in via LAKEBASE_CDF_TABLES; after create_all so first boot is covered.
         apply_replica_identity_full(engine)
         apply_metadata_search_indexes(engine)
-        
+        # Context Catalog semantic search: enable pgvector and create its vectors table where the database
+        # allows it. Never fatal; without it the catalog is searched by words only.
+        from app.core.feature_flags import is_feature_enabled
+        if is_feature_enabled("context_catalog"):
+            from app.services.context_search_index import ensure_capabilities
+            ensure_capabilities(engine)
+
         db = get_session_local()()
         try:
             init_db(db)

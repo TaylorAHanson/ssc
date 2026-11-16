@@ -653,8 +653,8 @@ tools/workflows granted in Unity Catalog.
     initiation — real infra/data approvals fire in-graph.
 - **Durable engine.**
   - LangGraph + checkpointer (`langgraph`, `langgraph-checkpoint-sqlite/postgres`).
-  - Checkpointer factory (`backend/app/workflows/checkpointer.py`): AsyncSqliteSaver (local) /
-    AsyncPostgresSaver (Lakebase), thread = `request.id`.
+  - Checkpointer factory (`backend/app/workflows/checkpointer.py`): AsyncSqliteSaver (SQLite) /
+    AsyncPostgresSaver (Lakebase, or the bundled local Postgres `./dev.sh` runs), thread = `request.id`.
   - `DurableWorkflowExecutor` (`backend/app/workflows/executor.py`) + graph registry
     (`backend/app/workflows/graphs/`). Every graph is generated from the declarative spec catalog
     with native `interrupt()` HITL; provisioning runs through the `ToolExecutor`. The poller

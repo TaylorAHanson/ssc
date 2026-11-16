@@ -412,6 +412,12 @@ async def start_poller():
 
                 _spawn_background(context_catalog_reminders_task(), "context_catalog_reminders")
 
+                # Embeds new/changed passages for semantic search; self-throttled, a no-op where the
+                # database has no pgvector (it then checks again in 30 s).
+                from app.workers.tasks.context_search_index import context_search_index_task
+
+                _spawn_background(context_search_index_task(), "context_search_index")
+
                 async def safe_context_catalog_git_sync():
                     # Toggle- and cron-gated inside; a running sync makes it a no-op.
                     try:

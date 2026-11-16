@@ -91,6 +91,42 @@ def _get_oauth_token() -> Optional[str]:
         return None
 
 
+def acquire_token(base_url: str) -> Optional[str]:
+    """Resolve an auth token for Model Serving: explicit env token, then SP M2M, then OAuth.
+
+    Blocking (SDK / network); callers on an event loop should run it via
+    ``asyncio.to_thread``. Shared by :class:`ModelServingClient` and the sync
+    embedding client (``app/services/embeddings.py``) so both authenticate alike.
+    """
+    # Try explicit token first.
+    token = settings.MODEL_SERVING_API_KEY or settings.DATABRICKS_TOKEN
+    if token:
+        return token
+
+    logger.info("No explicit token provided, attempting OAuth via Databricks SDK...")
+    # Prefer raw SP client-credentials (WorkspaceClient header caching is brittle).
+    if settings.DATABRICKS_CLIENT_ID and settings.DATABRICKS_CLIENT_SECRET:
+        try:
+            from databricks.sdk.core import Config
+
+            cfg = Config(
+                host=base_url,
+                client_id=settings.DATABRICKS_CLIENT_ID,
+                client_secret=settings.DATABRICKS_CLIENT_SECRET,
+                auth_type="oauth-m2m",
+            )
+            auth_headers = cfg.authenticate()
+            auth_val = (auth_headers or {}).get("Authorization", "")
+            if auth_val.startswith("Bearer "):
+                logger.info("Fetched fresh OAuth token via Config.authenticate()")
+                return auth_val[7:]
+        except Exception as e:
+            logger.error(f"Failed to fetch SP token for Model Serving: {e}")
+
+    # Fall back to default OAuth (auto-injected env token in Databricks Apps).
+    return _get_oauth_token()
+
+
 class ModelServingClient:
     """Client for Databricks Model Serving endpoints."""
     
@@ -131,33 +167,7 @@ class ModelServingClient:
         Blocking (SDK / network); callers off the request path should run it via
         ``asyncio.to_thread``.
         """
-        # Try explicit token first.
-        token = settings.MODEL_SERVING_API_KEY or settings.DATABRICKS_TOKEN
-        if token:
-            return token
-
-        logger.info("No explicit token provided, attempting OAuth via Databricks SDK...")
-        # Prefer raw SP client-credentials (WorkspaceClient header caching is brittle).
-        if settings.DATABRICKS_CLIENT_ID and settings.DATABRICKS_CLIENT_SECRET:
-            try:
-                from databricks.sdk.core import Config
-
-                cfg = Config(
-                    host=self.base_url,
-                    client_id=settings.DATABRICKS_CLIENT_ID,
-                    client_secret=settings.DATABRICKS_CLIENT_SECRET,
-                    auth_type="oauth-m2m",
-                )
-                auth_headers = cfg.authenticate()
-                auth_val = (auth_headers or {}).get("Authorization", "")
-                if auth_val.startswith("Bearer "):
-                    logger.info("Fetched fresh OAuth token via Config.authenticate()")
-                    return auth_val[7:]
-            except Exception as e:
-                logger.error(f"Failed to fetch SP token for Model Serving: {e}")
-
-        # Fall back to default OAuth (auto-injected env token in Databricks Apps).
-        return _get_oauth_token()
+        return acquire_token(self.base_url)
 
     def _token_is_stale(self) -> bool:
         return (time.monotonic() - self._token_acquired_at) > _TOKEN_TTL_SECONDS

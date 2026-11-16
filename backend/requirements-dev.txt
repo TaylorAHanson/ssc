@@ -1,0 +1,8 @@
+# Local-development extras. NOT installed on the deployed app (Databricks Apps
+# installs requirements.txt only); ./dev.sh and CI install this file as well.
+-r requirements.txt
+
+# A PostgreSQL server (with pgvector) bundled in a wheel, so local dev and the
+# semantic-search tests run against real Postgres with no Docker or brew.
+# See app/db/localpg.py. ~21 MB wheel.
+pixeltable-pgserver==0.7.2

@@ -515,6 +515,10 @@ def run_startup_migrations(engine: Engine) -> None:
         _add_column(engine, "context_documents", "retrieval_count", "INTEGER DEFAULT 0")
         _add_column(engine, "context_documents", "last_retrieved_at", "TIMESTAMP")
         _add_context_document_review_columns(engine)
+        # Context Catalog semantic search: the hash that keys a chunk's vector. Chunks that predate
+        # it are hashed by the indexer (context_search_index.backfill_hashes), not here.
+        _add_column(engine, "context_chunks", "content_hash", "VARCHAR")
+        _add_index(engine, "ix_context_chunks_content_hash", "context_chunks", ["content_hash"])
         # Data Certification: full per-rule checklist cache on the data asset.
         # JSONB on Postgres (matches the model's JSONType) / TEXT on SQLite, which
         # stores the JSON string the JSONType serializes.

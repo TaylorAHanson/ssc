@@ -74,6 +74,11 @@ resources:
             value: "${var.databricks_job_cluster_id}"
           - name: MODEL_SERVING_AGENT_LLM_ENDPOINT
             value: "${var.model_serving_endpoint}"
+          # Embedding model for semantic Context Catalog search: a Unity Catalog model reference called
+          # through the AI Gateway (1024-dimension vectors; called as the app service principal).
+          # Editable at runtime in Admin -> Settings -> Context Catalog; this is the starting value.
+          - name: CONTEXT_CATALOG_EMBEDDING_MODEL
+            value: "${var.embedding_endpoint}"
           # AI Gateway model (optional). When set, agent LLM calls go through the
           # gateway's /ai-gateway/mlflow/v1/chat/completions route with this value
           # sent as the model (use a "system.ai.*" reference, e.g.
@@ -320,6 +325,9 @@ variables:
   model_serving_endpoint:
     description: "Model Serving Endpoint for Agent LLM"
     default: "databricks-claude-sonnet-4-6"
+  embedding_endpoint:
+    description: "Embedding model for semantic Context Catalog search: a Unity Catalog model reference called through the AI Gateway, e.g. system.ai.gte-large-en (must return 1024-dimension vectors; the app service principal must be allowed to use it). A bare serving-endpoint name is called directly."
+    default: "system.ai.gte-large-en"
   ai_gateway_endpoint:
     description: "AI Gateway model reference for the agent LLM, sent to /ai-gateway/mlflow/v1/chat/completions (e.g. system.ai.gpt-5-6-luna). Blank = call model_serving_endpoint directly."
     default: ""

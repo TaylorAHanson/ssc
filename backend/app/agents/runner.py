@@ -708,7 +708,9 @@ class AgentRunner:
                         # tools get OPA pre-flight + audit. conversation_history
                         # is passed as injected context, not a model-supplied arg.
                         injected_args: Dict[str, Any] = {}
-                        if fn_name == "execute_workflow":
+                        # submit_feedback reads the conversation to check the user really asked
+                        # for the report to be sent, whatever the model claims.
+                        if fn_name in ("execute_workflow", "submit_feedback"):
                             history_for_tool = []
                             for m in messages:
                                 if m.get("role") not in ("system", "tool"):

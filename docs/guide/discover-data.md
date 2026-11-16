@@ -69,7 +69,9 @@ Two switches narrow the list:
 - **Accessible to me** shows only the data you already have permission to
   query.
 - **Certified Only** shows only data that has been certified as meeting your
-  organization's standards for quality, documentation and access control.
+  organization's standards for quality, documentation and access control. It
+  is also available on search results from the Discover start page, beside
+  **Clear search**.
 
 Unless your screen is very wide, these switches show only an icon. Hover over
 one to see what it does.
@@ -79,7 +81,13 @@ one to see what it does.
 Click an asset to open its details. Depending on the asset, you'll see some of
 these tabs:
 
-- **Overview**: the description, owner and tags.
+- **Overview**: the description, owner and tags. The owner is the business
+  owner of the asset's subdomain, or of its domain if the subdomain has none.
+  When Databricks has neither, it shows the owner recorded on the asset
+  itself, which is often a service principal's ID. If you can use the
+  [Metadata Manager](admin/metadata-manager.md), **Edit** beside the
+  description and tags opens the table, view or metric view there so you can
+  change them.
 - **Columns** (or **Schema** for a dataset): the fields it contains.
 - **Lineage**: where the data comes from and what uses it. Click **Sources**
   on a table to see what feeds it, or **Consumers** to see what depends on it.
@@ -104,7 +112,17 @@ these tabs:
 - **Team & Support**: the people responsible for a dataset and how to get
   help, plus the day-to-day support contact your administrator has set.
 
-**Open in Catalog Explorer** opens the asset in Databricks.
+The **Open in Catalog Explorer** link beside the asset's name opens it in
+Databricks.
+
+### Report a data issue
+
+If something is wrong with a table, view, metric view or data set, such as
+stale rows, wrong numbers or missing data, select **Report data issue** next
+to **Pin**. Say what's wrong in a few words and add detail if you can. The
+team is emailed and given a task to look into it; you can follow it under
+**Requests**. The request names the data's owner so the team knows who to
+contact.
 
 To make the details panel wider or narrower, drag its left edge. Double-click
 the edge to reset it. The width you choose is remembered.

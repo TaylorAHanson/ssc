@@ -6,13 +6,13 @@ import {
   ChevronDown,
   ChevronRight,
   ArrowLeft,
-  ShieldCheck,
   UserCheck,
   ExternalLink,
   Layers,
   X,
 } from 'lucide-react';
 import type { DomainHierarchy, DataAsset, LegacyMapping, SubdomainMeta } from '../../services/api';
+import { CertifiedOnlyToggle } from './CertifiedOnlyToggle';
 import { MetricViewCard } from './MetricViewCard';
 import { DiscoverSearch } from './DiscoverSearch';
 import { InlineMetricViewDetail } from './InlineMetricViewDetail';
@@ -528,20 +528,7 @@ export function DomainFullView({
             </button>
           )}
 
-          <button
-            type="button"
-            onClick={onToggleCertifiedOnly}
-            title="Show only certified assets"
-            aria-pressed={showCertifiedOnly}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all cursor-pointer ${
-              showCertifiedOnly
-                ? 'bg-emerald-50 text-emerald-800 border-emerald-300 shadow-2xs font-bold'
-                : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-            }`}
-          >
-            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-            <span className="hidden 2xl:inline">Certified Only</span>
-          </button>
+          <CertifiedOnlyToggle active={showCertifiedOnly} onToggle={onToggleCertifiedOnly} />
 
           {viewLink && (
             <CopyLinkButton

@@ -366,6 +366,23 @@ def search_catalog(
     return {"query": body.query, "results": results}
 
 
+@router.get("/search/status")
+def search_status(
+    *,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
+    _: None = Depends(_require_feature),
+) -> Any:
+    """Whether catalog search is using meaning as well as words, and how much of the catalog is indexed.
+
+    ``mode`` is ``semantic`` or ``keyword``; ``reason`` says why it is keyword-only (switched off,
+    SQLite, pgvector missing); ``lastError`` is the embedding endpoint's last user-safe failure.
+    """
+    from app.services import context_search_index
+
+    return context_search_index.status(db)
+
+
 # --- Export / import (promote the catalog across environments) ---
 
 @router.get("/export/bundle")

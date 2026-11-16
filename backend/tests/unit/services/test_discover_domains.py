@@ -151,3 +151,43 @@ def test_search_tool_filters_by_domain_and_finds_other(db_session):
     assert run(query="orders", domain="other") == ["c.raw.orders_raw"]
     # The domain's name is searchable too.
     assert run(query="procurement") == ["c.sc.suppliers"]
+
+
+# --- owner shown for an asset -----------------------------------------------
+
+def _owned_index(**owners):
+    """supplychain (+ its procurement subdomain), with business owners as given by tag key."""
+    return DomainIndex([
+        Domain(id="sc", tag_key="supplychain", parent_id=None, name="supplychain",
+               business_owners=owners.get("supplychain", ())),
+        Domain(id="sc-proc", tag_key="supplychain/procurement", parent_id="sc", name="procurement",
+               business_owners=owners.get("procurement", ())),
+    ])
+
+
+def test_owner_is_the_subdomains_business_owner_before_the_domains():
+    index = _owned_index(supplychain=("Dana Domain",), procurement=("Sam Sub",))
+    m = index.for_tags(["supplychain/procurement"], None)
+    assert dd.resolve_discover_owner("sp-uuid", [], m, index) == "Sam Sub"
+
+
+def test_owner_falls_back_to_the_domain_when_the_subdomain_has_none():
+    index = _owned_index(supplychain=("Dana Domain", "Dee Domain"))
+    m = index.for_tags(["supplychain/procurement"], None)
+    assert dd.resolve_discover_owner("sp-uuid", [], m, index) == "Dana Domain, Dee Domain"
+    # A domain-only asset gets the domain's owner too.
+    assert dd.resolve_discover_owner("sp-uuid", [], index.for_tags(["supplychain"], None), index) == "Dana Domain, Dee Domain"
+
+
+def test_a_domain_owner_beats_the_data_owner_tag_but_the_tag_still_beats_the_raw_id():
+    index = _owned_index(supplychain=("Dana Domain",))
+    m = index.for_tags(["supplychain"], None)
+    assert dd.resolve_discover_owner("sp-uuid", ["data_owner=Tagged Team"], m, index) == "Dana Domain"
+    bare = _owned_index()
+    assert dd.resolve_discover_owner("sp-uuid", ["data_owner=Tagged Team"], bare.for_tags(["supplychain"], None), bare) == "Tagged Team"
+
+
+def test_owner_is_the_raw_id_when_no_domain_names_one():
+    index = _owned_index()
+    assert dd.resolve_discover_owner("sp-uuid", [], index.for_tags(["supplychain"], None), index) == "sp-uuid"
+    assert dd.resolve_discover_owner("sp-uuid", [], EMPTY, DomainIndex()) == "sp-uuid"

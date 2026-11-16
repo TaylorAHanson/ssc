@@ -43,6 +43,8 @@ __pycache__/
 *.db
 backend/app_hub.db
 test.db
+# Bundled local PostgreSQL data (backend/app/db/localpg.py)
+backend/.pgdata/
 
 # Terraform
 *.tfvars
