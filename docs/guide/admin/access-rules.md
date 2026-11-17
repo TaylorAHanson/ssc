@@ -263,8 +263,9 @@ uses:
   another name is blocked, and a direct edit gets a warning. Leave a list
   blank to let people type any name.
 - **Metastore export path**, **Export schedule**, **Also export after every
-  change**, **Write a byte-order mark**, **Line ending**, and how long exported
-  files are kept.
+  change**, **Write a byte-order mark**, **Line ending**, **Files API host**
+  (blank uses the workspace's regional host), and how long exported files are
+  kept.
 - The three approver groups and **Viewer roles**.
 - **Max row changes per save**, and the minimum reason and justification
   lengths.
@@ -297,6 +298,18 @@ aliases include `prd`, `prod` or `production`.
 Export paths can be a Unity Catalog volume (`/Volumes/...`) or a workspace
 folder. {{brand_name}}'s service principal needs write access to each one.
 
+Files written to a volume are stored with the content type
+`text/csv; charset=utf-8`, so a pipeline or tool reading the cloud storage
+bucket sees them as CSV rather than `application/octet-stream`. Only Files
+API 3.0 stores a content type, and it's a Beta, so a workspace admin must turn
+on the **Files API V3 with Large File Upload Support** preview on the
+workspace's **Previews** page. Until it's on, every volume file fails with a
+message saying so, and **Test** reports the same; the change can take a few
+minutes to apply. {{brand_name}} sends these uploads to the workspace's
+regional host, `<workspace-id>.storage.<region>.<domain>`. If that host can't
+be worked out or reached, set **Files API host** in Settings. Workspace
+folders aren't affected.
+
 Add approvers to an approver group directly. Membership through a nested group
 may not be recognised. Use the group's display name from the workspace; a
 group the workspace can't see shows as not found.
@@ -304,7 +317,8 @@ group the workspace can't see shows as not found.
 ## Moving from the workbook
 
 1. Set the export path for each environment and for the metastore sheet, and
-   check each one with **Test**.
+   check each one with **Test**. For a volume path, turn on the Files API 3.0
+   preview first (see [Settings](#settings)).
 2. Freeze the workbook so nobody edits it, then import it.
 3. Export, then use **Compare with a manual export** on every sheet against the
    last CSVs exported by hand. If a sheet differs only by byte-order mark or

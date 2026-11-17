@@ -901,6 +901,7 @@ class Settings(BaseSettings):
     RBAC_EXPORT_ON_CHANGE: bool = _rbac.get("export_on_change", False)
     RBAC_CSV_BOM: bool = _rbac.get("csv_bom", False)
     RBAC_CSV_LINE_ENDING: str = _rbac.get("csv_line_ending", "crlf")
+    RBAC_FILES_API_HOST: str = _rbac.get("files_api_host", "")
     RBAC_EXPORT_ARCHIVE_DAYS: int = _rbac.get("export_archive_days", 90)
     RBAC_UC_APPROVER_GROUP: str = _rbac.get("uc_approver_group", "")
     RBAC_METASTORE_APPROVER_GROUP: str = _rbac.get("metastore_approver_group", "")

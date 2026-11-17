@@ -1009,6 +1009,12 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "label": "Line ending", "type": "select", "options": ["crlf", "lf"],
      "help": "CRLF (default) is what Excel writes, after every row including the last. Change only if "
              "Compare with a manual export reports a line-ending difference."},
+    {"group": "Access Rules", "section": "Environments & export", "key": "RBAC_FILES_API_HOST",
+     "label": "Files API host", "type": "string",
+     "help": "Volume exports are uploaded with Files API 3.0 so each file is stored as text/csv; the workspace "
+             "needs the 'Files API V3 with Large File Upload Support' preview turned on. Blank (default) = the "
+             "workspace's regional host, <workspace-id>.storage.<region>.<domain>. Set it only if that host "
+             "can't be worked out or reached."},
     {"group": "Access Rules", "section": "Environments & export", "key": "RBAC_EXPORT_ARCHIVE_DAYS",
      "label": "Keep exported files (days)", "type": "int", "min": 0,
      "help": "How long each exported CSV stays downloadable from the Exports tab. 0 = forever."},

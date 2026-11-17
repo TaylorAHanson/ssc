@@ -13,6 +13,7 @@ import asyncio
 import csv
 import hashlib
 import io
+import json
 import logging
 import os
 import re
@@ -23,7 +24,9 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Set, Tuple
+from urllib.parse import quote, urlparse
 
+import requests
 from croniter import CroniterBadCronError, croniter
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
@@ -67,6 +70,22 @@ BOM = b"\xef\xbb\xbf"
 NO_PATH = "No export path set"
 LOCAL_PATH_REFUSED = "Local folders are only allowed in local development; use a /Volumes/ or /Workspace/ path."
 COMPARE_ROWS_CAP = 50
+
+# Volume files are uploaded with Files API 3.0 so their stored Content-Type is text/csv.
+CSV_CONTENT_TYPE = "text/csv; charset=utf-8"
+PROBE_CONTENT_TYPE = "text/plain; charset=utf-8"
+FILES_API_TIMEOUT = 120
+FILES_API_PREVIEW = "Files API V3 with Large File Upload Support"
+FILES_API_HOST_SETTING = "Files API host"
+V3_NOT_ENABLED = (
+    "Files API 3.0 isn't turned on in this workspace. Volume exports need it so each CSV is stored as "
+    f"text/csv rather than application/octet-stream. A workspace admin can turn on the \"{FILES_API_PREVIEW}\" "
+    "preview on the workspace's Previews page; it can take a few minutes to apply, then export again."
+)
+# Workspace host suffixes; the regional Files API host is <workspace-id>.storage.<region>.<domain>.
+DATABRICKS_DOMAINS = (
+    "cloud.databricks.com", "gcp.databricks.com", "azuredatabricks.net", "cloud.databricks.us", "cloud.databricks.mil",
+)
 
 # Session-level Postgres advisory lock key that keeps exports single flight across replicas.
 _ADVISORY_LOCK_KEY = 5_005_202_610_160_001
@@ -160,12 +179,77 @@ def _local_allowed() -> bool:
     return dev_features_allowed()
 
 
+class FilesApiError(Exception):
+    """A Files API 3.0 call failed; ``str()`` leads with the error code so ``_describe_error`` can classify it."""
+
+    def __init__(self, status: int, error_code: str, message: str) -> None:
+        self.status = status
+        self.error_code = error_code
+        super().__init__(f"{error_code or f'HTTP {status}'}: {message}".strip())
+
+
+class FilesApiV3NotEnabled(FilesApiError):
+    """The workspace hasn't turned on the Files API 3.0 preview."""
+
+
+class FilesApiHostError(Exception):
+    """The Files API 3.0 regional host couldn't be worked out or reached."""
+
+
+def _files_api_error(status: int, body: str) -> FilesApiError:
+    try:
+        payload = json.loads(body) if body else {}
+    except ValueError:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    code = str(payload.get("error_code") or "")
+    message = str(payload.get("message") or body or "").strip()[:500]
+    reasons = {str(d.get("reason") or "") for d in payload.get("details") or [] if isinstance(d, dict)}
+    if status == 403 and ("FILES_API_API_IS_NOT_ENABLED" in reasons or "is not enabled" in message.lower()):
+        return FilesApiV3NotEnabled(status, code, message)
+    return FilesApiError(status, code, message)
+
+
+def _regional_files_host(client: Any) -> str:
+    """``https://<workspace-id>.storage.<region>.<databricks-domain>``, where Files API 3.0 is served."""
+    hostname = (urlparse(client.config.host or "").hostname or "").lower()
+    domain = next((d for d in DATABRICKS_DOMAINS if hostname == d or hostname.endswith("." + d)), None)
+    if domain is None:
+        raise FilesApiHostError(
+            f"Couldn't work out the Files API 3.0 host for workspace {hostname or '(unknown)'}. "
+            f"Set {FILES_API_HOST_SETTING} in Admin → Settings → Access Rules.")
+    try:
+        workspace_id = client.get_workspace_id()
+        region = client.metastores.summary().region
+    except Exception as exc:  # noqa: BLE001
+        raise FilesApiHostError(
+            f"Couldn't look up the workspace ID and region for the Files API 3.0 host ({exc}). "
+            f"Set {FILES_API_HOST_SETTING} in Admin → Settings → Access Rules.") from exc
+    if not workspace_id or not region:
+        raise FilesApiHostError(
+            "Couldn't look up the workspace ID and region for the Files API 3.0 host. "
+            f"Set {FILES_API_HOST_SETTING} in Admin → Settings → Access Rules.")
+    return f"https://{workspace_id}.storage.{region}.{domain}"
+
+
+def _files_v3_put(url: str, headers: Dict[str, str], data: bytes) -> requests.Response:
+    return requests.put(url, params={"overwrite": "true"}, headers=headers, data=data, timeout=FILES_API_TIMEOUT)
+
+
 class _Storage:
-    """Writes to a UC Volume or a Workspace folder as the app's service principal, or to a local folder."""
+    """Writes to a UC Volume or a Workspace folder as the app's service principal, or to a local folder.
+
+    Volume files go through Files API 3.0, the only Files API that stores the
+    upload's Content-Type (2.0 always stores ``application/octet-stream``), so
+    a pipeline reading the bucket sees ``text/csv``.
+    """
 
     def __init__(self) -> None:
         self._client: Any = None
         self._client_error: Optional[Exception] = None
+        self._files_host: Optional[str] = None
+        self._files_host_error: Optional[Exception] = None
 
     @property
     def client(self) -> Any:
@@ -181,6 +265,35 @@ class _Storage:
                 raise
         return self._client
 
+    def files_host(self) -> str:
+        """The Files API 3.0 host: the Access Rules setting if set, else the workspace's regional host."""
+        if self._files_host_error is not None:
+            raise self._files_host_error
+        if self._files_host is None:
+            override = (settings.RBAC_FILES_API_HOST or "").strip().rstrip("/")
+            try:
+                if override:
+                    self._files_host = override if "://" in override else f"https://{override}"
+                else:
+                    self._files_host = _regional_files_host(self.client)
+            except Exception as exc:  # noqa: BLE001 - reported per file
+                self._files_host_error = exc
+                raise
+        return self._files_host
+
+    def _upload_volume(self, file_path: str, data: bytes, content_type: str) -> None:
+        host = self.files_host()
+        url = f"{host}/api/3.0/fs/files{quote(file_path, safe='/')}"
+        headers = {**self.client.config.authenticate(), "Content-Type": content_type}
+        try:
+            resp = _files_v3_put(url, headers, data)
+        except requests.exceptions.ConnectionError as exc:
+            raise FilesApiHostError(
+                f"Couldn't reach the Files API 3.0 host {host}. Check that the app can reach it, or set "
+                f"{FILES_API_HOST_SETTING} in Admin → Settings → Access Rules. ({exc})") from exc
+        if resp.status_code >= 300:
+            raise _files_api_error(resp.status_code, resp.text)
+
     def ensure_dir(self, kind: str, folder: str) -> None:
         """Best effort: a failure here shows up as the write's error."""
         try:
@@ -193,9 +306,10 @@ class _Storage:
         except Exception as exc:  # noqa: BLE001
             logger.debug("Couldn't create export folder %s: %s", folder, exc)
 
-    def write(self, kind: str, file_path: str, data: bytes) -> None:
+    def write(self, kind: str, file_path: str, data: bytes, content_type: str = CSV_CONTENT_TYPE) -> None:
+        """Write one file; ``content_type`` is stored only on Volume files (the others have no such metadata)."""
         if kind == "volume":
-            self.client.files.upload(file_path, io.BytesIO(data), overwrite=True)
+            self._upload_volume(file_path, data, content_type)
         elif kind == "workspace":
             from databricks.sdk.service.workspace import ImportFormat
 
@@ -224,13 +338,17 @@ def _error_names(exc: BaseException) -> Set[str]:
 
 
 def _describe_error(exc: BaseException, kind: str) -> str:
+    if isinstance(exc, FilesApiV3NotEnabled):
+        return V3_NOT_ENABLED
+    if isinstance(exc, FilesApiHostError):
+        return str(exc)[:500]
     detail = (str(exc).strip() or exc.__class__.__name__)[:500]
     names = _error_names(exc)
     if "PermissionError" in names or "PermissionDenied" in names or "PERMISSION_DENIED" in detail:
         if kind == "local":
             return f"Permission denied: the app can't write to this folder. ({detail})"
         return f"Permission denied: the app's service principal needs write access to this folder. ({detail})"
-    if "NotFound" in names or "RESOURCE_DOES_NOT_EXIST" in detail:
+    if "NotFound" in names or "RESOURCE_DOES_NOT_EXIST" in detail or detail.startswith("NOT_FOUND"):
         return f"The folder doesn't exist, or the app's service principal can't see it. ({detail})"
     return detail
 
@@ -653,7 +771,7 @@ def test_path(target: str) -> PathCheckResult:
     storage = _Storage()
     try:
         storage.ensure_dir(kind, folder)
-        storage.write(kind, probe, b"Access rules export path check. Safe to delete.\n")
+        storage.write(kind, probe, b"Access rules export path check. Safe to delete.\n", PROBE_CONTENT_TYPE)
     except Exception as exc:  # noqa: BLE001
         logger.info("Export path check failed for %s (%s): %s", target, path, exc)
         return PathCheckResult(target=target, path=path, ok=False,

@@ -13,6 +13,14 @@ Format rules (the app parses this file, so keep to them):
   before), and what the reader will notice or should do now.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
 
+## 3.3.0 — 2026-11-17
+
+### Access Rules
+
+- **Exported CSVs on a volume are now stored as `text/csv`.** Files the access rules export wrote to a Unity Catalog volume were stored as `application/octet-stream`, so tools reading the cloud storage bucket couldn't tell they were CSV. They're now uploaded with the content type `text/csv; charset=utf-8`. The file contents haven't changed, and exports to a workspace folder work as before.
+- **Volume exports need the Files API 3.0 preview turned on.** Only Files API 3.0 stores a file's content type, and it's a Beta: a workspace admin must turn on **Files API V3 with Large File Upload Support** on the workspace's **Previews** page. Until they do, each volume file fails with a message that says so, rather than quietly being stored as octet-stream, and **Test** on the Exports tab reports the same. The setting can take a few minutes to apply, after which **Export now** writes the files.
+- **New setting: Files API host.** These uploads go to the workspace's regional storage host, which is normally worked out from the workspace. If it can't be worked out or reached, for example behind private networking, set **Files API host** under **Admin → Settings → Access Rules**. Leave it blank otherwise.
+
 ## 3.2.0 — 2026-11-16
 
 ### Home

@@ -608,6 +608,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         # manual export points at them.
         "csv_bom": False,
         "csv_line_ending": "crlf",
+        # Volume exports use Files API 3.0 (so files are stored as text/csv),
+        # served from the workspace's regional host. Blank = worked out from
+        # the workspace; set it only if that host isn't the one to use.
+        "files_api_host": "",
         # How long each exported file is kept for download. 0 = forever.
         "export_archive_days": 90,
         # Databricks group display names. Members approve requests of that

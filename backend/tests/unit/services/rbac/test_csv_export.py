@@ -2,7 +2,11 @@
 import asyncio
 import copy
 import hashlib
+import io
+import json
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from urllib.parse import unquote
 
 import pytest
 
@@ -92,6 +96,7 @@ def set_paths(monkeypatch, metastore="", **env_paths):
 class FakeFiles:
     def __init__(self):
         self.uploads = {}
+        self.content_types = {}
         self.dirs = []
         self.deleted = []
 
@@ -119,19 +124,62 @@ class FakeWorkspace:
         self.uploads[path] = (content.read(), format)
 
 
+class FakeConfig:
+    host = "https://acme-prod.cloud.databricks.com"
+
+    def authenticate(self):
+        return {"Authorization": "Bearer sp-token"}
+
+
+class FakeMetastores:
+    region = "us-west-2"
+
+    def summary(self):
+        return SimpleNamespace(region=self.region)
+
+
+class FakeResponse:
+    def __init__(self, status_code, body=None):
+        self.status_code = status_code
+        self.text = "" if body is None else json.dumps(body)
+
+
+V3_PREFIX = "https://1234567890123456.storage.us-west-2.cloud.databricks.com/api/3.0/fs/files"
+
+
 class FakeWorkspaceClient:
     instances = []
+    workspace_id = 1234567890123456
 
     def __init__(self):
+        self.config = FakeConfig()
         self.files = FakeFiles()
         self.workspace = FakeWorkspace()
+        self.metastores = FakeMetastores()
+        self.v3_calls = []
         FakeWorkspaceClient.instances.append(self)
+
+    def get_workspace_id(self):
+        return self.workspace_id
+
+
+def fake_v3_put(url, headers, data):
+    """Files API 3.0 upload: records the Content-Type, then stores through FakeFiles.upload (so tests can patch it)."""
+    client = FakeWorkspaceClient.instances[-1]
+    client.v3_calls.append((url, headers))
+    assert url.startswith(V3_PREFIX), url
+    path = unquote(url[len(V3_PREFIX):])
+    client.files.content_types[path] = headers["Content-Type"]
+    client.files.upload(path, io.BytesIO(data), overwrite=True)
+    return FakeResponse(200)
 
 
 @pytest.fixture
 def fake_sdk(monkeypatch):
     FakeWorkspaceClient.instances = []
     monkeypatch.setattr("databricks.sdk.WorkspaceClient", FakeWorkspaceClient)
+    monkeypatch.setattr(csv_export, "_files_v3_put", fake_v3_put)
+    monkeypatch.setattr(settings, "RBAC_FILES_API_HOST", "")
     return FakeWorkspaceClient
 
 
@@ -285,6 +333,9 @@ def test_volumes_are_written_through_the_sdk(db_session, imported, monkeypatch, 
     }
     assert client.files.uploads[f"/Volumes/main/rbac/exports/dev/{ws_sheet('Dev')}.csv"] == \
         excel_csv(imported[ws_sheet("Dev")].padded())
+    # Files API 3.0, so the stored object is text/csv rather than application/octet-stream.
+    assert set(client.files.content_types.values()) == {"text/csv; charset=utf-8"}
+    assert all(h["Authorization"] == "Bearer sp-token" for _, h in client.v3_calls)
 
 
 def test_workspace_folders_are_written_through_the_sdk(db_session, imported, monkeypatch, fake_sdk):
@@ -512,6 +563,83 @@ def test_path_check_reports_permission_errors(monkeypatch, fake_sdk):
     assert ok.ok and "service principal can write" in ok.message
     deleted = fake_sdk.instances[-1].files.deleted
     assert len(deleted) == 1 and deleted[0].startswith("/Volumes/main/rbac/exports/metastore/.rbac_probe_")
+
+
+NOT_ENABLED_BODY = {
+    "error_code": "PERMISSION_DENIED",
+    "message": "Files API API is not enabled",
+    "details": [{"@type": "type.googleapis.com/google.rpc.ErrorInfo", "reason": "FILES_API_API_IS_NOT_ENABLED"}],
+}
+
+
+def test_volume_export_fails_clearly_when_files_api_v3_is_off(db_session, imported, monkeypatch, fake_sdk):
+    monkeypatch.setattr(csv_export, "_files_v3_put", lambda url, headers, data: FakeResponse(403, NOT_ENABLED_BODY))
+    set_paths(monkeypatch, dev="/Volumes/main/rbac/exports/dev")
+    run = csv_export.run_export(db_session, trigger="manual")
+    assert run.status == "failed"
+    assert {f.error for f in run.files if f.status == "failed"} == {csv_export.V3_NOT_ENABLED}
+    assert "Files API V3 with Large File Upload Support" in csv_export.V3_NOT_ENABLED
+    # Not mistaken for a missing grant, and nothing was written the old way.
+    assert "service principal" not in csv_export.V3_NOT_ENABLED
+    assert fake_sdk.instances[0].files.uploads == {}
+
+    check = csv_export.test_path("dev")
+    assert check.ok is False and csv_export.V3_NOT_ENABLED in check.message
+
+
+def test_files_api_permission_errors_still_read_as_grants(db_session, imported, monkeypatch, fake_sdk):
+    denied = {"error_code": "PERMISSION_DENIED", "message": "User does not have WRITE VOLUME on Volume 'main.rbac.exports'."}
+    monkeypatch.setattr(csv_export, "_files_v3_put", lambda url, headers, data: FakeResponse(403, denied))
+    set_paths(monkeypatch, dev="/Volumes/main/rbac/exports/dev")
+    run = csv_export.run_export(db_session, trigger="manual")
+    assert all("service principal needs write access" in f.error for f in run.files if f.status == "failed")
+
+
+def test_probe_file_is_uploaded_as_plain_text(monkeypatch, fake_sdk):
+    set_paths(monkeypatch, metastore="/Volumes/main/rbac/exports/metastore")
+    assert csv_export.test_path("metastore").ok
+    (ctype,) = fake_sdk.instances[-1].files.content_types.values()
+    assert ctype == "text/plain; charset=utf-8"
+
+
+def test_files_api_host_setting_overrides_the_regional_host(db_session, imported, monkeypatch, fake_sdk):
+    calls = []
+    monkeypatch.setattr(settings, "RBAC_FILES_API_HOST", "files.example.internal/")
+    monkeypatch.setattr(csv_export, "_files_v3_put", lambda url, headers, data: calls.append(url) or FakeResponse(200))
+    set_paths(monkeypatch, metastore="/Volumes/main/rbac/exports/meta data")
+    run = csv_export.run_export(db_session, trigger="manual")
+    assert run.status == "completed"
+    assert calls == [f"https://files.example.internal/api/3.0/fs/files/Volumes/main/rbac/exports/meta%20data/{METASTORE_SHEET}.csv"]
+
+
+@pytest.mark.parametrize("host, region, expected", [
+    ("https://acme-prod.cloud.databricks.com", "us-west-2", "https://42.storage.us-west-2.cloud.databricks.com"),
+    ("https://adb-42.7.azuredatabricks.net/", "westus", "https://42.storage.westus.azuredatabricks.net"),
+    ("https://42.1.gcp.databricks.com", "us-central1", "https://42.storage.us-central1.gcp.databricks.com"),
+])
+def test_regional_files_host(host, region, expected):
+    client = SimpleNamespace(config=SimpleNamespace(host=host), get_workspace_id=lambda: 42,
+                             metastores=SimpleNamespace(summary=lambda: SimpleNamespace(region=region)))
+    assert csv_export._regional_files_host(client) == expected
+
+
+def test_regional_files_host_unknown_domain_points_at_the_setting():
+    client = SimpleNamespace(config=SimpleNamespace(host="https://databricks.acme.internal"))
+    with pytest.raises(csv_export.FilesApiHostError, match="Files API host"):
+        csv_export._regional_files_host(client)
+
+
+def test_unreachable_files_host_is_reported(db_session, imported, monkeypatch, fake_sdk):
+    import requests
+
+    def unreachable(url, headers, data):
+        raise requests.exceptions.ConnectionError("Name or service not known")
+
+    monkeypatch.setattr(csv_export, "_files_v3_put", unreachable)
+    set_paths(monkeypatch, dev="/Volumes/main/rbac/exports/dev")
+    run = csv_export.run_export(db_session, trigger="manual")
+    errors = {f.error for f in run.files if f.status == "failed"}
+    assert len(errors) == 1 and "Couldn't reach the Files API 3.0 host" in errors.pop()
 
 
 # --- Compare ------------------------------------------------------------------
