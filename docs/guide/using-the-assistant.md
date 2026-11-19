@@ -14,7 +14,8 @@ Type in the **Ask a question...** box and press Enter. Some things to try:
 - "Where can I find shipments data, and can I read it?"
 - "I need read access to the sales orders table."
 
-The assistant may suggest prompts when you start. After each reply it also
+Once you've hidden **See what's possible** on the home screen, the assistant
+suggests a few prompts when you start. After each reply it also
 offers two to four suggested next steps as buttons under its latest message.
 When it asks you to choose between options, the options are the buttons, so
 you can answer in one click. Clicking a button sends its text as your message,
@@ -223,12 +224,24 @@ Under the greeting, a line says what the assistant is for: requests, access and
 platform questions, not data analysis. Where your administrator has set up Genie
 One, the line links to it for analysis.
 
-**What I can help with** lists the kinds of things you can ask for, such as
-getting access, setting something up, tracking requests, finding data and its
-owner, reporting a problem, and learning the platform. Click one to start that
-conversation, or to open the page that covers it. Select **Hide** to remove the
-list. The choice is saved for you in this browser, and **What I can help with?**
-brings it back.
+**See what's possible** walks you through what you can get done in
+{{brand_name}}, one short story at a time: getting access, finding data you can
+trust, setting something up, tracking and approving requests, scheduled reports,
+learning the platform and reporting a data problem, plus **Talk to Your Data**
+where your administrator has set it up. Each story shows what you say or do,
+what happens next step by step, and the result. Only stories for pages that are
+switched on for you appear.
+
+- The stories play one after another. They pause while your pointer or keyboard
+  focus is on them, and stop once you pick one. **Pause** and **Play** control
+  them. If your device is set to reduce motion, they don't animate or move on
+  by themselves.
+- **Try it now** starts that conversation with the assistant, and the open
+  button goes to the page the story covers. **How it works** opens the matching
+  guide page.
+- **Hide** removes it, and the suggested prompts take its place under the chat
+  box. The choice is saved for you in this browser, and **See what's possible**
+  brings it back.
 
 Before you start a conversation, the home screen may also show your data
 catalog:

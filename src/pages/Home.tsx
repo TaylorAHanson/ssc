@@ -16,7 +16,8 @@ import { AgentWelcome } from '../components/chat/AgentWelcome';
 import { api } from '../services/api';
 import { useUserStore } from '../stores/userStore';
 import { useBrandingStore } from '../stores/brandingStore';
-import { LandingGuide } from '../components/chat/LandingGuide';
+import { Showcase } from '../components/chat/Showcase';
+import { useShowcaseHidden } from '../hooks/useShowcaseHidden';
 import { CatalogRails } from '../components/discover/CatalogRails';
 import { prefetchCatalog } from '../lib/catalogCache';
 import { buildDiscoverLink } from '../lib/discoverLinks';
@@ -71,6 +72,11 @@ export function Home() {
         return { greeting: 'Good evening', TimeIcon: Moon };
     }, []);
     const [fetchedSuggestions, setFetchedSuggestions] = useState<string[]>([]);
+    const userEmail = currentUser?.email ?? '';
+    // The showcase and the prompt suggestions both sit under the chat box; show one at a time.
+    // The suggestions appear once the user hides the showcase (and not before we know who they are).
+    const [showcaseHidden, setShowcaseHidden] = useShowcaseHidden(userEmail);
+    const showSuggestions = !!userEmail && showcaseHidden;
 
     // Branding-driven header, using the compact `short_name` (e.g. "edh").
     // Shown only with the "enhanced landing page" feature, which is off by
@@ -79,8 +85,6 @@ export function Home() {
     const brandLogoUrl = useBrandingStore((s) => s.brandLogoUrl);
     const enhancedLandingPage = useBrandingStore((s) => s.features.enhanced_landing_page === true);
     const genieOneUrl = useBrandingStore((s) => s.genieOneUrl);
-    const trainingOn = useBrandingStore((s) => s.uiTabs?.training !== false);
-    const requestsOn = useBrandingStore((s) => s.uiTabs?.my_requests !== false || s.uiTabs?.pending_approvals !== false);
 
     // What this assistant is for, so nobody has to find out by asking it to analyze data.
     const scopeNote = (
@@ -238,15 +242,15 @@ export function Home() {
                     welcomeNode={welcomeNode}
                     placeholder="Ask a question..."
                     storageKey={STORAGE_KEY}
-                    samplePrompts={suggestions.length > 0 ? suggestions : undefined}
+                    samplePrompts={showSuggestions && suggestions.length > 0 ? suggestions : undefined}
                     onRoute={handleRoute}
                     formCtaLabelFor={getButtonLabel}
                     emptyStateExtras={
                         <>
-                            <LandingGuide
-                                user={currentUser?.email ?? ''}
-                                trainingOn={trainingOn}
-                                requestsOn={requestsOn}
+                            <Showcase
+                                user={userEmail}
+                                hidden={showcaseHidden}
+                                onHiddenChange={setShowcaseHidden}
                                 onAsk={(prompt) => chatRef.current?.submitQuery(prompt)}
                                 onOpen={navigate}
                             />

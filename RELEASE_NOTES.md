@@ -13,6 +13,15 @@ Format rules (the app parses this file, so keep to them):
   before), and what the reader will notice or should do now.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
 
+## 3.4.0 — 2026-11-19
+
+### Home
+
+- **The home screen now shows what's possible, not another row of boxes.** The **What I can help with** tiles under the chat box repeated the suggested prompts above them and didn't explain what any of it would do for you. They're replaced by **See what's possible**: short stories about what you can get done here, such as getting access, finding data you can trust, setting something up, tracking approvals, scheduled reports and learning the platform. Each one plays out what you say or do, what happens next step by step and what you end up with.
+- **Every story ends with a way to try it.** **Try it now** starts that conversation with the assistant, the open button takes you to the page the story covers, and **How it works** opens the matching guide page. You only see stories for the pages your administrator has switched on.
+- **The stories move on by themselves, and you can stop them.** They pause while your pointer or keyboard is on them, stop once you pick one, and have a **Pause** button. If your device is set to reduce motion, they don't animate. **Hide** still tucks it away, and if you had hidden the old tiles it stays hidden; select **See what's possible** to bring it back.
+- **Suggested prompts now wait until you've hidden the tour.** The four suggested prompts under the chat box and the tour competed for attention in the same spot. While **See what's possible** is showing, the suggestions are left out. Once you hide it, they appear under the chat box as before.
+
 ## 3.3.1 — 2026-11-19
 
 ### Changed

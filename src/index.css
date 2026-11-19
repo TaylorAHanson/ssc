@@ -153,6 +153,77 @@ body {
   animation: slide-in-from-bottom 0.3s ease-out;
 }
 
+/* Home page "See what's possible" showcase (components/chat/Showcase.tsx).
+ * Each story's steps rise in one after another (delays set inline), and the
+ * active tab's bar fills for as long as the story plays, then advances. */
+@keyframes showcase-rise {
+  from {
+    transform: translateY(8px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes showcase-pop {
+  0% {
+    transform: scale(0);
+    opacity: 0;
+  }
+  70% {
+    transform: scale(1.2);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes showcase-progress {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes showcase-caret {
+  50% {
+    opacity: 0;
+  }
+}
+
+.showcase-rise {
+  animation: showcase-rise 0.45s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+.showcase-pop {
+  animation: showcase-pop 0.35s ease-out both;
+}
+
+.showcase-progress {
+  transform-origin: left;
+  animation-name: showcase-progress;
+  animation-timing-function: linear;
+  animation-fill-mode: both;
+}
+
+.showcase-caret {
+  animation: showcase-caret 1s step-end infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .showcase-rise,
+  .showcase-pop,
+  .showcase-caret {
+    animation: none;
+  }
+}
+
 /* Chat-bubble prose overrides. The default Tailwind typography
  * plugin sizes headings for a blog post (h1 ≈ 36 px) which is
  * obnoxious inside a chat message. We dial the heading scale down

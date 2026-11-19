@@ -7,6 +7,11 @@ import { useBrandingStore } from '../stores/brandingStore';
 export const GUIDE_HOME = '/guide';
 export const GUIDE_REQUESTS = '/guide/requests-and-approvals#track-your-requests';
 export const GUIDE_APPROVALS = '/guide/requests-and-approvals#approve-or-reject-a-request';
+export const GUIDE_MAKE_REQUEST = '/guide/using-the-assistant#make-a-request';
+export const GUIDE_REPORT_PROBLEM = '/guide/using-the-assistant#report-a-problem-with-data';
+export const GUIDE_DISCOVER = '/guide/discover-data';
+export const GUIDE_TALK_TO_DATA = '/guide/workspaces#genie-one';
+export const GUIDE_COMMUNITY = '/guide/community-and-training';
 export const GUIDE_WORKFLOW_STUDIO = '/guide/admin/workflows-and-tools#workflow-studio';
 export const GUIDE_ACCESS_RULES = '/guide/admin/access-rules';
 
