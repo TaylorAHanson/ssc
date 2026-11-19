@@ -13,6 +13,12 @@ Format rules (the app parses this file, so keep to them):
   before), and what the reader will notice or should do now.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
 
+## 3.3.1 — 2026-11-19
+
+### Changed
+
+- **The Genie One link in the sidebar is now called Talk to Your Data.** "Genie One" is a product name, and people who hadn't used it didn't know the link was where to go to ask questions of their data. The link goes to the same place as before, your organization's Genie One, and still only appears once an administrator has set its address. Nothing else has changed.
+
 ## 3.3.0 — 2026-11-17
 
 ### Access Rules

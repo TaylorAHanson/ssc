@@ -11,7 +11,7 @@ Genie One is where you analyze data. Ask a question in plain language, such as
 numbers, charts and dashboards. Use it for totals, trends, comparisons and
 anything else that means working with the data itself.
 
-**Genie One** in the sidebar opens Genie One for your whole organization, in a
+**Talk to Your Data** in the sidebar opens Genie One for your whole organization, in a
 new tab. It appears once an admin has set its address. You can also open the
 Genie One of a single workspace from the [Workspaces](#workspaces) page.
 

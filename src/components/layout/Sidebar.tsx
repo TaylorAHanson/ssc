@@ -465,7 +465,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   }, []);
 
   // Data & AI: config-driven embedded apps in list order, then the account's
-  // Genie One (only once an admin sets its address) and the Workspaces page.
+  // Talk to Your Data, i.e. account-level Genie One (only once an admin sets its address) and the Workspaces page.
   // Each embedded app renders in-app at /embedded/<id> so it participates in
   // normal active-state styling and back/forward history.
   const externalNavItems = React.useMemo<NavItem[]>(() => {
@@ -484,7 +484,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     if (genieOneUrl) {
       items.push({
         id: 'genie_one',
-        title: 'Genie One',
+        title: 'Talk to Your Data',
         icon: <GenieIcon className="w-5 h-5" />,
         href: genieOneUrl,
         group: 'Data & AI',

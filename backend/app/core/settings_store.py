@@ -395,7 +395,7 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
      "type": "string", "placeholder": "https://...",
      "help": "The address of account-level Genie One, where people analyze data across every workspace "
              "they can use. Open Genie One at the account level and copy the address from the browser. "
-             "Shown as Genie One in the sidebar, and the assistant sends data-analysis questions there. "
+             "Shown as Talk to Your Data in the sidebar, and the assistant sends data-analysis questions there. "
              "Blank hides the link."},
     {"group": "Links & Embedded Apps", "key": "yaml:embedded_apps", "label": "Embedded Apps",
      "type": "catalog", "kind": "embedded_apps", "add_label": "Add app",

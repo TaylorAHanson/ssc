@@ -99,7 +99,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 
     # External deep links surfaced in-app.
     "links": {
-        # Account-level Genie One, shown as "Genie One" in the sidebar and where the
+        # Account-level Genie One, shown as "Talk to Your Data" in the sidebar and where the
         # agent sends data-analysis questions. Blank hides the link.
         "genie_one_url": "",
     },

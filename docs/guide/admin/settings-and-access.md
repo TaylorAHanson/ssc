@@ -148,7 +148,7 @@ visit most often:
   **Build & Customize** or **Discover & Analyze** groups move to **Data & AI**
   and **Discover & Request**. **Genie One link** is the address of Genie One
   for your Databricks account, such as the one you open from the account
-  console. While it's blank, **Genie One** is hidden from the sidebar and the
+  console. While it's blank, **Talk to Your Data** is hidden from the sidebar and the
   assistant links each workspace's own Genie One instead. **Support contact**
   holds the name, email and hours or channel of whoever handles day-to-day
   help. It shows on the **Team & Support** tab of every dataset in Discover,
