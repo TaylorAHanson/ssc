@@ -216,3 +216,79 @@ def test_document_payload_carries_owner_and_freshness(db_session):
     assert data["is_stale"] is True
     assert data["stale_after_days"] == 90
     assert data["content_updated_at"] == doc.content_updated_at.isoformat()
+
+
+# ---------------------------------------------------------------------------
+# "Needs review": stale or never marked reviewed, catalog-wide
+# ---------------------------------------------------------------------------
+
+def test_needs_review_covers_stale_and_never_reviewed_published_docs(db_session):
+    ops = Svc.create_domain(db_session, name="Ops")
+    finance = Svc.create_domain(db_session, name="Finance")
+    stale = _doc(db_session, ops, "Old", age_days=120, reviewed_days=100)
+    never = _doc(db_session, finance, "New, never reviewed", age_days=3)
+    stale_and_never = _doc(db_session, finance, "Old, never reviewed", age_days=200)
+    _doc(db_session, ops, "Reviewed recently", age_days=200, reviewed_days=5)
+    _doc(db_session, ops, "Draft", age_days=400, status="draft")
+
+    queue = staleness.documents_needing_review(db_session, now=NOW)
+
+    assert queue["stale_after_days"] == 90
+    assert {(d["id"], d["domain_id"], d["reason"]) for d in queue["documents"]} == {
+        (stale.id, ops.id, "stale"),
+        (never.id, finance.id, "never_reviewed"),
+        # Stale wins when both apply.
+        (stale_and_never.id, finance.id, "stale"),
+    }
+
+
+def test_marking_reviewed_takes_a_document_out_of_needs_review(db_session):
+    domain = Svc.create_domain(db_session, name="Ops")
+    doc = _doc(db_session, domain, "Old", age_days=120)
+    assert staleness.review_reason(doc, now=NOW) == "stale"
+
+    staleness.mark_reviewed(db_session, doc.id, "reviewer@corp.com")
+
+    assert staleness.review_reason(doc) is None
+    assert staleness.documents_needing_review(db_session)["documents"] == []
+
+
+def test_document_payload_carries_the_review_reason(db_session):
+    domain = Svc.create_domain(db_session, name="Ops")
+    never = _doc(db_session, domain, "Fresh", age_days=1)
+    draft = _doc(db_session, domain, "Draft", age_days=1, status="draft")
+    assert Svc.document_to_dict(never, include_body=False)["review_reason"] == "never_reviewed"
+    assert Svc.document_to_dict(draft, include_body=False)["review_reason"] is None
+
+
+def test_review_queue_endpoint_needs_the_manage_capability(db_session, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api import deps
+    from app.api.v1 import context_catalog as catalog_api
+    from app.api.v1 import context_catalog_staleness as staleness_api
+    from app.db.session import get_db
+    from app.models.user import User
+
+    monkeypatch.setattr(catalog_api, "is_feature_enabled", lambda _name: True)
+    admin = User(id="a@corp.com", email="a@corp.com", full_name="Ad Min", roles=["Platform Admin"],
+                 entitlements=[], is_active=True)
+    plain = User(id="u@corp.com", email="u@corp.com", full_name="Us Er", roles=["User"],
+                 entitlements=[], is_active=True)
+    domain = Svc.create_domain(db_session, name="Ops")
+    doc = _doc(db_session, domain, "Never reviewed", age_days=1)
+
+    app = FastAPI()
+    app.include_router(staleness_api.router, prefix="/context")
+    app.dependency_overrides[get_db] = lambda: db_session
+    current = {"user": admin}
+    app.dependency_overrides[deps.get_current_user] = lambda: current["user"]
+    client = TestClient(app)
+
+    response = client.get("/context/review-queue")
+    assert response.status_code == 200
+    assert response.json()["documents"] == [{"id": doc.id, "domain_id": domain.id, "reason": "never_reviewed"}]
+
+    current["user"] = plain
+    assert client.get("/context/review-queue").status_code == 403

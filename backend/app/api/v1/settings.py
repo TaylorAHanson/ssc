@@ -43,3 +43,32 @@ def update_settings(
         return settings_store.set_many(db, payload.changes, updated_by=user.email)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# --- Service principals ----------------------------------------------------------
+
+class ServicePrincipalCheckIn(BaseModel):
+    name: str
+
+
+@router.get("/service-principals/usage")
+def service_principal_usage(user: User = Depends(require_capability("settings.manage"))):
+    """Which identity each part of the app runs as, from the saved settings (no secrets are read)."""
+    from app.core import service_principals
+
+    return {"rows": service_principals.usage(), "names": service_principals.names()}
+
+
+@router.post("/service-principals/check")
+def check_service_principal(
+    body: ServicePrincipalCheckIn, user: User = Depends(require_capability("settings.manage")),
+):
+    """Read a named SP's secrets and sign in as it on the home workspace. Saved settings only."""
+    from dataclasses import asdict
+
+    from app.core import service_principals
+
+    if service_principals.get(body.name) is None:
+        raise HTTPException(status_code=404, detail=(
+            f'There\'s no saved service principal named "{body.name}". Save the list first.'))
+    return asdict(service_principals.check(body.name))

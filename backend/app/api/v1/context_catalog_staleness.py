@@ -1,6 +1,7 @@
 """
-Context Catalog document freshness API: mark reviewed, and the Teams reminder
-status / run-now / test-message actions for admins.
+Context Catalog document freshness API: mark reviewed, the catalog-wide
+"needs review" list, and the Teams reminder status / run-now / test-message
+actions for admins.
 """
 import logging
 from typing import Any
@@ -45,6 +46,16 @@ def mark_document_reviewed(
             )
     document = staleness.mark_reviewed(db, document_id, current_user.email)
     return ContextCatalogService.document_to_dict(document)
+
+
+@router.get("/review-queue")
+def get_review_queue(
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
+    _: None = Depends(_require_feature),
+) -> Any:
+    """Published documents that are stale or never marked reviewed, with their domain and the reason."""
+    return staleness.documents_needing_review(db)
 
 
 @router.get("/staleness")

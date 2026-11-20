@@ -26,6 +26,7 @@ import {
   BellRing,
   CheckCheck,
   Sparkles,
+  Filter,
 } from 'lucide-react';
 import { api } from '../../services/api';
 import type {
@@ -34,6 +35,7 @@ import type {
   ContextDocument,
   ContextDocumentSummary,
   ContextReviewProgress,
+  ContextReviewQueue,
   ContextReviewSummary,
   ContextSearchResult,
   ContextSearchStatus,
@@ -188,7 +190,11 @@ export function ContextCatalog() {
   const [isMarkingReviewed, setIsMarkingReviewed] = useState(false);
   const [docSort, setDocSort] = useState<DocSort>('updated_desc');
   const [docOwnerFilter, setDocOwnerFilter] = useState('');
-  const [staleOnly, setStaleOnly] = useState(false);
+  // Catalog-wide "Needs review" filter: published documents that are stale or were never marked
+  // reviewed. The queue (id, domain, reason) comes from the backend so the whole tree can be filtered
+  // without loading every domain; it's refreshed whenever the domain list is.
+  const [needsReviewOnly, setNeedsReviewOnly] = useState(false);
+  const [reviewQueue, setReviewQueue] = useState<ContextReviewQueue | null>(null);
   const [reviewByDoc, setReviewByDoc] = useState<Record<string, ContextReviewSummary>>({});
   const [reviewProgress, setReviewProgress] = useState<ContextReviewProgress | null>(null);
   const [isStartingReviewAll, setIsStartingReviewAll] = useState(false);
@@ -209,8 +215,15 @@ export function ContextCatalog() {
 
   // ---------------------------------------------------------------- load data
 
+  const loadReviewQueue = () =>
+    api
+      .getContextReviewQueue()
+      .then(setReviewQueue)
+      .catch(() => setReviewQueue(null)); // the filter just isn't offered without it
+
   const loadDomains = async (selectAfter?: string | null) => {
     setIsLoadingDomains(true);
+    loadReviewQueue();
     try {
       const list = await api.listContextDomains();
       setDomains(list);
@@ -299,6 +312,31 @@ export function ContextCatalog() {
     return rows;
   }, [domains]);
 
+  // Documents needing review per domain (direct documents only, as with document_count).
+  const reviewCountByDomain = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const d of reviewQueue?.documents ?? []) counts[d.domain_id] = (counts[d.domain_id] ?? 0) + 1;
+    return counts;
+  }, [reviewQueue]);
+  const needsReviewTotal = reviewQueue?.documents.length ?? 0;
+  const reviewFilterOn = needsReviewOnly && !!reviewQueue;
+
+  // With "Needs review" on, keep domains that hold a matching document, plus the parents needed to
+  // reach them, so the tree keeps its shape.
+  const visibleTree = useMemo(() => {
+    if (!reviewFilterOn) return tree;
+    const byId = new Map(domains.map((d) => [d.id, d]));
+    const keep = new Set<string>();
+    for (const id of Object.keys(reviewCountByDomain)) {
+      let cur = byId.get(id);
+      while (cur && !keep.has(cur.id)) {
+        keep.add(cur.id);
+        cur = cur.parent_id ? byId.get(cur.parent_id) : undefined;
+      }
+    }
+    return tree.filter(({ domain }) => keep.has(domain.id));
+  }, [reviewFilterOn, tree, domains, reviewCountByDomain]);
+
   // Catalog-wide rollups for the overview strip. Computed from the cheap list
   // payload, so no extra requests.
   const stats = useMemo(() => {
@@ -325,7 +363,7 @@ export function ContextCatalog() {
     const time = (d: ContextDocumentSummary) => new Date(docActivity(d) ?? 0).getTime() || 0;
     const filtered = docs.filter(
       (d) =>
-        (!staleOnly || d.is_stale) &&
+        (!reviewFilterOn || !!d.review_reason) &&
         (!docOwnerFilter || (docOwnerFilter === UNOWNED ? !d.owner : d.owner === docOwnerFilter))
     );
     const sorters: Record<DocSort, (a: ContextDocumentSummary, b: ContextDocumentSummary) => number> = {
@@ -337,7 +375,7 @@ export function ContextCatalog() {
         (a.owner ? 0 : 1) - (b.owner ? 0 : 1) || (a.owner || '').localeCompare(b.owner || '') || time(b) - time(a),
     };
     return [...filtered].sort(sorters[docSort]);
-  }, [docs, docSort, docOwnerFilter, staleOnly]);
+  }, [docs, docSort, docOwnerFilter, reviewFilterOn]);
 
   // ---------------------------------------------------------------- domain ops
 
@@ -521,6 +559,7 @@ export function ContextCatalog() {
       setDocMeta(updated);
       setMessage({ type: 'success', text: `Marked "${updated.title}" reviewed` });
       if (selectedId) setDetail(await api.getContextDomain(selectedId));
+      loadReviewQueue();
     } catch (e) {
       setMessage({ type: 'error', text: errorMessage(e, 'Failed to mark reviewed') });
     } finally {
@@ -861,6 +900,37 @@ export function ContextCatalog() {
         <StatCard icon={<Tag className="w-4 h-4" />} label="Categories" value={stats.categoryCount} />
       </div>
 
+      {reviewQueue && stats.totalDocs > 0 && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          <button
+            type="button"
+            onClick={() => setNeedsReviewOnly((v) => !v)}
+            aria-pressed={needsReviewOnly}
+            className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium transition-colors ${
+              needsReviewOnly
+                ? 'border-orange-300 bg-orange-50 text-orange-700'
+                : 'border-gray-300 bg-white text-gray-700 hover:border-gray-400'
+            }`}
+          >
+            <Filter className="w-4 h-4" />
+            Needs review
+            <span
+              className={`rounded-full px-1.5 text-xs font-semibold ${
+                needsReviewTotal > 0 ? 'bg-orange-100 text-orange-700' : 'bg-gray-100 text-gray-500'
+              }`}
+            >
+              {needsReviewTotal}
+            </span>
+            {needsReviewOnly && <X className="w-3.5 h-3.5" aria-hidden="true" />}
+          </button>
+          <span className="text-xs text-gray-500">
+            {needsReviewOnly
+              ? 'Showing only domains and documents that need review.'
+              : `Published documents that are stale (not edited or marked reviewed in ${reviewQueue.stale_after_days} days) or have never been marked reviewed, across every domain.`}
+          </span>
+        </div>
+      )}
+
       {message && (
         <div
           className={`rounded-md border p-3 text-sm flex items-center justify-between ${
@@ -903,9 +973,13 @@ export function ContextCatalog() {
               </div>
             ) : tree.length === 0 ? (
               <p className="text-sm text-gray-500 py-4">No domains yet. Create one to get started.</p>
+            ) : visibleTree.length === 0 ? (
+              <p className="text-sm text-gray-500 py-4">
+                Nothing needs review: every published document has been marked reviewed recently.
+              </p>
             ) : (
               <div className="space-y-0.5">
-                {tree.map(({ domain, depth }) => {
+                {visibleTree.map(({ domain, depth }) => {
                   const isSelected = selectedId === domain.id;
                   return (
                     <div key={domain.id}>
@@ -943,7 +1017,18 @@ export function ContextCatalog() {
                               className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0"
                             />
                           )}
-                          <span className="text-xs text-gray-400">{domain.document_count ?? 0}</span>
+                          {reviewFilterOn ? (
+                            reviewCountByDomain[domain.id] ? (
+                              <span
+                                className="text-xs font-medium text-orange-600"
+                                title={`${reviewCountByDomain[domain.id]} of ${domain.document_count ?? 0} documents need review`}
+                              >
+                                {reviewCountByDomain[domain.id]}
+                              </span>
+                            ) : null
+                          ) : (
+                            <span className="text-xs text-gray-400">{domain.document_count ?? 0}</span>
+                          )}
                         </button>
                       </div>
 
@@ -1064,14 +1149,6 @@ export function ContextCatalog() {
                                       ))}
                                       <option value={UNOWNED}>No owner</option>
                                     </select>
-                                    <label className="inline-flex items-center gap-1 text-gray-500">
-                                      <input
-                                        type="checkbox"
-                                        checked={staleOnly}
-                                        onChange={(e) => setStaleOnly(e.target.checked)}
-                                      />
-                                      Stale only
-                                    </label>
                                   </div>
                                 )}
 
@@ -1114,6 +1191,14 @@ export function ContextCatalog() {
                                               ) : (
                                                 <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">
                                                   {doc.status}
+                                                </span>
+                                              )}
+                                              {doc.review_reason === 'never_reviewed' && (
+                                                <span
+                                                  title="No owner has marked this document reviewed yet"
+                                                  className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-amber-50 text-amber-700"
+                                                >
+                                                  <AlertTriangle className="w-3 h-3" /> never reviewed
                                                 </span>
                                               )}
                                               {doc.is_stale && (

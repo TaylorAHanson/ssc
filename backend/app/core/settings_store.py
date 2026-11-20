@@ -1015,6 +1015,14 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
              "needs the 'Files API V3 with Large File Upload Support' preview turned on. Blank (default) = the "
              "workspace's regional host, <workspace-id>.storage.<region>.<domain>. Set it only if that host "
              "can't be worked out or reached."},
+    {"group": "Access Rules", "section": "Environments & export", "key": "RBAC_EXPORT_SERVICE_PRINCIPAL",
+     "label": "Export service principal", "type": "select", "options_from": "SERVICE_PRINCIPALS",
+     "placeholder": "The app's service principal",
+     "help": "Which service principal writes the exported files, for every environment and the metastore sheet, "
+             "and runs Test on the Exports tab. Pick one from Admin → Settings → Service Principals and grant it "
+             "write access to the export folders, so the app's own service principal doesn't need it. Blank = the "
+             "app's own service principal. If the one picked can't sign in, exports fail and say why; they never "
+             "fall back to the app's."},
     {"group": "Access Rules", "section": "Environments & export", "key": "RBAC_EXPORT_ARCHIVE_DAYS",
      "label": "Keep exported files (days)", "type": "int", "min": 0,
      "help": "How long each exported CSV stays downloadable from the Exports tab. 0 = forever."},
@@ -1116,6 +1124,27 @@ EDITABLE_FIELDS: List[Dict[str, Any]] = [
     # ===================================================================
     # Platform
     # ===================================================================
+    # --- Service Principals (named) --------------------------------------
+    # One list of the SPs the installation uses; features pick one by name.
+    # Key NAMES only; values stay in TARGET_WORKSPACE_SP_SECRET_SCOPE.
+    {"group": "Service Principals", "key": "SERVICE_PRINCIPALS",
+     "label": "Service principals",
+     "type": "collection", "unique": "name", "add_label": "Add service principal",
+     "help": "Each service principal the app can act as, besides its own. Give it a name, and the names of the "
+             "keys holding its client ID and client secret in the secret scope set under Target Workspaces "
+             "(never the values). Features then pick it by name, such as Access Rules → Export service principal. "
+             "Adding one here grants nothing: give the service principal its permissions in Databricks. Save "
+             "before picking a new one elsewhere.",
+     "columns": [
+         {"key": "name", "label": "Name", "type": "string", "required": True, "placeholder": "rbac-export-writer"},
+         {"key": "client_id_key", "label": "Client ID secret key", "type": "string", "required": True,
+          "placeholder": "rbac_writer_client_id", "help": "Secret key NAME — not the value"},
+         {"key": "client_secret_key", "label": "Client secret key", "type": "string", "required": True,
+          "placeholder": "rbac_writer_client_secret", "help": "Secret key NAME — not the value"},
+         {"key": "purpose", "label": "What it's for", "type": "string",
+          "placeholder": "Writes Access Rules exports to the RBAC volume"},
+     ]},
+
     # --- Target Workspaces & Service Principals -------------------------
     # No-code config for which workspaces the app monitors and the per-env
     # service-principal *key names*. Secret VALUES and scope grants stay in
@@ -1287,7 +1316,7 @@ SECTIONS: List[Dict[str, Any]] = [
     {"title": "Watch Tower", "groups": ["OmniGuard", "Target Workspaces", "Data Certification", "Metadata Manager",
                                         "Access Rules"]},
     {"title": "Control Tower", "groups": ["Workflow Studio", "Context Catalog", "Preview Features"]},
-    {"title": "Platform", "groups": ["Infrastructure"]},
+    {"title": "Platform", "groups": ["Service Principals", "Infrastructure"]},
 ]
 
 
@@ -1357,6 +1386,11 @@ GROUP_DESCRIPTIONS: Dict[str, str] = {
         "setting also refers to them by name), plus the one secret scope holding each workspace's "
         "service-principal credentials. This stores names/coordinates only; the actual secret values "
         "live in the scope and access grants are made in Databricks. Changes apply immediately."
+    ),
+    "Service Principals": (
+        "The service principals the app can act as besides its own, and which identity each part of the app "
+        "uses. Credentials are read from the secret scope set under Target Workspaces; permissions are granted "
+        "in Databricks."
     ),
     "Infrastructure": (
         "Runtime timeouts, what the browser writes to the app log, and the Terramate provisioning "
@@ -1771,7 +1805,17 @@ def _coerce_catalog(field: Dict[str, Any], value: Any) -> Any:
     raise ValueError(f"Unknown catalog kind: {kind}")
 
 
-def _coerce(field: Dict[str, Any], value: Any) -> Any:
+def _select_options(field: Dict[str, Any], batch: Optional[Dict[str, Any]] = None) -> List[str]:
+    """A select's choices. ``options_from`` names a collection setting whose rows' ``name`` are the
+    choices (plus blank), read from ``batch`` when the same save changes that collection."""
+    source = field.get("options_from")
+    if not source:
+        return list(field.get("options") or [])
+    rows = (batch or {}).get(source, _current_value(source)) or []
+    return [""] + [str(r.get("name")) for r in rows if isinstance(r, dict) and r.get("name")]
+
+
+def _coerce(field: Dict[str, Any], value: Any, batch: Optional[Dict[str, Any]] = None) -> Any:
     ftype = field.get("type", "string")
     if ftype == "collection":
         return _coerce_collection(field, value)
@@ -1793,7 +1837,11 @@ def _coerce(field: Dict[str, Any], value: Any) -> Any:
         return ivalue
     if ftype == "select":
         sval = "" if value is None else str(value)
-        options = field.get("options") or []
+        if field.get("options_from") and batch is None:
+            # Loading a saved value at startup: keep it even if its row has since gone, so the feature
+            # reports the missing name instead of quietly using a different identity.
+            return sval
+        options = _select_options(field, batch)
         if options and sval not in options:
             raise ValueError(f"{field.get('label', field['key'])} must be one of: {', '.join(options)}")
         return sval
@@ -2120,9 +2168,10 @@ def set_many(db: Session, changes: Dict[str, Any], updated_by: Optional[str] = N
     # Validate + coerce everything first so a bad value fails the whole batch
     # (no partial application).
     coerced: Dict[str, Any] = {}
-    for key, value in changes.items():
-        field = _validate_key(key)
-        coerced[key] = _coerce(field, value)
+    fields = {key: _validate_key(key) for key in changes}
+    # Selects whose choices come from another setting go last, so they can pick a row added in this save.
+    for key in sorted(changes, key=lambda k: bool(fields[k].get("options_from"))):
+        coerced[key] = _coerce(fields[key], changes[key], coerced)
 
     for key, value in coerced.items():
         _apply(key, value)
@@ -2146,7 +2195,12 @@ def get_state() -> Dict[str, Any]:
     """
     fields: List[Dict[str, Any]] = []
     for f in EDITABLE_FIELDS:
-        fields.append({**f, "requires": _field_requires(f), "value": _current_value(f["key"])})
+        entry = {**f, "requires": _field_requires(f), "value": _current_value(f["key"])}
+        if f.get("options_from"):
+            options = _select_options(f)
+            current = entry["value"] or ""
+            entry["options"] = options + ([current] if current and current not in options else [])
+        fields.append(entry)
 
     for name, val in sorted(_features_cfg().items()):
         fields.append({

@@ -222,7 +222,8 @@ another device. To delete it, use **Clear my data** in the account menu.
 
 Under the greeting, a line says what the assistant is for: requests, access and
 platform questions, not data analysis. Where your administrator has set up Genie
-One, the line links to it for analysis.
+One, the line sends you to **Talk to Your Data** for analysis, the same link as
+in the sidebar.
 
 **See what's possible** walks you through what you can get done in
 {{brand_name}}, one short story at a time: getting access, finding data you can

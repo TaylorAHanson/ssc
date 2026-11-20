@@ -34,8 +34,9 @@ import { Users } from './Users';
 import { RolePermissions } from './RoleCapabilityGrid';
 import { LegacyDashboards } from './LegacyDashboards';
 import { TrainingUpload } from '../../components/admin/TrainingUpload';
+import { ServicePrincipalUsage } from '../../components/admin/ServicePrincipalUsage';
 import { StringListField, CommunityLinksEditor, EmbeddedAppsEditor } from './catalogEditors';
-import { LEGACY_DASHBOARDS_GROUP, TRAINING_GROUP } from './settingsGroups';
+import { LEGACY_DASHBOARDS_GROUP, SERVICE_PRINCIPALS_GROUP, TRAINING_GROUP } from './settingsGroups';
 import { errorMessage } from '../../lib/errors';
 
 // Pages rendered by the client rather than from the generic field list. The
@@ -44,14 +45,24 @@ const FEATURES_GROUP = 'Features & Navigation';
 const ROLE_MAPPINGS_GROUP = 'Role Mappings';
 const ROLE_PERMISSIONS_GROUP = 'Role Permissions';
 // Client pages shown inside the standard page card (title, description, Off note).
-const CARD_PAGES: Record<string, () => ReactNode> = {
+const CARD_PAGES: Record<string, (state: SettingsState) => ReactNode> = {
   [LEGACY_DASHBOARDS_GROUP]: () => <LegacyDashboards />,
   [TRAINING_GROUP]: () => <TrainingUpload />,
+  // Keyed on the saved settings it reads, so it reloads after a save.
+  [SERVICE_PRINCIPALS_GROUP]: (state) => <ServicePrincipalUsage key={servicePrincipalUsageKey(state)} />,
 };
+
+// The saved settings the "who uses which" table is built from.
+const SERVICE_PRINCIPAL_USAGE_KEYS = [
+  'SERVICE_PRINCIPALS', 'RBAC_EXPORT_SERVICE_PRINCIPAL', 'collection:target_workspaces', 'SENTINEL_DATA_CERT_WORKSPACE',
+];
+const servicePrincipalUsageKey = (state: SettingsState) =>
+  JSON.stringify(SERVICE_PRINCIPAL_USAGE_KEYS.map((k) => state.fields.find((f) => f.key === k)?.value ?? null));
 
 // Heading over a card page's body when it sits below the page's settings.
 const CARD_BODY_TITLES: Record<string, string> = {
   [TRAINING_GROUP]: 'Completion uploads',
+  [SERVICE_PRINCIPALS_GROUP]: 'Who uses which service principal',
 };
 
 // Also shows the read-only, deploy-time settings under its editable fields.
@@ -411,8 +422,8 @@ export const Settings = () => {
           <RolePermissions onOpenMappings={() => selectGroup(ROLE_MAPPINGS_GROUP)} />
         ) : CARD_PAGES[activeGroup] ? (
           fieldsForGroup(activeGroup).length > 0
-            ? renderGroupPage(activeGroup, CARD_PAGES[activeGroup]())
-            : renderCardPage(activeGroup, CARD_PAGES[activeGroup]())
+            ? renderGroupPage(activeGroup, CARD_PAGES[activeGroup](state!))
+            : renderCardPage(activeGroup, CARD_PAGES[activeGroup](state!))
         ) : activeGroup === FEATURES_GROUP ? (
           <Card>
             {renderPageHeader(FEATURES_GROUP)}
@@ -832,11 +843,15 @@ function FieldRow({
         <select
           value={String(value ?? '')}
           onChange={(e) => onChange(e.target.value)}
-          className="w-56 px-3 py-2 border rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 border-gray-200 capitalize"
+          className={cn(
+            'w-56 px-3 py-2 border rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 border-gray-200',
+            // Names picked from another setting are shown as typed.
+            !field.options_from && 'capitalize',
+          )}
         >
           {(field.options || []).map((opt) => (
-            <option key={opt} value={opt} className="capitalize">
-              {opt}
+            <option key={opt} value={opt} className={field.options_from ? undefined : 'capitalize'}>
+              {opt === '' && field.placeholder ? field.placeholder : opt}
             </option>
           ))}
         </select>

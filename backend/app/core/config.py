@@ -363,6 +363,10 @@ class Settings(BaseSettings):
     # plaintext). Blank => target workspaces fall back to the app's own SP.
     TARGET_WORKSPACE_SP_SECRET_SCOPE: str = ""
 
+    # Named service principals, credentials in the scope above (Admin -> Settings
+    # -> Service Principals). See app/core/service_principals.py.
+    SERVICE_PRINCIPALS: List[dict] = copy.deepcopy(_yaml_config.get("service_principals", []) or [])
+
     # Databricks Job Runner (classic compute) — used by BaseDatabricksJobStateMachine
     # for workloads that need control-plane network connectivity (email, LDAP, etc.).
     # The defaults below describe a small single-node job cluster. Override the node
@@ -902,6 +906,7 @@ class Settings(BaseSettings):
     RBAC_CSV_BOM: bool = _rbac.get("csv_bom", False)
     RBAC_CSV_LINE_ENDING: str = _rbac.get("csv_line_ending", "crlf")
     RBAC_FILES_API_HOST: str = _rbac.get("files_api_host", "")
+    RBAC_EXPORT_SERVICE_PRINCIPAL: str = _rbac.get("export_service_principal", "")
     RBAC_EXPORT_ARCHIVE_DAYS: int = _rbac.get("export_archive_days", 90)
     RBAC_UC_APPROVER_GROUP: str = _rbac.get("uc_approver_group", "")
     RBAC_METASTORE_APPROVER_GROUP: str = _rbac.get("metastore_approver_group", "")

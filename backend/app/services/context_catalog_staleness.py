@@ -22,7 +22,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 
 from app.core.config import settings
 from app.db.context_catalog import ContextDocumentModel, ContextDomainModel
@@ -114,6 +114,51 @@ def is_stale(doc: ContextDocumentModel, *, now: Optional[datetime] = None, days:
     return activity < now - timedelta(days=days or stale_after_days())
 
 
+def review_reason(doc: ContextDocumentModel, *, now: Optional[datetime] = None) -> Optional[str]:
+    """Why a document needs its owner to look at it: ``"stale"``, ``"never_reviewed"`` or ``None``.
+
+    Both are the same job for the owner (confirm it's still right), so the catalog shows them behind one
+    "Needs review" filter. Stale wins when both apply. Like staleness, only published documents count:
+    drafts aren't retrieved by the agent.
+    """
+    if doc.status != "published":
+        return None
+    if is_stale(doc, now=now):
+        return "stale"
+    if doc.last_reviewed_at is None:
+        return "never_reviewed"
+    return None
+
+
+def documents_needing_review(db: Session, *, now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Every published document that is stale or has never been marked reviewed, catalog-wide.
+
+    Lightweight on purpose (id, domain and reason only) so the catalog page can filter its domain tree
+    without loading every domain's documents.
+    """
+    now = now or datetime.utcnow()
+    docs = (
+        db.query(ContextDocumentModel)
+        .options(load_only(
+            ContextDocumentModel.id,
+            ContextDocumentModel.domain_id,
+            ContextDocumentModel.status,
+            ContextDocumentModel.content_updated_at,
+            ContextDocumentModel.created_at,
+            ContextDocumentModel.updated_at,
+            ContextDocumentModel.last_reviewed_at,
+        ))
+        .filter(ContextDocumentModel.status == "published")
+        .all()
+    )
+    rows = []
+    for doc in docs:
+        reason = review_reason(doc, now=now)
+        if reason:
+            rows.append({"id": doc.id, "domain_id": doc.domain_id, "reason": reason})
+    return {"stale_after_days": stale_after_days(), "documents": rows}
+
+
 def freshness_fields(doc: ContextDocumentModel, *, now: Optional[datetime] = None) -> Dict[str, Any]:
     """Owner + freshness fields merged into the document API payload."""
     def iso(value: Optional[datetime]) -> Optional[str]:
@@ -127,6 +172,7 @@ def freshness_fields(doc: ContextDocumentModel, *, now: Optional[datetime] = Non
         "last_activity_at": iso(last_activity_at(doc)),
         "stale_notified_at": iso(doc.stale_notified_at),
         "is_stale": is_stale(doc, now=now),
+        "review_reason": review_reason(doc, now=now),
         "stale_after_days": stale_after_days(),
     }
 

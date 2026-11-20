@@ -532,6 +532,10 @@ export interface SettingField {
   min?: number;
   max?: number;
   options?: string[];
+  /** A select whose choices are the names in another (collection) setting, e.g. SERVICE_PRINCIPALS. */
+  options_from?: string;
+  /** Label for a select's blank choice. */
+  placeholder?: string;
   // Present when type === 'collection'.
   columns?: SettingColumn[];
   add_label?: string;
@@ -615,6 +619,56 @@ export async function updateSettings(
     throw new Error(error.detail || `Failed to update settings: ${response.statusText}`);
   }
   return response.json();
+}
+
+// --- Service principals (Admin → Settings → Service Principals) ---------------
+
+/** Which identity one part of the app runs as. */
+export interface ServicePrincipalUsageRow {
+  feature: string;
+  detail: string;
+  identity: string;
+  /** named = from the Service principals list; target = a target workspace's own keys; app = the app's SP; user = the signed-in person. */
+  kind: 'named' | 'target' | 'app' | 'user';
+  ok: boolean;
+  problem: string;
+  configured_in: string;
+}
+
+export interface ServicePrincipalUsage {
+  rows: ServicePrincipalUsageRow[];
+  names: string[];
+}
+
+export interface ServicePrincipalCheck {
+  name: string;
+  ok: boolean;
+  message: string;
+  application_id: string;
+  display_name: string;
+}
+
+async function settingsJson<T>(response: Response, what: string): Promise<T> {
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to ${what}: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function getServicePrincipalUsage(): Promise<ServicePrincipalUsage> {
+  const response = await fetch(`${API_BASE_URL}/settings/service-principals/usage`, { headers: getHeaders() });
+  return settingsJson(response, 'load service principal usage');
+}
+
+/** Read a saved service principal's secrets and sign in as it. */
+export async function checkServicePrincipal(name: string): Promise<ServicePrincipalCheck> {
+  const response = await fetch(`${API_BASE_URL}/settings/service-principals/check`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({ name }),
+  });
+  return settingsJson(response, 'check the service principal');
 }
 
 // ---------------------------------------------------------------------------
@@ -2365,7 +2419,18 @@ export interface ContextDocumentSummary {
   last_activity_at?: string | null;
   stale_notified_at?: string | null;
   is_stale?: boolean;
+  /** Why it needs its owner's attention (published documents only); null when it doesn't. */
+  review_reason?: ContextReviewReason | null;
   stale_after_days?: number;
+}
+
+/** 'stale' wins when a document is both stale and never marked reviewed. */
+export type ContextReviewReason = 'stale' | 'never_reviewed';
+
+/** Catalog-wide "Needs review" list: just enough to filter the domain tree. */
+export interface ContextReviewQueue {
+  stale_after_days: number;
+  documents: { id: string; domain_id: string; reason: ContextReviewReason }[];
 }
 
 export interface ContextStaleDocument {
@@ -2690,6 +2755,11 @@ async function contextStalenessRequest<T>(path: string, method: 'GET' | 'POST', 
 /** Confirm a document is still accurate without editing it (restarts its staleness clock). */
 export function markContextDocumentReviewed(documentId: string): Promise<ContextDocument> {
   return contextStalenessRequest(`/documents/${documentId}/review`, 'POST', 'mark document reviewed');
+}
+
+/** Every published document that is stale or has never been marked reviewed, with its domain. */
+export function getContextReviewQueue(): Promise<ContextReviewQueue> {
+  return contextStalenessRequest('/review-queue', 'GET', 'load documents needing review');
 }
 
 /** Teams reminder configuration plus every stale published document. */
@@ -4486,6 +4556,7 @@ export const api = {
   exportContextCatalogBundle,
   importContextCatalogBundle,
   markContextDocumentReviewed,
+  getContextReviewQueue,
   getContextStaleness,
   runContextStaleReminders,
   sendContextStaleTestMessage,

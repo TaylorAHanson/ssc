@@ -84,7 +84,7 @@ def test_section_layout():
         ("Watch Tower", ["OmniGuard", "Target Workspaces", "Data Certification", "Metadata Manager",
                          "Access Rules"]),
             ("Control Tower", ["Workflow Studio", "Context Catalog", "Preview Features"]),
-        ("Platform", ["Infrastructure"]),
+        ("Platform", ["Service Principals", "Infrastructure"]),
     ]
 
 

@@ -144,14 +144,22 @@ accurate. It starts as whoever created the document; change it in the
 back to its domain's primary owner for reminders.
 
 - The document list shows each document's owner and how long ago it was last
-  updated. Sort it by last updated, title or owner, filter it by owner (or
-  **No owner**), or tick **Stale only**.
+  updated. Sort it by last updated, title or owner, or filter it by owner (or
+  **No owner**).
 - A published document is marked **Stale** when nobody has edited it or marked
   it reviewed within the stale threshold (90 days unless changed). Only
   changes to the title, body, link or type count as an edit. The assistant
   reading a document doesn't, and neither do changes to the status or owner.
-- If a stale document is still accurate, open it and select
+- A published document that no one has ever marked reviewed is marked
+  **Never reviewed**, however new it is.
+- If a stale or never-reviewed document is still accurate, open it and select
   **Mark reviewed**. That restarts its clock without changing the content.
+- **Needs review**, under the counts at the top of the page, filters the
+  whole catalog to the published documents that are stale or never reviewed.
+  Its badge shows how many there are. While it's on, the domain tree shows only
+  the domains that hold one (and the domains above them), each with its count,
+  and each domain's list shows only those documents. Select it again to show
+  everything. Drafts are never included, and AI review grades don't affect it.
 - Change the threshold under **Admin → Settings → Context Catalog**.
 
 ### AI review

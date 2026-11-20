@@ -828,3 +828,69 @@ class _Unclosable:
 
     def __getattr__(self, name):
         return getattr(self._session, name)
+
+
+# --- Export service principal ---------------------------------------------------
+
+def _named_sp(monkeypatch, fake_sdk, name="rbac-writer"):
+    """Point exports at a named SP; record which names were asked for and hand back the fake client."""
+    from app.core import service_principals
+
+    asked = []
+
+    def workspace_client(sp_name, host=None):
+        asked.append(sp_name)
+        return fake_sdk()
+
+    monkeypatch.setattr(settings, "RBAC_EXPORT_SERVICE_PRINCIPAL", name)
+    monkeypatch.setattr(service_principals, "workspace_client", workspace_client)
+    return asked
+
+
+def test_exports_write_as_the_export_service_principal(db_session, imported, monkeypatch, fake_sdk):
+    asked = _named_sp(monkeypatch, fake_sdk)
+    set_paths(monkeypatch, dev="/Volumes/main/rbac/exports/dev")
+    run = csv_export.run_export(db_session, trigger="manual")
+    assert run.status == "completed"
+    assert asked == ["rbac-writer"]
+    assert len(fake_sdk.instances) == 1
+
+
+def test_export_service_principal_that_cant_sign_in_fails_without_falling_back(
+    db_session, imported, monkeypatch, fake_sdk,
+):
+    from app.core import service_principals
+
+    def broken(sp_name, host=None):
+        raise service_principals.ServicePrincipalError('Secret "rbac_writer_client_id" in scope "s" is empty.')
+
+    monkeypatch.setattr(settings, "RBAC_EXPORT_SERVICE_PRINCIPAL", "rbac-writer")
+    monkeypatch.setattr(service_principals, "workspace_client", broken)
+    set_paths(monkeypatch, dev="/Volumes/main/rbac/exports/dev")
+    run = csv_export.run_export(db_session, trigger="manual")
+    assert run.status == "failed"
+    assert fake_sdk.instances == []  # never wrote as the app's SP instead
+    from app.db.rbac import RbacExportFileModel
+
+    files = db_session.query(RbacExportFileModel).filter(RbacExportFileModel.export_id == run.id)
+    errors = [f.error for f in files if (f.path or "").startswith("/Volumes/")]
+    assert errors and all("export service principal can't sign in" in (e or "") for e in errors)
+
+
+def test_path_check_names_the_export_service_principal(monkeypatch, fake_sdk):
+    class PermissionDenied(Exception):
+        pass
+
+    def denied(self, file_path, contents, overwrite=False):
+        raise PermissionDenied("User does not have WRITE VOLUME on Volume 'main.rbac.exports'.")
+
+    _named_sp(monkeypatch, fake_sdk)
+    monkeypatch.setattr(FakeFiles, "upload", denied)
+    set_paths(monkeypatch, metastore="/Volumes/main/rbac/exports/metastore")
+    result = csv_export.test_path("metastore")
+    assert result.ok is False
+    assert 'service principal "rbac-writer" needs write access' in result.message
+
+    monkeypatch.setattr(FakeFiles, "upload", lambda self, p, c, overwrite=False: None)
+    ok = csv_export.test_path("metastore")
+    assert ok.ok and ok.message.startswith('Service principal "rbac-writer" can write to')

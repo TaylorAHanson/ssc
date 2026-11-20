@@ -65,7 +65,7 @@ The certification-write grants (`USE CATALOG`, `USE SCHEMA`, `APPLY TAG`, `SELEC
 -- GRANT MANAGE ON CATALOG <catalog> TO `<app-sp>`;   -- only if the RBAC check is enabled
 ```
 
-Access Rules export (only when `features.rbac` is on and an export path is set). Each environment's path, and the metastore sheet's, needs write access. **Test** on the Access Rules page's Exports tab writes and deletes a probe file to prove it:
+Access Rules export (only when `features.rbac` is on and an export path is set). Each environment's path, and the metastore sheet's, needs write access. **Test** on the Access Rules page's Exports tab writes and deletes a probe file to prove it. The writer is the App SP unless **Admin → Settings → Access Rules → Export service principal** (`RBAC_EXPORT_SERVICE_PRINCIPAL`) names an entry in **Admin → Settings → Service Principals** (`SERVICE_PRINCIPALS`); then grant these to that SP instead (`<export-sp>`), and the App SP needs only `READ` on the secret scope holding its keys. A named export SP never falls back to the App SP:
 
 ```sql
 -- Export path on a UC volume, e.g. /Volumes/<catalog>/<schema>/<volume>/rbac/dev
@@ -171,13 +171,13 @@ GRANT SELECT ON TABLE system.access.table_lineage TO `<cert-sp>`;
 | Use of a `system.ai.*` model | embedding model (`CONTEXT_CATALOG_EMBEDDING_MODEL`), via the AI Gateway | ✓ | — | Context Catalog semantic search (app only); without it search uses words only. `CAN QUERY` instead, if the setting names a custom serving endpoint |
 | `READ` | target-SP secret scope | ✓ | — | App loads each target SP's credentials |
 | Workspace admin | target workspace | ✓ (home) | ✓ | Scan/remediate jobs, clusters, apps, warehouses, …; turn approved previews on/off |
-| `READ VOLUME`, `WRITE VOLUME` (+ `USE CATALOG`, `USE SCHEMA`) | each Access Rules export volume | ✓§ | — | Write the Access Rules CSVs the Terraform pipeline reads |
+| `READ VOLUME`, `WRITE VOLUME` (+ `USE CATALOG`, `USE SCHEMA`) | each Access Rules export volume | ✓§ | — | Write the Access Rules CSVs the Terraform pipeline reads (the export SP instead, when one is set) |
 | `CAN MANAGE` | each Access Rules export workspace folder | ✓§ | — | Same, when the export path is a workspace folder |
 | `USE SCHEMA`, `CREATE TABLE`, `SELECT`, `MODIFY` (+ `USE CATALOG`) | app telemetry schema | ✓¶ | — | Write the app's OpenTelemetry logs, metrics and spans to Unity Catalog |
 
 `✓*` = conditional (only when the RBAC / access-controls certification check is enabled).
 `✓†` = only the Sentinel SP for the data-certification workspace (`SENTINEL_DATA_CERT_WORKSPACE`) needs the Unity Catalog grants; SPs that only scan workspace resources don't.
-`✓§` = only for the export paths you configure, and only when Access Rules (`features.rbac`) is on.
+`✓§` = only for the export paths you configure, only when Access Rules (`features.rbac`) is on, and only when no **Export service principal** is set (otherwise that SP needs them).
 `✓¶` = only for targets with app telemetry export enabled (`telemetry_export_destinations` in `databricks.yml`).
 `°` = optional. Without the three system-table grants the data-asset sync logs a warning and carries on, and metric views show no downstream dashboards.
 `‖` = only on the deployment that enforces metadata (`METADATA_RECONCILE_MODE=enforce`), on the catalogs it reconciles. Deployments in `plan` mode only read.

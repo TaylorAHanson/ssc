@@ -31,6 +31,7 @@ from croniter import CroniterBadCronError, croniter
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
+from app.core import service_principals
 from app.core.config import _yaml_config, settings
 from app.db.rbac import (
     RULE_ACTIVE,
@@ -238,7 +239,11 @@ def _files_v3_put(url: str, headers: Dict[str, str], data: bytes) -> requests.Re
 
 
 class _Storage:
-    """Writes to a UC Volume or a Workspace folder as the app's service principal, or to a local folder.
+    """Writes to a UC Volume or a Workspace folder as the export service principal, or to a local folder.
+
+    The export service principal is ``RBAC_EXPORT_SERVICE_PRINCIPAL``, a name from
+    Admin → Settings → Service Principals; blank means the app's own SP. A named
+    one that can't sign in fails every write with the reason; it never falls back.
 
     Volume files go through Files API 3.0, the only Files API that stores the
     upload's Content-Type (2.0 always stores ``application/octet-stream``), so
@@ -246,6 +251,7 @@ class _Storage:
     """
 
     def __init__(self) -> None:
+        self.sp_name: str = (getattr(settings, "RBAC_EXPORT_SERVICE_PRINCIPAL", "") or "").strip()
         self._client: Any = None
         self._client_error: Optional[Exception] = None
         self._files_host: Optional[str] = None
@@ -257,13 +263,21 @@ class _Storage:
             raise self._client_error
         if self._client is None:
             try:
-                from databricks.sdk import WorkspaceClient
+                if self.sp_name:
+                    self._client = service_principals.workspace_client(self.sp_name)
+                else:
+                    from databricks.sdk import WorkspaceClient
 
-                self._client = WorkspaceClient()
+                    self._client = WorkspaceClient()
             except Exception as exc:  # noqa: BLE001 - reported per file
                 self._client_error = exc
                 raise
         return self._client
+
+    @property
+    def who(self) -> str:
+        """The identity writing, as it reads mid-sentence: 'the app's service principal' or 'service principal "x"'."""
+        return f'service principal "{self.sp_name}"' if self.sp_name else "the app's service principal"
 
     def files_host(self) -> str:
         """The Files API 3.0 host: the Access Rules setting if set, else the workspace's regional host."""
@@ -337,7 +351,9 @@ def _error_names(exc: BaseException) -> Set[str]:
     return {cls.__name__ for cls in type(exc).__mro__}
 
 
-def _describe_error(exc: BaseException, kind: str) -> str:
+def _describe_error(exc: BaseException, kind: str, who: str = "the app's service principal") -> str:
+    if isinstance(exc, service_principals.ServicePrincipalError):
+        return f"The export service principal can't sign in: {exc}"[:500]
     if isinstance(exc, FilesApiV3NotEnabled):
         return V3_NOT_ENABLED
     if isinstance(exc, FilesApiHostError):
@@ -347,9 +363,9 @@ def _describe_error(exc: BaseException, kind: str) -> str:
     if "PermissionError" in names or "PermissionDenied" in names or "PERMISSION_DENIED" in detail:
         if kind == "local":
             return f"Permission denied: the app can't write to this folder. ({detail})"
-        return f"Permission denied: the app's service principal needs write access to this folder. ({detail})"
+        return f"Permission denied: {who} needs write access to this folder. ({detail})"
     if "NotFound" in names or "RESOURCE_DOES_NOT_EXIST" in detail or detail.startswith("NOT_FOUND"):
-        return f"The folder doesn't exist, or the app's service principal can't see it. ({detail})"
+        return f"The folder doesn't exist, or {who} can't see it. ({detail})"
     return detail
 
 
@@ -449,7 +465,7 @@ def _write_targets(db: Session, export_id: str, now: datetime) -> Tuple[List[Rba
                 storage.write(kind, row.path, data)
             except Exception as exc:  # noqa: BLE001 - one bad file mustn't stop the others
                 logger.warning("Couldn't export %s to %s: %s", sheet, row.path, exc)
-                row.error = _describe_error(exc, kind)
+                row.error = _describe_error(exc, kind, storage.who)
             else:
                 row.status = "written"
                 row.content = data.decode("utf-8")
@@ -775,14 +791,14 @@ def test_path(target: str) -> PathCheckResult:
     except Exception as exc:  # noqa: BLE001
         logger.info("Export path check failed for %s (%s): %s", target, path, exc)
         return PathCheckResult(target=target, path=path, ok=False,
-                               message=f"Couldn't write to {path}: {_describe_error(exc, kind)}")
+                               message=f"Couldn't write to {path}: {_describe_error(exc, kind, storage.who)}")
     try:
         storage.delete(kind, probe)
     except Exception as exc:  # noqa: BLE001
         return PathCheckResult(target=target, path=path, ok=True,
                                message=(f"The app can write to {path}, but couldn't delete the probe file "
-                                        f"{probe} ({_describe_error(exc, kind)}). Delete it by hand."))
-    who = "The app" if kind == "local" else "The app's service principal"
+                                        f"{probe} ({_describe_error(exc, kind, storage.who)}). Delete it by hand."))
+    who = "The app" if kind == "local" else storage.who[0].upper() + storage.who[1:]
     return PathCheckResult(target=target, path=path, ok=True, message=f"{who} can write to {path}.")
 
 

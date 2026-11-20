@@ -94,7 +94,7 @@ export function Home() {
                 <>
                     {' '}For analysis, use{' '}
                     <a href={genieOneUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
-                        Genie One
+                        Talk to Your Data
                     </a>
                     .
                 </>

@@ -163,6 +163,19 @@ visit most often:
   the **Training** page and satisfy any workflow step that requires a course.
 - **Target Workspaces**: the Databricks workspaces that OmniGuard scans and
   Data Certification checks.
+- **Service Principals**: the service principals {{brand_name}} can act as
+  besides its own. Each row has a name, the names of the keys holding its
+  client ID and client secret in the secret scope set under **Target
+  Workspaces** (never the values), and a note on what it's for. Other settings
+  pick one by name, such as **Access Rules → Export service principal**.
+  Adding a row grants nothing; give the service principal its permissions in
+  Databricks. Save the list before picking a new row elsewhere.
+  - **Check** signs in as a saved service principal and shows who it is, or
+    what's wrong: a key name that isn't in the scope, a scope {{brand_name}}
+    can't read, or a client ID and secret that don't belong together.
+  - **Who uses which service principal** lists each part of {{brand_name}},
+    the identity it runs as and where to change it, from the saved settings.
+    A row picking a service principal that isn't in the list is flagged.
 - **Infrastructure → Logging**: **Log page views and browser errors** writes
   each page a person opens, and any error their browser hits, to
   {{brand_name}}'s own log, with their email and app roles. It's on by

@@ -37,6 +37,16 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "target_workspaces": [],
 
     # -------------------------------------------------------------------
+    # Named service principals (Admin -> Settings -> Service Principals).
+    # One list of the SPs this installation uses, so a feature can pick an SP
+    # by name instead of holding its own key names. Credentials live in the
+    # same secret scope as the target workspaces' (TARGET_WORKSPACE_SP_SECRET_SCOPE).
+    # Each entry: {name, client_id_key, client_secret_key, purpose}.
+    # Used today by Access Rules exports (rbac.export_service_principal).
+    # -------------------------------------------------------------------
+    "service_principals": [],
+
+    # -------------------------------------------------------------------
     # Branding. Scalar mirror lives in Settings.BRAND_*; these are the
     # defaults an unbranded deploy renders (env vars / DB overrides win).
     # -------------------------------------------------------------------
@@ -612,6 +622,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         # served from the workspace's regional host. Blank = worked out from
         # the workspace; set it only if that host isn't the one to use.
         "files_api_host": "",
+        # Name of an entry in service_principals that writes the exports (and
+        # runs the Exports tab's Test). Blank = the app's own service principal,
+        # which then needs write access to every export folder.
+        "export_service_principal": "",
         # How long each exported file is kept for download. 0 = forever.
         "export_archive_days": 90,
         # Databricks group display names. Members approve requests of that

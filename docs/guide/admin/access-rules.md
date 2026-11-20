@@ -264,8 +264,8 @@ uses:
   blank to let people type any name.
 - **Metastore export path**, **Export schedule**, **Also export after every
   change**, **Write a byte-order mark**, **Line ending**, **Files API host**
-  (blank uses the workspace's regional host), and how long exported files are
-  kept.
+  (blank uses the workspace's regional host), **Export service principal**,
+  and how long exported files are kept.
 - The three approver groups and **Viewer roles**.
 - **Max row changes per save**, and the minimum reason and justification
   lengths.
@@ -296,7 +296,15 @@ that page lists the **Environments** above and starts on the one whose key or
 aliases include `prd`, `prod` or `production`.
 
 Export paths can be a Unity Catalog volume (`/Volumes/...`) or a workspace
-folder. {{brand_name}}'s service principal needs write access to each one.
+folder. Whichever service principal writes the exports needs write access to
+each one. By default that's {{brand_name}}'s own. To keep that write access
+away from it, add a dedicated service principal under
+[Admin → Settings → Service Principals](settings-and-access.md#other-settings),
+grant it write access to the export folders, and pick it as **Export service
+principal**. It writes every environment's files and the metastore sheet, and
+**Test** on the Exports tab writes as it too. If it can't sign in, each file
+fails with the reason; exports never fall back to {{brand_name}}'s own service
+principal.
 
 Files written to a volume are stored with the content type
 `text/csv; charset=utf-8`, so a pipeline or tool reading the cloud storage
