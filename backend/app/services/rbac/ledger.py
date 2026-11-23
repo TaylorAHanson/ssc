@@ -1172,6 +1172,56 @@ def prepare_access_change(db: Session, change: AccessChangeIn, *, requester: Opt
     return AccessPreview(group_ref=audit.new_id() if len(proposals) > 1 else None, proposals=proposals)
 
 
+# --- Planning grants for a direct edit (bulk grant import, ADR 0007) ----------------------
+
+
+def active_rows(db: Session, plane: str) -> Tuple[List[RuleRow], Dict[str, int]]:
+    """A plane's active rows in sheet order, and each row's version by id."""
+    return _active_rows(db, plane)
+
+
+def normalize_items(items: Sequence[AccessItem]) -> List[Tuple[AccessItem, List[Finding]]]:
+    """Each item normalized as a request's would be, with the deny findings that stop it being planned."""
+    return [(n.item, n.findings) for n in (_normalize_item(i, item) for i, item in enumerate(items))]
+
+
+def plan_with_prerequisites(
+    plane: str, rows: List[RuleRow], items: Sequence[AccessItem],
+) -> Tuple[List[AccessItem], List[AccessItem], List[RowDiff], List[ItemOutcome]]:
+    """``(planned, added, diffs, outcomes)``: ``items`` with prerequisites added, planned against ``rows``.
+
+    The same planner a request uses (ADR 0005 D1). ``added`` holds the very
+    objects inserted into ``planned``; ``outcomes[i].index`` indexes ``planned``.
+    """
+    planned, added = cells.add_prerequisites(list(items), rows)
+    diffs, outcomes = _Planner(plane, rows).plan(planned)
+    return planned, added, diffs, outcomes
+
+
+def change_set_from_diffs(diffs: Sequence[RowDiff], versions: Dict[str, int], *, reason: str = "") -> ChangeSetIn:
+    """A direct edit that makes the planned diffs, with each touched row's current version."""
+    changes: List[RowChange] = []
+    for diff in diffs:
+        if diff.op == "create":
+            after = diff.after or {}
+            changes.append(RowChange(
+                op="create", sheet=diff.sheet,
+                cells={f: "" if after.get(f) is None else str(after.get(f)) for f in CANONICAL_FIELDS},
+                extra={str(k): str(v) for k, v in (after.get("extra") or {}).items()} or None,
+            ))
+            continue
+        if diff.rule_id not in versions:
+            raise LedgerError(f"Rule {diff.rule_id} is no longer active. Preview again.")
+        if diff.op == "delete":
+            changes.append(RowChange(op="delete", rule_id=diff.rule_id, version=versions[diff.rule_id]))
+            continue
+        before, after = diff.before or {}, diff.after or {}
+        changed = {f: "" if after.get(f) is None else str(after.get(f))
+                   for f in CANONICAL_FIELDS if (after.get(f) or "") != (before.get(f) or "")}
+        changes.append(RowChange(op="update", rule_id=diff.rule_id, version=versions[diff.rule_id], cells=changed))
+    return ChangeSetIn.model_construct(changes=changes, reason=reason)
+
+
 AtomKey = Tuple[str, tuple, str, str, str]
 
 

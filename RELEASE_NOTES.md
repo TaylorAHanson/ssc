@@ -13,6 +13,16 @@ Format rules (the app parses this file, so keep to them):
   before), and what the reader will notice or should do now.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
 
+## 3.5.0 — 2026-11-23
+
+### Access Rules
+
+- **You can now grant read access to many groups at once from a CSV.** Loading a batch of read-access requests meant adding rows one at a time in the grid, or asking the assistant to copy each line, which could mistype a name or skip a line without anyone noticing. On the **Import** tab, **Bulk SELECT grants (CSV)** takes a two-column file: a schema (`catalog.schema` or `catalog.schema.*`) or view (`catalog.schema.view`) in column A, and one group in column B. A header row is optional. Each line grants `SELECT`, and nothing changes until you review the preview and save it with a reason.
+- **Bulk grants are written the way you would edit the sheet by hand.** A group is added to the end of an existing row's group list where the securable and privileges match, rather than getting a parallel row, and `USE_CATALOG` and `USE_SCHEMA` are added for groups that don't have them yet. Grants a group already holds are skipped. The export the Terraform pipeline reads keeps its usual layout.
+- **The environment is read from the catalog name, and never guessed.** A part of the name between underscores that matches an environment, such as the `prd` in `enterprise_external_prd_sfedhfed`, decides which sheet a line goes to. A catalog whose name matches no environment, or more than one, is rejected until you list it under that environment's **Catalogs** in Settings, so a grant can't land on the wrong sheet.
+- **The preview flags lines that wouldn't change anything.** A view the group can already read through its schema or catalog grant is marked **Covered** and isn't written, and a repeated line is written once. Neither stops you saving. Lines that can't be read are listed with their line number, and you can only save once none are left.
+- **A bulk save follows the same rules as a grid edit.** It's recorded as one change set in History and can be reverted. Environments with the two-person rule turn it into a request for another approver. If the rules change between your preview and your save, the save is refused and asks you to preview again, so what's saved is always what you reviewed.
+
 ## 3.4.0 — 2026-11-19
 
 ### Home

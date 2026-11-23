@@ -12,6 +12,9 @@
                                            under the two-person rule)
 - ``GET  /imports``, ``POST /imports/preview``, ``POST /imports``
                                            workbook import (Access Rules admin)
+- ``POST /grant-imports/preview``, ``POST /grant-imports``
+                                           bulk SELECT grants from a CSV (Access Rules admin,
+                                           ADR 0007), saved as a direct edit
 - ``GET  /exports``, ``POST /exports``     export runs, the schedule and targets; export now
 - ``GET  /exports/{id}/files/{file_id}``   download an archived CSV (by id, never by path)
 - ``POST /exports/test-path``              write and delete a probe file at a target's path
@@ -50,6 +53,7 @@ from app.models.rbac import (
     ExportRun,
     ExportRunIn,
     ExportStatus,
+    GrantImportPreview,
     HistoryPage,
     ImportPreview,
     ImportResult,
@@ -63,7 +67,7 @@ from app.models.rbac import (
     SheetInfo,
 )
 from app.models.user import User
-from app.services.rbac import approvers, csv_export, layout, ledger, workbook_import
+from app.services.rbac import approvers, csv_export, grant_import, layout, ledger, workbook_import
 from app.services.rbac.approvers import RbacForbidden
 from app.services.rbac.csv_export import ExportBusy
 from app.services.rbac.ledger import ChangeBlocked, LedgerError, VersionConflict
@@ -73,6 +77,7 @@ logger = logging.getLogger(__name__)
 
 MAX_WORKBOOK_BYTES = 25 * 1024 * 1024
 MAX_COMPARE_BYTES = 20 * 1024 * 1024
+MAX_GRANT_CSV_BYTES = 2 * 1024 * 1024
 # Room for multipart boundaries, part headers and the small text fields.
 _FORM_OVERHEAD_BYTES = 64 * 1024
 _FILENAME_UNSAFE = re.compile(r"[^A-Za-z0-9._ -]")
@@ -202,6 +207,14 @@ async def _workbook_upload(request: Request) -> Tuple[FormData, str, bytes]:
     return form, filename, data
 
 
+async def _grant_csv_upload(request: Request) -> Tuple[FormData, str, bytes]:
+    form = await _read_form(request, limit=MAX_GRANT_CSV_BYTES)
+    filename, data = await _form_file(form, limit=MAX_GRANT_CSV_BYTES)
+    if not filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Bulk grants are read from a .csv file.")
+    return form, filename, data
+
+
 # --- Blocking work (run in a worker thread) ------------------------------------------
 
 
@@ -244,6 +257,13 @@ def _commit_change(db: Session, user: User, change: ChangeSetIn) -> ChangeSetRes
     logger.info("Access Rules: %s filed request %s for a %s edit (%d rows) under the two-person rule",
                 user.email, request_id, planes[0], len(preview.diffs))
     return ChangeSetResult(request_id=request_id, diffs=preview.diffs, findings=preview.findings)
+
+
+def _run_grant_import(db: Session, user: User, data: bytes, filename: str, *, fingerprint: str,
+                      reason: str) -> ChangeSetResult:
+    change = grant_import.planned_change(db, data, filename, expected_fingerprint=fingerprint,
+                                         reason=reason, actor=user.email)
+    return _commit_change(db, user, change)
 
 
 def _change_set_planes(db: Session, cs: RbacChangeSetModel) -> List[str]:
@@ -464,6 +484,40 @@ async def run_import(
         )
     logger.info("Access Rules: %s ran import %s (change set %s, %d created, %d deleted)",
                 user.email, result.import_id, result.change_set_id, result.created, result.deleted)
+    return result
+
+
+@router.post("/grant-imports/preview", response_model=GrantImportPreview)
+async def preview_grant_import(
+    request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user),
+) -> GrantImportPreview:
+    """Multipart ``file`` (.csv, at most 2 MB): what saving the bulk SELECT grants would change."""
+    with _http_errors():
+        _require_rules_admin(user, "bulk-import grants")
+        _, filename, data = await _grant_csv_upload(request)
+        preview, _ = await asyncio.to_thread(grant_import.plan, db, data, filename, actor=user.email)
+    logger.info("Access Rules: %s previewed bulk grants from %s (%d lines, %d row changes, blocked %s)",
+                user.email, filename, len(preview.lines), len(preview.diffs), preview.blocked)
+    return preview
+
+
+@router.post("/grant-imports", response_model=ChangeSetResult)
+async def run_grant_import(
+    request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user),
+) -> ChangeSetResult:
+    """Multipart ``file`` (the previewed CSV), ``fingerprint`` and ``reason``.
+
+    Saved as one direct edit, or filed as a request under the two-person rule.
+    """
+    with _http_errors():
+        _require_rules_admin(user, "bulk-import grants")
+        form, filename, data = await _grant_csv_upload(request)
+        result = await asyncio.to_thread(
+            _run_grant_import, db, user, data, filename,
+            fingerprint=_form_text(form, "fingerprint"), reason=_form_text(form, "reason"),
+        )
+    logger.info("Access Rules: %s saved bulk grants from %s (change set %s, request %s, %d rows)",
+                user.email, filename, result.change_set_id, result.request_id, len(result.diffs))
     return result
 
 

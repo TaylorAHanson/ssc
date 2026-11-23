@@ -8,7 +8,8 @@ import type {
 } from '../types';
 import type {
   RbacChangeSetDetail, RbacChangeSetIn, RbacChangeSetPreview, RbacChangeSetResult, RbacCompareResult,
-  RbacExportRun, RbacExportStatus, RbacHistoryPage, RbacImportPreview, RbacImportResult, RbacImportSummary,
+  RbacExportRun, RbacExportStatus, RbacGrantImportPreview, RbacHistoryPage, RbacImportPreview, RbacImportResult,
+  RbacImportSummary,
   RbacPathCheckResult, RbacPermissions, RbacRulesPage, RbacSheetInfo,
 } from '../types/rbac';
 
@@ -4420,6 +4421,14 @@ export async function revertRbacChangeSet(changeSetId: string, reason: string): 
   });
 }
 
+export async function previewRbacGrantImport(file: File): Promise<RbacGrantImportPreview> {
+  return rbacFetch('/grant-imports/preview', { method: 'POST', body: rbacForm({ file }) }, '');
+}
+
+export async function runRbacGrantImport(file: File, fingerprint: string, reason: string): Promise<RbacChangeSetResult> {
+  return rbacFetch('/grant-imports', { method: 'POST', body: rbacForm({ file, fingerprint, reason }) }, '');
+}
+
 export async function getRbacImports(): Promise<RbacImportSummary[]> {
   return rbacFetch('/imports');
 }
@@ -4646,6 +4655,8 @@ export const api = {
   getRbacImports,
   previewRbacImport,
   runRbacImport,
+  previewRbacGrantImport,
+  runRbacGrantImport,
   getRbacExports,
   runRbacExport,
   testRbacExportPath,

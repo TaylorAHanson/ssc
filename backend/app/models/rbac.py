@@ -407,6 +407,39 @@ class ImportResult(BaseModel):
     duplicates_removed: bool = False
 
 
+class GrantImportLine(BaseModel):
+    """One line of a bulk SELECT grant CSV and what saving it would do (ADR 0007)."""
+
+    # The line number in the file (1-based, the header included).
+    line: int
+    securable: str
+    group: str
+    environment: Optional[str] = None
+    # schema | view, once column A parses.
+    securable_type: Optional[str] = None
+    # change = edits the rules; already_held / covered / duplicate aren't written;
+    # rejected blocks the save.
+    status: Literal["change", "already_held", "covered", "duplicate", "rejected"]
+    message: str = ""
+
+
+class GrantImportPreview(BaseModel):
+    filename: Optional[str] = None
+    header_skipped: bool = False
+    lines: List[GrantImportLine] = Field(default_factory=list)
+    # USE_CATALOG / USE_SCHEMA grants added for the lines, e.g. "USE_CATALOG on sales_prd for g (prd)".
+    prerequisites: List[str] = Field(default_factory=list)
+    diffs: List[RowDiff] = Field(default_factory=list)
+    findings: List[Finding] = Field(default_factory=list)
+    max_changes: int = 0
+    blocked: bool = False
+    # Why the save is blocked, fit for the user.
+    blocked_reasons: List[str] = Field(default_factory=list)
+    two_person_required: bool = False
+    # Identifies the planned change; saving refuses if the plan has changed since.
+    fingerprint: str = ""
+
+
 class ImportSummary(BaseModel):
     id: str
     filename: Optional[str] = None

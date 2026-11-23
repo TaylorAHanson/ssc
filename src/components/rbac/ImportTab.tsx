@@ -9,6 +9,7 @@ import { Input } from '../ui/input';
 import { cn } from '../../lib/utils';
 import { ColGroup, ResetColumnsButton, ResizableTh } from './ColumnResizer';
 import { FindingList } from './FindingList';
+import { GrantImportCard } from './GrantImportCard';
 import { Badge, ErrorBanner, Notice, SectionTitle, Skeleton, type Tone, type ToastMessage } from './ui';
 import { useLoad } from './useLoad';
 import { useResizableColumns } from './useResizableColumns';
@@ -118,6 +119,8 @@ export function ImportTab({ permissions, notify, onOpenHistory }: {
           }}
         />
       )}
+
+      <GrantImportCard permissions={permissions} notify={notify} onOpenHistory={onOpenHistory} />
 
       <section>
         <SectionTitle actions={<ResetColumnsButton columns={widths} />}>Recent imports</SectionTitle>

@@ -248,6 +248,60 @@ open. A reset is recorded in History like any other change, so it can be
 reverted. Leave it off in production: a re-import discards every change made
 in {{brand_name}} since the seed.
 
+### Bulk SELECT grants (CSV)
+
+Use this to give read access to many groups at once, for example a batch of a
+hundred requests. It adds to the current rules; it doesn't replace them.
+
+**The file** is a CSV with two columns. A header row is optional: the first
+row is skipped when column A doesn't look like a securable.
+
+| Column A | Means |
+|---|---|
+| `catalog.schema` or `catalog.schema.*` | `SELECT` on the schema |
+| `catalog.schema.view` | `SELECT` on the view |
+
+Column B names one group. Every line is a group grant of `SELECT` on a
+Unity Catalog securable; other privileges, service principals and workspace
+rules aren't covered here.
+
+**The environment comes from the catalog name.** {{brand_name}} looks for a
+part of the name, between underscores, that matches an environment's key,
+alias or sheet suffix: `enterprise_gold_prd`, `iplegal_ingest_prd` and
+`enterprise_external_prd_sfedhfed` all go to `prd`. Only whole parts count, so
+the `prd` at the end of `dpfprprd` doesn't. If the name matches no
+environment, or more than one, the line is rejected. To place such a catalog,
+list it under that environment's **Catalogs** in Settings; that list is checked
+first. A catalog whose rules already sit on another environment's sheet is
+rejected too, rather than written to a second sheet.
+
+**The preview** lists every line with what saving it would do:
+
+- **Will be written.** The group is added to an existing row with the same
+  securable and privileges where there is one, as you would edit the sheet by
+  hand; otherwise a new row is added. A schema line writes
+  `USE_SCHEMA;SELECT`, as the sheet does.
+- **Already held.** The group has this access already, so nothing is written.
+- **Covered.** A view line whose group already reads the view's schema or
+  catalog, or gets `SELECT` on the schema elsewhere in the file. It isn't
+  written, and it doesn't stop you saving.
+- **Duplicate.** The same grant as an earlier line, so it's written once.
+- **Rejected.** The line can't be read, names no environment, names more than
+  one group, or has values past column B. Any rejected line stops you saving:
+  fix the file and upload it again.
+
+Under the lines, the preview shows the `USE_CATALOG` and `USE_SCHEMA` grants
+added for groups that lack them, any policy findings, and the exact row
+changes.
+
+**Saving** needs a reason and records everything as one change set in History,
+which you can revert, and the next export carries it. If an environment in the
+file has the two-person rule, saving files a request for another approver
+instead. A change set has a size limit (**Max row changes per save** in
+Settings); a file that needs more row changes than that has to be split. If
+someone changes the rules between your preview and your save, the save is
+refused and asks you to preview again.
+
 ## Settings
 
 **Admin → Settings → Watch Tower → Access Rules** holds everything the page

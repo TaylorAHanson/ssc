@@ -870,3 +870,60 @@ def test_export_to_a_local_folder_and_download_the_file_by_id(api, db, monkeypat
     assert db.query(RbacExportModel).count() == 1
     status = api(VIEWER).get(f"{BASE}/exports").json()
     assert status["runs"][0]["id"] == run["id"] and status["pending_changes"] is False
+
+
+# --- Bulk SELECT grants from a CSV (ADR 0007) ------------------------------------------------
+
+
+GRANTS_CSV = b"Securable,Group\r\nsales_dev.orders.*,g_new\r\nsales_dev.orders.daily,g_view\r\n"
+
+
+def test_grant_import_is_rules_admin_only_and_csv_only(api):
+    for user in (UC_MEMBER, VIEWER, OUTSIDER):
+        res = api(user).post(f"{BASE}/grant-imports/preview", files=upload("grants.csv", GRANTS_CSV))
+        assert res.status_code == 403
+        assert "Only Governance Admins can bulk-import grants" in res.json()["detail"]
+    wrong = api(ADMIN).post(f"{BASE}/grant-imports/preview", files=upload("grants.xlsx", GRANTS_CSV))
+    assert wrong.status_code == 400 and ".csv" in wrong.json()["detail"]
+
+
+def test_grant_import_preview_and_save_end_to_end(api, db):
+    row = seed(db)
+    client = api(ADMIN)
+    preview = client.post(f"{BASE}/grant-imports/preview", files=upload("grants.csv", GRANTS_CSV)).json()
+    assert preview["header_skipped"] is True and preview["blocked"] is False
+    assert [(l["line"], l["status"], l["environment"]) for l in preview["lines"]] == [
+        (2, "change", "dev"), (3, "change", "dev")]
+    assert rule_count(db) == 1
+
+    no_print = client.post(f"{BASE}/grant-imports", files=upload("grants.csv", GRANTS_CSV),
+                           data={"reason": REASON})
+    assert no_print.status_code == 400 and "Preview the file" in no_print.json()["detail"]
+    short = client.post(f"{BASE}/grant-imports", files=upload("grants.csv", GRANTS_CSV),
+                        data={"fingerprint": preview["fingerprint"], "reason": "tidy"})
+    assert short.status_code == 422
+
+    saved = client.post(f"{BASE}/grant-imports", files=upload("grants.csv", GRANTS_CSV),
+                        data={"fingerprint": preview["fingerprint"], "reason": REASON})
+    assert saved.status_code == 200 and saved.json()["change_set_id"] and saved.json()["request_id"] is None
+    db.expire_all()
+    assert db.get(RbacRuleModel, row.id).principal_name == "g_analysts;g_new"
+    cs = db.get(RbacChangeSetModel, saved.json()["change_set_id"])
+    assert (cs.actor, cs.reason) == (ADMIN.email, REASON)
+
+    stale = client.post(f"{BASE}/grant-imports", files=upload("grants.csv", GRANTS_CSV),
+                        data={"fingerprint": preview["fingerprint"], "reason": REASON})
+    assert stale.status_code == 400 and "changed since the preview" in stale.json()["detail"]
+
+
+def test_grant_import_files_a_request_under_the_two_person_rule(api, db, two_person_dev, filed):
+    seed(db)
+    client = api(ADMIN)
+    preview = client.post(f"{BASE}/grant-imports/preview", files=upload("grants.csv", GRANTS_CSV)).json()
+    assert preview["two_person_required"] is True
+    saved = client.post(f"{BASE}/grant-imports", files=upload("grants.csv", GRANTS_CSV),
+                        data={"fingerprint": preview["fingerprint"], "reason": REASON})
+    assert saved.status_code == 200 and saved.json()["request_id"] == "req-1"
+    [call] = filed
+    assert call["plane"] == "uc" and call["change"].reason == REASON
+    assert rule_count(db) == 1

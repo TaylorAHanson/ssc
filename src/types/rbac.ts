@@ -220,6 +220,33 @@ export interface RbacImportResult {
   duplicates_removed: boolean;
 }
 
+export type RbacGrantLineStatus = 'change' | 'already_held' | 'covered' | 'duplicate' | 'rejected';
+
+/** One line of a bulk SELECT grant CSV and what saving it would do. */
+export interface RbacGrantImportLine {
+  line: number;
+  securable: string;
+  group: string;
+  environment: string | null;
+  securable_type: 'schema' | 'view' | null;
+  status: RbacGrantLineStatus;
+  message: string;
+}
+
+export interface RbacGrantImportPreview {
+  filename: string | null;
+  header_skipped: boolean;
+  lines: RbacGrantImportLine[];
+  prerequisites: string[];
+  diffs: RbacRowDiff[];
+  findings: RbacFinding[];
+  max_changes: number;
+  blocked: boolean;
+  blocked_reasons: string[];
+  two_person_required: boolean;
+  fingerprint: string;
+}
+
 export interface RbacImportSummary {
   id: string;
   filename: string | null;
