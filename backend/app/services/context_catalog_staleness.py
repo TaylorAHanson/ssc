@@ -12,6 +12,11 @@ grouped by owner with one @mention each. The owner is the document's
 address, and documents with no owner at all, are listed without a mention.
 A document isn't mentioned again until ``CONTEXT_CATALOG_STALE_RENOTIFY_DAYS``
 have passed since its last reminder; "Mark reviewed" or an edit resets it.
+
+Admins can also *request* a review on demand (``request_reviews``): for every
+document that needs review — stale or never marked reviewed, which is how a
+catalog's first round of ownership is kicked off — or for chosen documents,
+whatever their state. It posts the same card and does the same bookkeeping.
 """
 from __future__ import annotations
 
@@ -19,7 +24,7 @@ import logging
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
 from sqlalchemy.orm import Session, load_only
@@ -201,6 +206,8 @@ class StaleDocument:
     url: str
     stale_notified_at: Optional[datetime]
     recently_notified: bool = False
+    # "stale", "never_reviewed", or "requested" (an admin asked about this one document).
+    reason: str = "stale"
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -215,6 +222,7 @@ class StaleDocument:
             "url": self.url,
             "stale_notified_at": self.stale_notified_at.isoformat() if self.stale_notified_at else None,
             "recently_notified": self.recently_notified,
+            "reason": self.reason,
         }
 
 
@@ -224,24 +232,36 @@ def find_stale_documents(
     now: Optional[datetime] = None,
     days: Optional[int] = None,
     renotify_after_days: Optional[int] = None,
+    include_never_reviewed: bool = False,
+    document_ids: Optional[List[str]] = None,
 ) -> List[StaleDocument]:
     """Every stale published document, oldest first.
 
     With ``renotify_after_days``, documents mentioned in a reminder within that
     window are flagged ``recently_notified`` (callers drop them before sending).
+    ``include_never_reviewed`` adds published documents no one has marked
+    reviewed. ``document_ids`` instead selects exactly those documents, in any
+    state (reason ``"requested"`` unless they're stale or never reviewed anyway).
     """
     now = now or datetime.utcnow()
     days = days or stale_after_days()
     renotify_cutoff = now - timedelta(days=renotify_after_days) if renotify_after_days else None
-    rows = (
-        db.query(ContextDocumentModel, ContextDomainModel)
-        .join(ContextDomainModel, ContextDocumentModel.domain_id == ContextDomainModel.id)
-        .filter(ContextDocumentModel.status == "published")
-        .all()
+    query = db.query(ContextDocumentModel, ContextDomainModel).join(
+        ContextDomainModel, ContextDocumentModel.domain_id == ContextDomainModel.id
     )
+    if document_ids is not None:
+        query = query.filter(ContextDocumentModel.id.in_(document_ids))
+    else:
+        query = query.filter(ContextDocumentModel.status == "published")
     out: List[StaleDocument] = []
-    for doc, domain in rows:
-        if not is_stale(doc, now=now, days=days):
+    for doc, domain in query.all():
+        if document_ids is not None:
+            reason = review_reason(doc, now=now) or "requested"
+        elif is_stale(doc, now=now, days=days):
+            reason = "stale"
+        elif include_never_reviewed and doc.last_reviewed_at is None:
+            reason = "never_reviewed"
+        else:
             continue
         owner, source = effective_owner(doc, domain)
         activity = last_activity_at(doc)
@@ -259,6 +279,7 @@ def find_stale_documents(
             recently_notified=bool(
                 renotify_cutoff and doc.stale_notified_at and doc.stale_notified_at >= renotify_cutoff
             ),
+            reason=reason,
         ))
     out.sort(key=lambda d: (-d.age_days, d.title.lower()))
     return out
@@ -296,10 +317,14 @@ def group_by_owner(docs: List[StaleDocument]) -> List[OwnerGroup]:
 
 # ------------------------------------------------------------------ messages
 
+_REASON_SUFFIX = {"never_reviewed": "never reviewed", "requested": "update requested"}
+
+
 def _doc_line(doc: StaleDocument) -> str:
     title = teams.card_text(doc.title) or "(untitled)"
     linked = f"[{title}]({doc.url})" if doc.url else title
-    return f"- {linked} · {teams.card_text(doc.domain_name)} · {doc.age_days} days"
+    age = _REASON_SUFFIX.get(doc.reason) or f"{doc.age_days} days"
+    return f"- {linked} · {teams.card_text(doc.domain_name)} · {age}"
 
 
 def _owner_blocks(group: OwnerGroup, limit: int) -> Tuple[List[Dict[str, Any]], List[str]]:
@@ -334,13 +359,15 @@ def build_reminder_messages(
     days: Optional[int] = None,
     per_owner_limit: Optional[int] = None,
     max_bytes: int = teams.MAX_MESSAGE_BYTES,
+    intro: Optional[str] = None,
 ) -> List[ReminderMessage]:
     """Adaptive Card messages for the grouped stale documents.
 
     Owners are packed into as few messages as fit under ``max_bytes``; an owner
     is never split across messages. Only listed documents (up to
     ``per_owner_limit`` per owner) are reported back as notified, so overflow
-    documents come up first next time.
+    documents come up first next time. ``intro`` replaces the default
+    "haven't been edited in N days" explanation under the title.
     """
     import json
 
@@ -359,9 +386,9 @@ def build_reminder_messages(
         return [
             {"type": "TextBlock", "text": title, "size": "Medium", "weight": "Bolder", "wrap": True},
             {"type": "TextBlock", "isSubtle": True, "wrap": True, "spacing": "None",
-             "text": (f"These published {brand} documents haven't been edited or marked reviewed in "
-                      f"over {days} days, so the assistant may be giving out-of-date answers. Open each "
-                      "one, then update it or select Mark reviewed if it's still accurate.")},
+             "text": intro or (f"These published {brand} documents haven't been edited or marked reviewed in "
+                               f"over {days} days, so the assistant may be giving out-of-date answers. Open "
+                               "each one, then update it or select Mark reviewed if it's still accurate.")},
         ]
 
     actions = [{"type": "Action.OpenUrl", "title": "Open Context Catalog", "url": link}] if link else None
@@ -394,18 +421,79 @@ def build_reminder_messages(
 
 # ------------------------------------------------------------------ actions
 
-def run_stale_reminders(db: Session, *, trigger: str = "schedule", now: Optional[datetime] = None) -> Dict[str, Any]:
-    """Post reminders for stale documents not mentioned within the re-notify window.
-
-    Marks each listed document ``stale_notified_at`` only when its message was
-    accepted, so a failed post is retried on the next run.
-    """
-    now = now or datetime.utcnow()
-    report: Dict[str, Any] = {
+def _new_report(trigger: str, now: datetime) -> Dict[str, Any]:
+    return {
         "trigger": trigger, "status": "nothing_due", "stale_total": 0, "due": 0,
         "skipped_recently_notified": 0, "notified_documents": 0, "owners": 0,
         "messages_sent": 0, "messages_failed": 0, "errors": [], "ran_at": now.isoformat(),
     }
+
+
+def _send_reminders(
+    db: Session,
+    report: Dict[str, Any],
+    candidates: List[StaleDocument],
+    *,
+    url: str,
+    now: datetime,
+    intro: Optional[str] = None,
+) -> None:
+    """Post cards for the candidates not reminded recently, then stamp the listed ones.
+
+    Marks each listed document ``stale_notified_at`` only when its message was
+    accepted, so a failed post is retried on the next run.
+    """
+    due = [d for d in candidates if not d.recently_notified]
+    report.update(stale_total=len(candidates), due=len(due), skipped_recently_notified=len(candidates) - len(due))
+    if not due:
+        return
+    groups = group_by_owner(due)
+    report["owners"] = len(groups)
+    notified: List[str] = []
+    for message in build_reminder_messages(groups, intro=intro):
+        result = teams.post_message(url, message.payload)
+        if result.ok:
+            report["messages_sent"] += 1
+            notified.extend(message.document_ids)
+        else:
+            report["messages_failed"] += 1
+            report["errors"].append(result.error or "Teams rejected the message")
+    if notified:
+        (
+            db.query(ContextDocumentModel)
+            .filter(ContextDocumentModel.id.in_(notified))
+            .update(
+                {
+                    ContextDocumentModel.stale_notified_at: now,
+                    # Reminder bookkeeping isn't an edit; keep updated_at as it was.
+                    ContextDocumentModel.updated_at: ContextDocumentModel.updated_at,
+                },
+                synchronize_session=False,
+            )
+        )
+        db.commit()
+    report["notified_documents"] = len(notified)
+    if report["messages_failed"] == 0:
+        report["status"] = "sent"
+    else:
+        report["status"] = "partial" if report["messages_sent"] else "failed"
+    logger.info(
+        "Context Catalog reminders (%s): %s — %d candidate(s), %d due, %d notified in %d message(s), %d failed.",
+        report["trigger"], report["status"], report["stale_total"], report["due"],
+        report["notified_documents"], report["messages_sent"], report["messages_failed"],
+    )
+
+
+def _locked_run(
+    db: Session,
+    trigger: str,
+    now: Optional[datetime],
+    select: Callable[[datetime], List[StaleDocument]],
+    intro: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Shared run wrapper: one run at a time, needs a webhook, records the report."""
+    now = now or datetime.utcnow()
+    report = _new_report(trigger, now)
     if not _run_lock.acquire(blocking=False):
         report["status"] = "busy"
         return report
@@ -415,50 +503,63 @@ def run_stale_reminders(db: Session, *, trigger: str = "schedule", now: Optional
             report["status"] = "not_configured"
             report["errors"].append("The Teams webhook URL is not configured.")
             return report
-        stale = find_stale_documents(db, now=now, renotify_after_days=renotify_days())
-        due = [d for d in stale if not d.recently_notified]
-        report.update(stale_total=len(stale), due=len(due), skipped_recently_notified=len(stale) - len(due))
-        if not due:
-            return report
-        groups = group_by_owner(due)
-        report["owners"] = len(groups)
-        notified: List[str] = []
-        for message in build_reminder_messages(groups):
-            result = teams.post_message(url, message.payload)
-            if result.ok:
-                report["messages_sent"] += 1
-                notified.extend(message.document_ids)
-            else:
-                report["messages_failed"] += 1
-                report["errors"].append(result.error or "Teams rejected the message")
-        if notified:
-            (
-                db.query(ContextDocumentModel)
-                .filter(ContextDocumentModel.id.in_(notified))
-                .update(
-                    {
-                        ContextDocumentModel.stale_notified_at: now,
-                        # Reminder bookkeeping isn't an edit; keep updated_at as it was.
-                        ContextDocumentModel.updated_at: ContextDocumentModel.updated_at,
-                    },
-                    synchronize_session=False,
-                )
-            )
-            db.commit()
-        report["notified_documents"] = len(notified)
-        if report["messages_failed"] == 0:
-            report["status"] = "sent"
-        else:
-            report["status"] = "partial" if report["messages_sent"] else "failed"
-        logger.info(
-            "Context Catalog stale reminders (%s): %s — %d stale, %d due, %d notified in %d message(s), %d failed.",
-            trigger, report["status"], report["stale_total"], report["due"],
-            report["notified_documents"], report["messages_sent"], report["messages_failed"],
-        )
+        _send_reminders(db, report, select(now), url=url, now=now, intro=intro)
         return report
     finally:
         record_run(report)
         _run_lock.release()
+
+
+def run_stale_reminders(db: Session, *, trigger: str = "schedule", now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Post reminders for stale documents not mentioned within the re-notify window."""
+    return _locked_run(
+        db, trigger, now,
+        lambda at: find_stale_documents(db, now=at, renotify_after_days=renotify_days()),
+    )
+
+
+def _request_intro(single: bool) -> str:
+    brand = teams.card_text(settings.BRAND_NAME)
+    what = "this published document is" if single else f"these published {brand} documents are"
+    return (f"A catalog admin asked you to confirm {what} still accurate, so the assistant doesn't give "
+            "out-of-date answers. Open each one, then update it or select Mark reviewed if it's still "
+            "accurate.")
+
+
+def request_reviews(
+    db: Session,
+    *,
+    document_ids: Optional[List[str]] = None,
+    requested_by: Optional[str] = None,
+    now: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """Ask owners to review documents now, through the Teams reminder channel.
+
+    Without ``document_ids``: every published document that is stale or has
+    never been marked reviewed (the way to start a catalog's first round of
+    ownership), skipping documents reminded within the re-notify window so a
+    repeat request doesn't ping owners twice. With ``document_ids``: exactly
+    those documents, whatever their state, ignoring the re-notify window —
+    the admin asked for them by name.
+    """
+    logger.info(
+        "Context Catalog review requested by %s for %s",
+        requested_by or "unknown", f"{len(document_ids)} document(s)" if document_ids is not None else "all",
+    )
+    if document_ids is not None:
+        ids = list(dict.fromkeys(i for i in document_ids if i))
+        return _locked_run(
+            db, "request", now,
+            lambda at: find_stale_documents(db, now=at, document_ids=ids),
+            intro=_request_intro(len(ids) == 1),
+        )
+    return _locked_run(
+        db, "request_all", now,
+        lambda at: find_stale_documents(
+            db, now=at, renotify_after_days=renotify_days(), include_never_reviewed=True,
+        ),
+        intro=_request_intro(False),
+    )
 
 
 def send_test_message(requested_by: Optional[str] = None) -> teams.PostResult:
@@ -485,6 +586,9 @@ def send_test_message(requested_by: Optional[str] = None) -> teams.PostResult:
 def reminder_status(db: Session, *, now: Optional[datetime] = None) -> Dict[str, Any]:
     """Configuration + the current stale set, for the admin reminders panel."""
     stale = find_stale_documents(db, now=now, renotify_after_days=renotify_days())
+    needs_review = find_stale_documents(
+        db, now=now, renotify_after_days=renotify_days(), include_never_reviewed=True,
+    )
     env_value, scope, key = _webhook_args()
     return {
         "enabled": reminders_enabled(),
@@ -498,6 +602,10 @@ def reminder_status(db: Session, *, now: Optional[datetime] = None) -> Dict[str,
         "next_run_at": _next_run_iso(),
         "last_run": last_run_report(),
         "stale_documents": [d.to_dict() for d in stale],
+        # What "Request review from owners" would cover: stale or never reviewed, and how many
+        # of those haven't been reminded within the re-notify window.
+        "needs_review_count": len(needs_review),
+        "needs_review_due": sum(1 for d in needs_review if not d.recently_notified),
     }
 
 

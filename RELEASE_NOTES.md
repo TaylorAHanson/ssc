@@ -13,6 +13,13 @@ Format rules (the app parses this file, so keep to them):
   before), and what the reader will notice or should do now.
 - Anything above the first `##` heading (this preamble) is not shown in the app.
 
+## 3.6.0 — 2026-11-24
+
+### Context Catalog
+
+- **You can now ask every owner to review their documents at once.** Teams reminders only covered stale documents, so when owners were first assigned there was no way to ask them to confirm the documents they'd just been given: a new document isn't stale for 90 days, and making everything stale would have meant faking its edit history. **Request review from owners**, in the **Reminders** panel, posts the usual Teams message for every published document that is stale or has never been marked reviewed, grouped by owner with one mention each. Documents reminded within the re-notify interval are skipped, so selecting it twice doesn't ping anyone twice. Scheduled reminders still cover only stale documents.
+- **New "Request update" button in the document editor.** To ask an owner about one specific document, you had to wait for it to go stale or message them yourself. **Request update**, next to **Mark reviewed**, posts a Teams message asking the document's owner (or, if it has none, its domain's primary owner) to review it now, whether or not it's stale and even if they were reminded recently. As with any reminder, the owner opens the link, then edits the document or selects **Mark reviewed**.
+
 ## 3.5.0 — 2026-11-23
 
 ### Access Rules

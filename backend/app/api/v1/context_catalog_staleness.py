@@ -1,16 +1,18 @@
 """
 Context Catalog document freshness API: mark reviewed, the catalog-wide
-"needs review" list, and the Teams reminder status / run-now / test-message
-actions for admins.
+"needs review" list, and the Teams reminder status / run-now / request-review /
+test-message actions for admins.
 """
 import logging
-from typing import Any
+from typing import Any, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api import deps
 from app.api.v1.context_catalog import _WRITE_CAPABILITY, _require_feature
+from app.db.context_catalog import ContextDocumentModel
 from app.models.user import User
 from app.services import context_catalog_staleness as staleness
 from app.services.context_catalog_service import ContextCatalogService
@@ -77,6 +79,38 @@ def run_stale_reminders_now(
     """Post reminders now (respects the re-notify interval; ignores the on/off toggle)."""
     logger.info("Context Catalog stale reminders run requested by %s", current_user.email)
     return staleness.run_stale_reminders(db, trigger="manual")
+
+
+class ReviewRequestIn(BaseModel):
+    # Omit (or null) for every published document that is stale or never reviewed.
+    document_ids: Optional[List[str]] = Field(default=None, max_length=1000)
+
+
+@router.post("/staleness/request-review")
+def request_document_reviews(
+    payload: Optional[ReviewRequestIn] = Body(default=None),
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.require_capability(_WRITE_CAPABILITY)),
+    _: None = Depends(_require_feature),
+) -> Any:
+    """Ask owners in Teams to review documents now, whatever the reminder schedule.
+
+    No body: every published document that is stale or has never been marked
+    reviewed, skipping ones reminded within the re-notify interval (use this to
+    start a first round of ownership). ``document_ids``: exactly those
+    documents, in any state, even if they were reminded recently.
+    """
+    ids = payload.document_ids if payload else None
+    if ids is not None:
+        if not ids:
+            raise HTTPException(status_code=422, detail="document_ids is empty")
+        known = {
+            row.id for row in db.query(ContextDocumentModel.id).filter(ContextDocumentModel.id.in_(ids)).all()
+        }
+        missing = sorted(set(ids) - known)
+        if missing:
+            raise HTTPException(status_code=404, detail=f"Document(s) not found: {', '.join(missing[:10])}")
+    return staleness.request_reviews(db, document_ids=ids, requested_by=current_user.email)
 
 
 @router.post("/staleness/test")

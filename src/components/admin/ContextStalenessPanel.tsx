@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, BellRing, CheckCircle2, Loader2, Send, X } from 'lucide-react';
+import { AlertTriangle, BellRing, CheckCircle2, Loader2, Megaphone, Send, X } from 'lucide-react';
 import { Button } from '../ui/button';
 import { api } from '../../services/api';
 import type { ContextReminderRun, ContextStaleDocument, ContextStalenessStatus } from '../../services/api';
@@ -27,6 +27,11 @@ function describeRun(run: ContextReminderRun): string {
   if (run.skipped_recently_notified) {
     parts.push(`${run.skipped_recently_notified} skipped (reminded recently)`);
   }
+  // Each owner's list is capped, so a large first round can take more than one request.
+  const unlisted = run.due - run.notified_documents;
+  if (run.status === 'sent' && unlisted > 0) {
+    parts.push(`${unlisted} more not listed (per-owner limit) — send again for the rest`);
+  }
   return parts.join(' · ');
 }
 
@@ -34,7 +39,7 @@ function describeRun(run: ContextReminderRun): string {
 export function ContextStalenessPanel({ onClose, onOpenDocument }: Props) {
   const [status, setStatus] = useState<ContextStalenessStatus | null>(null);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState<'test' | 'run' | null>(null);
+  const [busy, setBusy] = useState<'test' | 'run' | 'request' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -78,13 +83,25 @@ export function ContextStalenessPanel({ onClose, onOpenDocument }: Props) {
     }
   };
 
-  const runNow = async () => {
-    if (!window.confirm('Post reminders for the stale documents to Teams now?')) return;
-    setBusy('run');
+  const runNow = () =>
+    send('run', 'Post reminders for the stale documents to Teams now?', api.runContextStaleReminders);
+
+  const requestAll = () =>
+    send(
+      'request',
+      `Ask the owners of ${status?.needs_review_due ?? 0} document(s) in Teams to review them now? This covers ` +
+        'every published document that is stale or has never been marked reviewed, except ones reminded in ' +
+        `the last ${status?.renotify_days ?? 7} days.`,
+      () => api.requestContextDocumentReviews(),
+    );
+
+  const send = async (kind: 'run' | 'request', question: string, call: () => Promise<ContextReminderRun>) => {
+    if (!window.confirm(question)) return;
+    setBusy(kind);
     setError(null);
     setNotice(null);
     try {
-      const run = await api.runContextStaleReminders();
+      const run = await call();
       if (run.status === 'failed' || run.status === 'partial' || run.status === 'not_configured') {
         setError(`${describeRun(run)}${run.errors.length ? ` — ${run.errors.join('; ')}` : ''}`);
       } else {
@@ -147,6 +164,9 @@ export function ContextStalenessPanel({ onClose, onOpenDocument }: Props) {
               <p className="text-xs text-gray-500">
                 Settings live under Admin → Settings → Context Catalog. Run now works even while scheduled
                 reminders are off, and skips documents reminded in the last {status.renotify_days} days.
+                Request review from owners also covers the {status.needs_review_count} published document(s)
+                that are stale or have never been marked reviewed, which is how to start a first round of
+                ownership; scheduled reminders only cover stale ones.
               </p>
 
               {error && (
@@ -211,6 +231,19 @@ export function ContextStalenessPanel({ onClose, onOpenDocument }: Props) {
           <Button variant="outline" onClick={sendTest} disabled={busy !== null || !status?.webhook_configured}>
             {busy === 'test' ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Send className="w-4 h-4 mr-1" />}
             Send test message
+          </Button>
+          <Button
+            variant="outline"
+            onClick={requestAll}
+            disabled={busy !== null || !status?.webhook_configured || !status?.needs_review_due}
+            title="Ask every owner to review their stale and never-reviewed documents now"
+          >
+            {busy === 'request' ? (
+              <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+            ) : (
+              <Megaphone className="w-4 h-4 mr-1" />
+            )}
+            Request review from owners{status?.needs_review_due ? ` (${status.needs_review_due})` : ''}
           </Button>
           <Button onClick={runNow} disabled={busy !== null || !status?.webhook_configured}>
             {busy === 'run' ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <BellRing className="w-4 h-4 mr-1" />}

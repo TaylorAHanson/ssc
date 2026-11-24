@@ -292,3 +292,101 @@ def test_review_queue_endpoint_needs_the_manage_capability(db_session, monkeypat
 
     current["user"] = plain
     assert client.get("/context/review-queue").status_code == 403
+
+
+def _card_text(message):
+    return " ".join(
+        block.get("text", "") for block in message["attachments"][0]["content"]["body"]
+    )
+
+
+def test_request_all_covers_stale_and_never_reviewed_but_not_reviewed_or_drafts(db_session, posted):
+    domain = Svc.create_domain(db_session, name="Ops")
+    stale = _doc(db_session, domain, "Stale", age_days=120, reviewed_days=100, owner="a@corp.com")
+    never = _doc(db_session, domain, "Never", age_days=2, owner="a@corp.com")
+    _doc(db_session, domain, "Fresh and reviewed", age_days=2, reviewed_days=1, owner="a@corp.com")
+    _doc(db_session, domain, "Draft", age_days=400, status="draft", owner="a@corp.com")
+
+    report = staleness.request_reviews(db_session, now=NOW)
+
+    assert report["trigger"] == "request_all" and report["status"] == "sent"
+    assert report["notified_documents"] == 2 and len(posted) == 1
+    text = _card_text(posted[0][1])
+    assert "A catalog admin asked you" in text
+    assert "never reviewed" in text and "100 days" in text
+    for doc in (stale, never):
+        assert db_session.get(ContextDocumentModel, doc.id).stale_notified_at == NOW
+
+
+def test_request_all_skips_recently_reminded_documents(db_session, posted):
+    domain = Svc.create_domain(db_session, name="Ops")
+    _doc(db_session, domain, "Never", age_days=2, owner="a@corp.com")
+
+    assert staleness.request_reviews(db_session, now=NOW)["notified_documents"] == 1
+    again = staleness.request_reviews(db_session, now=NOW + timedelta(days=1))
+    assert again["status"] == "nothing_due" and again["skipped_recently_notified"] == 1
+    assert len(posted) == 1
+
+
+def test_scheduled_reminders_still_ignore_never_reviewed_documents(db_session, posted):
+    domain = Svc.create_domain(db_session, name="Ops")
+    _doc(db_session, domain, "Never", age_days=2, owner="a@corp.com")
+
+    assert staleness.run_stale_reminders(db_session, now=NOW)["status"] == "nothing_due"
+    assert posted == []
+
+
+def test_requesting_one_document_ignores_its_state_and_the_renotify_window(db_session, posted):
+    domain = Svc.create_domain(db_session, name="Ops")
+    doc = _doc(db_session, domain, "Fresh", age_days=2, reviewed_days=1, owner="a@corp.com")
+    doc.stale_notified_at = NOW - timedelta(hours=1)
+    db_session.commit()
+
+    report = staleness.request_reviews(db_session, document_ids=[doc.id], now=NOW)
+
+    assert report["trigger"] == "request" and report["notified_documents"] == 1
+    assert "update requested" in _card_text(posted[0][1])
+
+
+def test_request_review_endpoint(db_session, monkeypatch, posted):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api import deps
+    from app.api.v1 import context_catalog as catalog_api
+    from app.api.v1 import context_catalog_staleness as staleness_api
+    from app.db.session import get_db
+    from app.models.user import User
+
+    monkeypatch.setattr(catalog_api, "is_feature_enabled", lambda _name: True)
+    admin = User(id="a@corp.com", email="a@corp.com", full_name="Ad Min", roles=["Platform Admin"],
+                 entitlements=[], is_active=True)
+    plain = User(id="u@corp.com", email="u@corp.com", full_name="Us Er", roles=["User"],
+                 entitlements=[], is_active=True)
+    domain = Svc.create_domain(db_session, name="Ops")
+    doc = _doc(db_session, domain, "Never reviewed", age_days=1, owner="o@corp.com")
+
+    app = FastAPI()
+    app.include_router(staleness_api.router, prefix="/context")
+    app.dependency_overrides[get_db] = lambda: db_session
+    current = {"user": plain}
+    app.dependency_overrides[deps.get_current_user] = lambda: current["user"]
+    client = TestClient(app)
+
+    assert client.post("/context/staleness/request-review").status_code == 403
+
+    current["user"] = admin
+    status = client.get("/context/staleness").json()
+    assert status["needs_review_count"] == 1 and status["needs_review_due"] == 1
+
+    assert client.post("/context/staleness/request-review", json={"document_ids": ["nope"]}).status_code == 404
+    assert client.post("/context/staleness/request-review", json={"document_ids": []}).status_code == 422
+
+    one = client.post("/context/staleness/request-review", json={"document_ids": [doc.id]})
+    assert one.status_code == 200 and one.json()["notified_documents"] == 1
+
+    # Reminded just now, so the catalog-wide request skips it.
+    everything = client.post("/context/staleness/request-review")
+    assert everything.status_code == 200
+    assert everything.json()["status"] == "nothing_due"
+    assert len(posted) == 1

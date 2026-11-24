@@ -2446,10 +2446,11 @@ export interface ContextStaleDocument {
   url: string;
   stale_notified_at: string | null;
   recently_notified: boolean;
+  reason?: 'stale' | 'never_reviewed' | 'requested';
 }
 
 export interface ContextReminderRun {
-  trigger: string;
+  trigger: 'schedule' | 'manual' | 'request' | 'request_all' | string;
   status: 'sent' | 'partial' | 'failed' | 'nothing_due' | 'not_configured' | 'busy';
   stale_total: number;
   due: number;
@@ -2474,6 +2475,10 @@ export interface ContextStalenessStatus {
   next_run_at: string | null;
   last_run: ContextReminderRun | null;
   stale_documents: ContextStaleDocument[];
+  /** Published documents that are stale or never reviewed: what "Request review from owners" covers. */
+  needs_review_count: number;
+  /** ...of which not reminded within the re-notify interval. */
+  needs_review_due: number;
 }
 
 export interface ContextDocument extends ContextDocumentSummary {
@@ -2744,8 +2749,17 @@ export async function importContextCatalogBundle(
   return response.json();
 }
 
-async function contextStalenessRequest<T>(path: string, method: 'GET' | 'POST', what: string): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}/context${path}`, { method, headers: getHeaders() });
+async function contextStalenessRequest<T>(
+  path: string,
+  method: 'GET' | 'POST',
+  what: string,
+  body?: unknown,
+): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}/context${path}`, {
+    method,
+    headers: getHeaders(),
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: response.statusText }));
     throw new Error(typeof error.detail === 'string' ? error.detail : `Failed to ${what}: ${response.status}`);
@@ -2771,6 +2785,19 @@ export function getContextStaleness(): Promise<ContextStalenessStatus> {
 /** Post stale-document reminders to Teams now (respects the re-notify interval). */
 export function runContextStaleReminders(): Promise<ContextReminderRun> {
   return contextStalenessRequest('/staleness/run', 'POST', 'send reminders');
+}
+
+/**
+ * Ask owners in Teams to review documents now. Without ids: every published document that is
+ * stale or never reviewed (skipping ones reminded recently). With ids: exactly those documents.
+ */
+export function requestContextDocumentReviews(documentIds?: string[]): Promise<ContextReminderRun> {
+  return contextStalenessRequest(
+    '/staleness/request-review',
+    'POST',
+    'request reviews',
+    documentIds ? { document_ids: documentIds } : undefined,
+  );
 }
 
 /** Post a test card to the configured Teams channel. */
@@ -4568,6 +4595,7 @@ export const api = {
   getContextReviewQueue,
   getContextStaleness,
   runContextStaleReminders,
+  requestContextDocumentReviews,
   sendContextStaleTestMessage,
   getContextReviews,
   runContextReviews,

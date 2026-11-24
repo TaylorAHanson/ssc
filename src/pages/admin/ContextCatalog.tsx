@@ -25,6 +25,7 @@ import {
   TrendingUp,
   BellRing,
   CheckCheck,
+  Megaphone,
   Sparkles,
   Filter,
 } from 'lucide-react';
@@ -188,6 +189,7 @@ export function ContextCatalog() {
   // The document open in the editor, for its owner/freshness details.
   const [docMeta, setDocMeta] = useState<ContextDocument | null>(null);
   const [isMarkingReviewed, setIsMarkingReviewed] = useState(false);
+  const [isRequestingUpdate, setIsRequestingUpdate] = useState(false);
   const [docSort, setDocSort] = useState<DocSort>('updated_desc');
   const [docOwnerFilter, setDocOwnerFilter] = useState('');
   // Catalog-wide "Needs review" filter: published documents that are stale or were never marked
@@ -564,6 +566,36 @@ export function ContextCatalog() {
       setMessage({ type: 'error', text: errorMessage(e, 'Failed to mark reviewed') });
     } finally {
       setIsMarkingReviewed(false);
+    }
+  };
+
+  // Who a reminder about the open document goes to: its saved owner, else the domain's primary owner.
+  const reminderOwner = (docMeta?.owner || '').trim() || (detail?.primary_owner || '').trim();
+
+  const requestUpdate = async () => {
+    if (!docForm?.id) return;
+    const title = docMeta?.title || docForm.title || 'this document';
+    const who = reminderOwner || "no one (it has no owner, so the Teams message can't mention anyone)";
+    if (!window.confirm(`Ask ${who} in Teams to review "${title}" now?`)) return;
+    setIsRequestingUpdate(true);
+    try {
+      const run = await api.requestContextDocumentReviews([docForm.id]);
+      if (run.status === 'sent') {
+        setMessage({ type: 'success', text: `Asked ${reminderOwner || 'the channel'} to review "${title}" in Teams` });
+        setDocMeta(await api.getContextDocument(docForm.id));
+      } else {
+        const reason =
+          run.status === 'not_configured'
+            ? 'the Teams webhook is not configured'
+            : run.status === 'busy'
+              ? 'another reminder run is in progress, try again shortly'
+              : run.errors.join('; ') || run.status;
+        setMessage({ type: 'error', text: `Couldn't request an update: ${reason}` });
+      }
+    } catch (e) {
+      setMessage({ type: 'error', text: errorMessage(e, 'Failed to request an update') });
+    } finally {
+      setIsRequestingUpdate(false);
     }
   };
 
@@ -1440,19 +1472,34 @@ export function ContextCatalog() {
                     />
                   </div>
                   {docForm.id && docMeta && (
-                    <Button
-                      variant="outline"
-                      onClick={markReviewed}
-                      disabled={isMarkingReviewed}
-                      title="Confirm this document is still accurate without editing it"
-                    >
-                      {isMarkingReviewed ? (
-                        <Loader2 className="w-4 h-4 animate-spin mr-1" />
-                      ) : (
-                        <CheckCheck className="w-4 h-4 mr-1" />
-                      )}
-                      Mark reviewed
-                    </Button>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        variant="outline"
+                        onClick={markReviewed}
+                        disabled={isMarkingReviewed}
+                        title="Confirm this document is still accurate without editing it"
+                      >
+                        {isMarkingReviewed ? (
+                          <Loader2 className="w-4 h-4 animate-spin mr-1" />
+                        ) : (
+                          <CheckCheck className="w-4 h-4 mr-1" />
+                        )}
+                        Mark reviewed
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={requestUpdate}
+                        disabled={isRequestingUpdate}
+                        title={`Ask ${reminderOwner || 'the owner'} in the Teams reminders channel to review this document now`}
+                      >
+                        {isRequestingUpdate ? (
+                          <Loader2 className="w-4 h-4 animate-spin mr-1" />
+                        ) : (
+                          <Megaphone className="w-4 h-4 mr-1" />
+                        )}
+                        Request update
+                      </Button>
+                    </div>
                   )}
                 </div>
                 {docForm.id && docMeta && (

@@ -240,6 +240,19 @@ re-notify interval passes, it's edited, or it's marked reviewed. For the
 links to work, **App base URL** must be set under **Admin → Settings →
 Notifications**.
 
+**Request review from owners** in the panel asks owners to review every
+published document that is stale **or has never been marked reviewed**, using
+the same Teams message. Use it after assigning owners for the first time: new
+documents aren't stale yet, so scheduled reminders and **Run now** wouldn't
+include them. Documents reminded within the re-notify interval are skipped.
+Each owner's list is capped at the per-owner limit, so for a large first
+round, select it again to send the rest.
+
+To ask about one document, open it and select **Request update** next to
+**Mark reviewed**. It posts a message mentioning that document's owner (or its
+domain's primary owner) straight away, whether or not the document is stale
+and even if it was reminded recently.
+
 ### Keeping the catalog in Git
 
 Your platform administrator can connect the catalog to a GitHub repository.
